@@ -42,9 +42,10 @@ final class UsageStore: ObservableObject {
 
     init() {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_INTERVAL"] ?? ""
-        // 180s matches cswap's serve TTL: polling faster costs no extra API
-        // traffic (the store paces the network) but halves display lag.
-        let interval = Double(raw) ?? 180
+        // 60s harvests cswap's poll plans the moment they come due (incl.
+        // the 60s urgent cadence near the limit); the store still paces the
+        // real network, so faster polling adds no API traffic.
+        let interval = Double(raw) ?? 60
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -88,7 +89,7 @@ final class UsageStore: ObservableObject {
         Task.detached(priority: .utility) {
             let result: Result<Snapshot, Error>
             do {
-                result = .success(try CswapClient.fetch())
+                result = .success(try CswapClient.fetch(fresh: true))
             } catch {
                 result = .failure(error)
             }

@@ -19,8 +19,9 @@ class SmartBarApp(rumps.App):
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
-        # 180s matches cswap's serve TTL: no extra API traffic, less lag.
-        interval = int(os.environ.get("SMARTBAR_INTERVAL", "180"))
+        # 60s harvests cswap's poll plans as they come due; no extra API
+        # traffic (the store paces the network).
+        interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
         self._rebuild_menu()
         self.timer = rumps.Timer(self._tick, interval)
         self.timer.start()
@@ -31,7 +32,7 @@ class SmartBarApp(rumps.App):
 
     def _fetch(self):
         try:
-            snap = cswap.fetch()
+            snap = cswap.fetch(fresh=True)
         except cswap.CswapError:
             self.failures += 1
             if self.failures >= 3:

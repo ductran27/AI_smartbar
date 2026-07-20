@@ -84,9 +84,10 @@ def render_pills(states, path: str) -> None:
 class Tray:
     def __init__(self):
         os.makedirs(ICON_DIR, exist_ok=True)
-        # 180s matches cswap's serve TTL: polling faster costs no extra API
-        # traffic (the store paces the network) but halves display lag.
-        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "180"))
+        # 60s harvests cswap's poll plans the moment they come due (incl.
+        # the 60s urgent cadence near the limit); the store still paces the
+        # real network, so faster polling adds no API traffic.
+        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
@@ -215,7 +216,7 @@ class Tray:
 
     def _fetch(self, generation):
         try:
-            snap = cswap.fetch()
+            snap = cswap.fetch(fresh=True)
         except cswap.CswapError as exc:
             log.warning("fetch failed: %s", exc)
             GLib.idle_add(self._apply_error, str(exc), generation)
@@ -262,7 +263,7 @@ def main():
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
-             os.environ.get("SMARTBAR_INTERVAL", "180"))
+             os.environ.get("SMARTBAR_INTERVAL", "60"))
     tray = Tray()
     tray._start_fetch()
     GLib.timeout_add_seconds(tray.interval, tray._tick)

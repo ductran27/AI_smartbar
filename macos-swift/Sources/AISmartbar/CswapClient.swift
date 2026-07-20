@@ -21,6 +21,27 @@ enum CswapError: Error, CustomStringConvertible {
 
 enum CswapClient {
     static let timeoutSeconds: Double = 30
+    static let primerTimeoutSeconds: Double = 25
+
+    /// Force-freshens claude-swap's usage store before a list, via its own
+    /// auto-engine collector convention (explicit fetch set → the store's
+    /// atomic reserve() uses stale-OR-plan-due eligibility — the sanctioned
+    /// way to beat the 3-min serve TTL and harvest urgent 60s plans). A
+    /// fresh-and-not-yet-due account is still served from the store, so the
+    /// per-token API budget is preserved by construction.
+    /// Keep in sync with smartbar/core/cswap.py PRIMER_CODE.
+    static let primerCode = """
+    import sys
+    try:
+        from claude_swap.switcher import ClaudeAccountSwitcher
+        switcher = ClaudeAccountSwitcher()
+        numbers = {a.number for a in switcher.accounts_snapshot(fetch=set()).accounts}
+        if numbers:
+            switcher.accounts_snapshot(fetch=numbers)
+    except Exception as exc:
+        sys.stderr.write("primer: %s\\n" % exc)
+        sys.exit(1)
+    """
 
     /// launchd-launched GUI apps get a bare PATH, so resolve explicitly.
     static func binaryPath() -> String? {
@@ -68,8 +89,56 @@ enum CswapClient {
         return outData
     }
 
-    static func fetch() throws -> Snapshot {
-        try Snapshot.parse(run(["list", "--json"]))
+    /// The pipx venv interpreter that can import claude_swap, parsed from
+    /// the cswap launcher's exec line; nil (compiled binary, mock, moved
+    /// venv) just disables the primer.
+    static func venvPython() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["SMARTBAR_CSWAP_PYTHON"], !override.isEmpty {
+            return override
+        }
+        guard let binary = binaryPath(),
+              let handle = FileHandle(forReadingAtPath: binary),
+              let head = String(data: handle.readData(ofLength: 512),
+                                encoding: .utf8)
+        else { return nil }
+        defer { try? handle.close() }
+        guard let match = head.range(of: #"'(/[^']*/bin/python[^']*)'"#,
+                                     options: .regularExpression) else {
+            return nil
+        }
+        let path = String(head[match].dropFirst().dropLast())
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    /// Best-effort store freshen; failures are silent (the follow-up list
+    /// serves last-good data regardless).
+    @discardableResult
+    static func primeFresh() -> Bool {
+        guard let python = venvPython() else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-c", primerCode]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        let killTimer = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + primerTimeoutSeconds,
+                                          execute: killTimer)
+        process.waitUntilExit()
+        killTimer.cancel()
+        return process.terminationStatus == 0
+    }
+
+    static func fetch(fresh: Bool = false) throws -> Snapshot {
+        if fresh { primeFresh() }
+        return try Snapshot.parse(run(["list", "--json"]))
     }
 
     static func switchTo(_ number: Int) throws {

@@ -75,7 +75,8 @@ Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstal
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SMARTBAR_INTERVAL` | `180` | Poll period in seconds (popover open / wake / switch also refresh) |
+| `SMARTBAR_INTERVAL` | `60` | Poll period in seconds (popover open / wake / switch also refresh) |
+| `SMARTBAR_CSWAP_PYTHON` | auto | Interpreter for the store primer (auto-detected from the pipx cswap launcher) |
 | `SMARTBAR_YELLOW` | `50` | Yellow at or below this % **left** |
 | `SMARTBAR_LOW` | `25` | Light red at or below this % **left** |
 | `SMARTBAR_RED` | `10` | Dark red + notification at or below this % **left** |
@@ -124,13 +125,17 @@ the official claude CLI.
   details are in the menu.
 - **Freshness:** `cswap list --json` serves its store and only hits
   Anthropic's usage API (`/api/oauth/usage`) on its adaptive per-account
-  plan — data ≤3 min old is served as-is, real fetches run every 1–10 min
-  under a strict per-token budget. AI smartbar polls every 180 s (free:
-  the store paces the network) and refreshes the moment you open the
-  popover, wake the Mac, or switch accounts, so what you read tracks
-  `/usage` to within ~3 min at worst. The header's "Updated" time is the
-  actual measurement time (`usageFetchedAt`), and countdowns tick live
-  from `resetsAt` instead of freezing at fetch time.
+  plan — real fetches run every 1–10 min under a strict per-token budget
+  (~20/h vs a measured ~28–30/h cap). AI smartbar polls every 60 s and,
+  before each read, *primes* the store using claude-swap's own auto-engine
+  collector mode (fetch anything stale **or** plan-due — the sanctioned
+  way past the 3-min serve TTL; a fresh-and-not-yet-due account is never
+  re-fetched, so the budget holds by construction). It also refreshes the
+  moment you open the popover, wake the Mac, or switch accounts. Net: the
+  display tracks `/usage` within the active poll plan — ≤3 min idle,
+  ≤180 s while burning, ≤~70 s in the urgent band near the limit. The
+  header's "Updated" time is the actual measurement time
+  (`usageFetchedAt`), and countdowns tick live from `resetsAt`.
 
 ## Troubleshooting
 
