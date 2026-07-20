@@ -19,7 +19,8 @@ class SmartBarApp(rumps.App):
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
-        interval = int(os.environ.get("SMARTBAR_INTERVAL", "300"))
+        # 180s matches cswap's serve TTL: no extra API traffic, less lag.
+        interval = int(os.environ.get("SMARTBAR_INTERVAL", "180"))
         self._rebuild_menu()
         self.timer = rumps.Timer(self._tick, interval)
         self.timer.start()

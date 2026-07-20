@@ -18,8 +18,21 @@ final class UsageStore: ObservableObject {
     private var timer: Timer?
     private var fired: [String: String] = [:]  // "acct-metricKey" -> resetsAt at fire time
     private var fetchGeneration = 0  // stamps fetches so superseded results are dropped
+    private var lastAttempt: Date?   // throttles stacked refresh triggers
+    private var wakeObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    // Menu-bar apps get App-Napped, which stretches the refresh timer far
+    // past its interval; this activity keeps the cadence honest without
+    // preventing system sleep.
+    private let napActivity = ProcessInfo.processInfo.beginActivity(
+        options: .userInitiatedAllowingIdleSystemSleep,
+        reason: "AI smartbar periodic usage refresh")
 
     var isStale: Bool { consecutiveFailures > 0 && snapshot != nil }
+
+    /// Measurement time for the header: when cswap read the usage API, not
+    /// when we last ran cswap (its store may have served older data).
+    var dataUpdated: Date? { snapshot?.dataDate ?? lastRefresh }
 
     var accessibilitySummary: String {
         if consecutiveFailures >= 3 { return "AI smartbar: no data" }
@@ -29,15 +42,46 @@ final class UsageStore: ObservableObject {
 
     init() {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_INTERVAL"] ?? ""
-        let interval = Double(raw) ?? 300
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        // 180s matches cswap's serve TTL: polling faster costs no extra API
+        // traffic (the store paces the network) but halves display lag.
+        let interval = Double(raw) ?? 180
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        timer.tolerance = min(20, interval / 10)
+        self.timer = timer
+        // The moments the display is most likely stale: the Mac just woke,
+        // or the user just opened the popover (the app becomes active).
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
         refresh()
     }
 
-    func refresh() {
+    deinit {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+        }
+    }
+
+    /// Triggers stack (timer, wake, activation, popover open): a short
+    /// throttle dedupes them; `force` (manual button, post-switch) bypasses.
+    func refresh(force: Bool = false) {
         guard !isRefreshing else { return }
+        if !force, let last = lastAttempt, Date().timeIntervalSince(last) < 3 {
+            return
+        }
+        lastAttempt = Date()
         isRefreshing = true
         fetchGeneration += 1
         let generation = fetchGeneration
@@ -68,9 +112,10 @@ final class UsageStore: ObservableObject {
         fetchGeneration += 1  // any in-flight pre-switch fetch is now stale
         isRefreshing = false
         Task.detached(priority: .userInitiated) {
-            var failure: String?
+            let failure: String?
             do {
                 try CswapClient.switchTo(number)
+                failure = nil
             } catch {
                 failure = String(describing: error)
             }
@@ -79,7 +124,7 @@ final class UsageStore: ObservableObject {
                     self?.switchError = "Switch failed: \(failure)"
                 }
                 self?.isRefreshing = false
-                self?.refresh()
+                self?.refresh(force: true)
             }
         }
     }

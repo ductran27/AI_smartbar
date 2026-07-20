@@ -25,6 +25,9 @@ struct PopoverView: View {
         .padding(11)
         .frame(width: 330)
         .preferredColorScheme(.dark)
+        // Opening the popover is the user looking: fetch now so the numbers
+        // match /usage (cswap's store paces the real network traffic).
+        .onAppear { store.refresh() }
     }
 
     @ViewBuilder
@@ -46,10 +49,11 @@ struct PopoverView: View {
         HStack(spacing: 8) {
             Text("AI smartbar")
                 .font(.headline)
-            if let refreshed = store.lastRefresh {
-                Text("Updated \(refreshed.formatted(date: .omitted, time: .shortened))")
+            if let updated = store.dataUpdated {
+                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                    .help(freshnessHelp)
             }
             if store.isStale {
                 Image(systemName: "wifi.slash")
@@ -59,7 +63,7 @@ struct PopoverView: View {
             }
             Spacer()
             Button {
-                store.refresh()
+                store.refresh(force: true)
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12.5, weight: .semibold))
@@ -80,6 +84,17 @@ struct PopoverView: View {
             .help("Quit AI smartbar")
             .accessibilityLabel("Quit AI smartbar")
         }
+    }
+
+    private var freshnessHelp: String {
+        var parts: [String] = []
+        if let measured = store.snapshot?.dataDate {
+            parts.append("Usage measured \(measured.formatted(date: .omitted, time: .standard))")
+        }
+        if let polled = store.lastRefresh {
+            parts.append("cswap polled \(polled.formatted(date: .omitted, time: .standard))")
+        }
+        return parts.isEmpty ? "No data yet" : parts.joined(separator: " · ")
     }
 
     @ViewBuilder

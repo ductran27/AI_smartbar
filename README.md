@@ -75,7 +75,7 @@ Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstal
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SMARTBAR_INTERVAL` | `300` | Refresh period in seconds |
+| `SMARTBAR_INTERVAL` | `180` | Poll period in seconds (popover open / wake / switch also refresh) |
 | `SMARTBAR_YELLOW` | `50` | Yellow at or below this % **left** |
 | `SMARTBAR_LOW` | `25` | Light red at or below this % **left** |
 | `SMARTBAR_RED` | `10` | Dark red + notification at or below this % **left** |
@@ -112,15 +112,25 @@ the official claude CLI.
 ## Behavior notes
 
 - **Every number is "% left"** (v2): pills/bars drain as tokens are spent;
-  cswap reports % used and the core converts once, everywhere.
+  cswap reports % used and the core converts once, everywhere. Claude
+  Code's `/usage` speaks in % used, so 74% left here ≡ 26% used there;
+  promo-boosted limits (e.g. "+50% weekly") are already baked into the
+  API's percentages, so both read the same scale.
 - **Switching** affects new Claude Code sessions; already-running sessions
   keep their current account (claude-swap semantics).
 - **Restart re-notify:** alert state is in-memory; restarting the app while
   a metric is ≤10% left fires that notification once more.
 - **XFCE hover text** is a single line (StatusNotifier limitation); full
   details are in the menu.
-- cswap polls Anthropic's usage API adaptively with caching — the 60s
-  refresh here does not hammer anything.
+- **Freshness:** `cswap list --json` serves its store and only hits
+  Anthropic's usage API (`/api/oauth/usage`) on its adaptive per-account
+  plan — data ≤3 min old is served as-is, real fetches run every 1–10 min
+  under a strict per-token budget. AI smartbar polls every 180 s (free:
+  the store paces the network) and refreshes the moment you open the
+  popover, wake the Mac, or switch accounts, so what you read tracks
+  `/usage` to within ~3 min at worst. The header's "Updated" time is the
+  actual measurement time (`usageFetchedAt`), and countdowns tick live
+  from `resetsAt` instead of freezing at fetch time.
 
 ## Troubleshooting
 
@@ -136,7 +146,7 @@ the last data stays visible marked stale.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 40 tests, no external deps
+python3 -m unittest discover -s tests -v   # 77 tests, no external deps
 ```
 
 Layout: `smartbar/core/` (all logic + formatting, unit-tested) —

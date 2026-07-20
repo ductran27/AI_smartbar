@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .model import best_switch, red_threshold, worst
+from .reset_countdown_format import remaining_text
 
 
 @dataclass
@@ -40,8 +41,9 @@ class AlertManager:
     def _build(self, snapshot, metric):
         title = f"Claude: {metric.label} — {round(metric.left)}% left"
         lines = []
-        if metric.countdown:
-            lines.append(f"Resets in {metric.countdown}.")
+        countdown = remaining_text(metric.resets_at) or metric.countdown
+        if countdown:
+            lines.append(f"Resets in {countdown}.")
         suggestion = best_switch(snapshot)
         if suggestion is not None:
             w = worst(suggestion)

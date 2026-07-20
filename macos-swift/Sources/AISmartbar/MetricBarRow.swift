@@ -27,14 +27,19 @@ struct MetricBarRow: View {
             }
             .frame(height: 6)
             .animation(.easeOut(duration: 0.6), value: metric.pct)
-            valueText
-                .frame(width: 104, alignment: .trailing)
+            // The countdown ticks live from the absolute reset time while
+            // the popover is open instead of freezing at fetch time.
+            TimelineView(.everyMinute) { context in
+                valueText(now: context.date)
+            }
+            .frame(width: 104, alignment: .trailing)
         }
     }
 
-    private var valueText: some View {
-        (Text("\(metric.leftPct)%").fontWeight(.bold)
-            + Text(metric.countdown.isEmpty ? "" : " · \(metric.countdown)"))
+    private func valueText(now: Date) -> some View {
+        let countdown = metric.liveCountdown(now: now)
+        return (Text("\(metric.leftPct)%").fontWeight(.bold)
+            + Text(countdown.isEmpty ? "" : " · \(countdown)"))
             .font(.system(size: 10.5, design: .monospaced))
             .foregroundStyle(metric.left <= 0 ? Color.white.opacity(0.45)
                                               : Color.white.opacity(0.8))

@@ -64,6 +64,14 @@ class TestAlerts(unittest.TestCase):
         alerts = self.mgr.check(snap(92))
         self.assertIn("No other account", alerts[0].body)
 
+    def test_countdown_recomputed_live_from_resets_at(self):
+        # A parseable resetsAt wins over the frozen fetch-time countdown.
+        from datetime import datetime, timedelta, timezone
+        resets = (datetime.now(timezone.utc)
+                  + timedelta(hours=2, minutes=30, seconds=30)).isoformat()
+        alerts = self.mgr.check(snap(92, resets=resets))
+        self.assertIn("Resets in 2h 30m", alerts[0].body)
+
     def test_respects_test_threshold_env(self):
         os.environ["SMARTBAR_TEST_THRESHOLD"] = "30"
         self.assertEqual(len(self.mgr.check(snap(75))), 1)  # 25% left <= 30

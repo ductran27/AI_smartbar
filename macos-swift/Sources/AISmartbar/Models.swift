@@ -19,6 +19,8 @@ struct CswapAccountRaw: Decodable {
     var active: Bool?
     var usageStatus: String?
     var usage: CswapUsageRaw?
+    var usageFetchedAt: String?    // when cswap actually read the usage API
+    var usageAgeSeconds: Double?   // age of that measurement at list time
 }
 
 struct CswapUsageRaw: Decodable {
@@ -93,6 +95,13 @@ struct Metric: Identifiable, Equatable {
     /// % of the window remaining, clamped at 0.
     var left: Double { max(0, 100 - pct) }
     var leftPct: Int { Int(left.rounded()) }
+
+    /// Countdown recomputed from the absolute reset time so the wait shown
+    /// stays live however old the snapshot is; cswap's fetch-time string is
+    /// the fallback when resetsAt is unparseable.
+    func liveCountdown(now: Date = Date()) -> String {
+        TimeRemaining.countdown(to: resetsAt, now: now) ?? countdown
+    }
 }
 
 struct Account: Identifiable, Equatable {
@@ -102,6 +111,7 @@ struct Account: Identifiable, Equatable {
     var active: Bool
     var ok: Bool           // usageStatus == "ok" and usage present
     var metrics: [Metric]
+    var fetchedAt: Date?   // usageFetchedAt: when the measurement was taken
 
     var id: Int { number }
 
@@ -146,6 +156,12 @@ struct Snapshot: Equatable {
     var schemaWarning: String?
 
     var activeAccount: Account? { accounts.first(where: { $0.active }) }
+
+    /// When cswap last measured usage at the API — the honest "Updated"
+    /// time (the active account's, since that's what /usage shows too).
+    var dataDate: Date? {
+        activeAccount?.fetchedAt ?? accounts.compactMap { $0.fetchedAt }.max()
+    }
 
     /// Best non-active account to switch to (most headroom), or nil.
     var bestSwitch: Account? {
@@ -194,7 +210,8 @@ struct Snapshot: Equatable {
                            org: raw.organizationName ?? "",
                            active: raw.active ?? false,
                            ok: ok,
-                           metrics: metrics)
+                           metrics: metrics,
+                           fetchedAt: TimeRemaining.parseISO(raw.usageFetchedAt ?? ""))
         }
         return Snapshot(accounts: accounts, schemaWarning: warning)
     }

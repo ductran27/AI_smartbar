@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
+from .reset_countdown_format import parse_iso  # re-exported: gate + runner use it
+
 DEFAULT_DAILY_CAP = 6
 COOLDOWN_MINUTES = 30
 MAX_SNAPSHOT_AGE_MINUTES = 30
@@ -21,26 +23,6 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ[name])
     except (KeyError, ValueError):
         return default
-
-
-def parse_iso(text: str):
-    """ISO timestamp -> aware UTC datetime, or None. Naive input = UTC.
-
-    Accepts a trailing "Z" (cswap emits it for usageFetchedAt): the system
-    python3 launchd uses can predate 3.11, where fromisoformat lacks
-    Z-suffix support.
-    """
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def five_hour_metric(account):

@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 
 import cairo
 from gi.repository import AyatanaAppIndicator3 as AppIndicator
@@ -83,19 +84,24 @@ def render_pills(states, path: str) -> None:
 class Tray:
     def __init__(self):
         os.makedirs(ICON_DIR, exist_ok=True)
-        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "300"))
+        # 180s matches cswap's serve TTL: polling faster costs no extra API
+        # traffic (the store paces the network) but halves display lag.
+        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "180"))
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
         self.flip = False
         self.generation = 0  # stamps fetches so superseded results are dropped
+        self.menu = None
+        self.pending_menu = None  # rebuilt while open; swapped in on hide
+        self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
         self.indicator.set_icon_theme_path(ICON_DIR)
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self._set_icon([])  # hollow "?" pills until the first fetch lands
-        self.indicator.set_menu(self._build_menu())
+        self._install_menu(self._build_menu())
         self._init_notify()
 
     def _init_notify(self):
@@ -151,8 +157,34 @@ class Tray:
             item = Gtk.MenuItem(label=label)
             item.connect("activate", callback)
             menu.append(item)
+        menu.connect("show", self._on_menu_show)
+        menu.connect("hide", self._on_menu_hide)
         menu.show_all()
         return menu
+
+    def _install_menu(self, menu):
+        self.menu = menu
+        self.pending_menu = None
+        self.indicator.set_menu(menu)
+
+    def _refresh_menu(self):
+        new_menu = self._build_menu()
+        if self.menu is not None and self.menu.get_mapped():
+            # Swapping the menu out from under the pointer closes it on
+            # some shells — hold the rebuild until this open menu hides.
+            self.pending_menu = new_menu
+        else:
+            self._install_menu(new_menu)
+
+    def _on_menu_show(self, _menu):
+        # An opening menu is the user looking: refresh so what they read is
+        # current (cswap's store paces the real network traffic).
+        if time.monotonic() - self.last_fetch_at > 10:
+            self._start_fetch()
+
+    def _on_menu_hide(self, _menu):
+        if self.pending_menu is not None:
+            self._install_menu(self.pending_menu)
 
     def _on_switch(self, _item, number):
         def run():
@@ -177,6 +209,7 @@ class Tray:
 
     def _start_fetch(self):
         self.generation += 1
+        self.last_fetch_at = time.monotonic()
         threading.Thread(target=self._fetch, args=(self.generation,),
                          daemon=True).start()
 
@@ -199,7 +232,7 @@ class Tray:
         account = snap.active_account
         self._set_icon(model.pill_states(account))
         self.indicator.set_title(model.title_line(account))
-        self.indicator.set_menu(self._build_menu())
+        self._refresh_menu()
         for alert in self.alerts.check(snap):
             self._send_alert(alert)
         return False
@@ -211,7 +244,7 @@ class Tray:
         if self.failures >= 3:
             self._set_icon([])
             self.indicator.set_title(f"AI smartbar — cswap error: {message[:80]}")
-        self.indicator.set_menu(self._build_menu())
+        self._refresh_menu()
         return False
 
     def _tick(self):
@@ -229,7 +262,7 @@ def main():
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
-             os.environ.get("SMARTBAR_INTERVAL", "300"))
+             os.environ.get("SMARTBAR_INTERVAL", "180"))
     tray = Tray()
     tray._start_fetch()
     GLib.timeout_add_seconds(tray.interval, tray._tick)
