@@ -103,7 +103,7 @@ last data marked `(stale)` in the menu.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 26 tests, no external deps
+python3 -m unittest discover -s tests -v   # 33 tests, no external deps
 ```
 
 Layout: `smartbar/core/` (all logic + formatting, unit-tested) —

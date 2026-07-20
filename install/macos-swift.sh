@@ -27,7 +27,7 @@ swift build -c release --package-path "$PKG"
 BIN="$(swift build -c release --package-path "$PKG" --show-bin-path)/AISmartbar"
 [[ -x "$BIN" ]] || { echo "Build produced no binary at $BIN"; exit 1; }
 
-echo "Bundling $APP_DIR…"
+echo "Bundling ${APP_DIR}…"
 mkdir -p "$APP_DIR/Contents/MacOS"
 cp "$BIN" "$APP_DIR/Contents/MacOS/AISmartbar"
 cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
