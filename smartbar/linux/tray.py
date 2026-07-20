@@ -22,46 +22,68 @@ ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 
 COLORS = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
-          "red": (0.80, 0.16, 0.16), "gray": (0.45, 0.45, 0.45)}
+          "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
+          "gray": (0.45, 0.45, 0.45)}
 
 log = logging.getLogger("ai-smartbar")
 
 
-def render_icon(rows, path: str) -> None:
-    """Stacked badge: one rounded-rect line per (text, color) row.
+def _rounded_rect(ctx, x, y, w, h, r):
+    r = min(r, h / 2, w / 2)
+    ctx.new_sub_path()
+    ctx.arc(x + w - r, y + r, r, -1.5708, 0)
+    ctx.arc(x + w - r, y + h - r, r, 0, 1.5708)
+    ctx.arc(x + r, y + h - r, r, 1.5708, 3.1416)
+    ctx.arc(x + r, y + r, r, 3.1416, 4.7124)
+    ctx.close_path()
 
-    One row (e.g. loading/error) renders as the original single badge; two
-    rows stack general-limit above the per-model bucket, each independently
-    colored. The panel scales the PNG to its height.
+
+def render_pills(states, path: str) -> None:
+    """Twin-pill badge (same design as the macOS icon, 6x scale).
+
+    One vertical pill per (fraction_left, color) state: general limit
+    first, then per-model buckets. Fill anchors to the bottom and drains
+    downward as tokens are spent. Empty states -> hollow pills + "?".
+    The panel scales the PNG to its height.
     """
-    w, row_h, gap, r = 96, 40, 6, 10
-    h = row_h * len(rows) + gap * (len(rows) - 1)
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+    pill_w, pill_h, gap, margin, radius = 30, 96, 12, 12, 15
+    n = len(states) if states else 2
+    w = margin * 2 + pill_w * n + gap * (n - 1)
+    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, pill_h)
     ctx = cairo.Context(surface)
-    ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    for i, (text, color_name) in enumerate(rows):
-        top = i * (row_h + gap)
-        ctx.new_sub_path()
-        ctx.arc(w - r, top + r, r, -1.5708, 0)
-        ctx.arc(w - r, top + row_h - r, r, 0, 1.5708)
-        ctx.arc(r, top + row_h - r, r, 1.5708, 3.1416)
-        ctx.arc(r, top + r, r, 3.1416, 4.7124)
-        ctx.close_path()
-        ctx.set_source_rgb(*COLORS[color_name])
+    for i in range(n):
+        x = margin + i * (pill_w + gap)
+        if not states:
+            _rounded_rect(ctx, x + 3, 3, pill_w - 6, pill_h - 6, radius)
+            ctx.set_source_rgba(0.5, 0.5, 0.5, 0.8)
+            ctx.set_line_width(6)
+            ctx.stroke()
+            continue
+        _rounded_rect(ctx, x, 0, pill_w, pill_h, radius)
+        ctx.set_source_rgba(0.5, 0.5, 0.5, 0.45)
         ctx.fill()
-        ctx.set_source_rgb(1, 1, 1)
-        ctx.set_font_size(30)
-        ext = ctx.text_extents(text)
+        frac, color_name = states[i]
+        if frac > 0:
+            fill_h = max(12, round(pill_h * min(frac, 1.0)))
+            _rounded_rect(ctx, x, pill_h - fill_h, pill_w, fill_h, radius)
+            ctx.set_source_rgb(*COLORS[color_name])
+            ctx.fill()
+    if not states:
+        ctx.set_source_rgba(1, 1, 1, 0.85)
+        ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
+                             cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(48)
+        ext = ctx.text_extents("?")
         ctx.move_to((w - ext.width) / 2 - ext.x_bearing,
-                    top + (row_h - ext.height) / 2 - ext.y_bearing)
-        ctx.show_text(text)
+                    (pill_h - ext.height) / 2 - ext.y_bearing)
+        ctx.show_text("?")
     surface.write_to_png(path)
 
 
 class Tray:
     def __init__(self):
         os.makedirs(ICON_DIR, exist_ok=True)
-        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
+        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "300"))
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
@@ -71,7 +93,7 @@ class Tray:
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
         self.indicator.set_icon_theme_path(ICON_DIR)
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
-        self._set_icon([("...", "gray")])
+        self._set_icon([])  # hollow "?" pills until the first fetch lands
         self.indicator.set_menu(self._build_menu())
         self._init_notify()
 
@@ -96,12 +118,12 @@ class Tray:
         except Exception:
             log.exception("failed to send notification")
 
-    def _set_icon(self, rows):
+    def _set_icon(self, states):
         # Alternate two icon names: AppIndicator ignores a set_icon_full call
         # with the current name, so a single name would never repaint.
         self.flip = not self.flip
         name = f"state-{'a' if self.flip else 'b'}"
-        render_icon(rows, os.path.join(ICON_DIR, name + ".png"))
+        render_pills(states, os.path.join(ICON_DIR, name + ".png"))
         self.indicator.set_icon_full(name, "AI smartbar usage")
 
     def _build_menu(self):
@@ -170,7 +192,7 @@ class Tray:
         if snap.schema_warning:
             log.warning("%s", snap.schema_warning)
         account = snap.active_account
-        self._set_icon(model.icon_rows(account))
+        self._set_icon(model.pill_states(account))
         self.indicator.set_title(model.title_line(account))
         self.indicator.set_menu(self._build_menu())
         for alert in self.alerts.check(snap):
@@ -180,7 +202,7 @@ class Tray:
     def _apply_error(self, message):
         self.failures += 1
         if self.failures >= 3:
-            self._set_icon([("?", "gray")])
+            self._set_icon([])
             self.indicator.set_title(f"AI smartbar — cswap error: {message[:80]}")
         self.indicator.set_menu(self._build_menu())
         return False
@@ -200,7 +222,7 @@ def main():
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
-             os.environ.get("SMARTBAR_INTERVAL", "60"))
+             os.environ.get("SMARTBAR_INTERVAL", "300"))
     tray = Tray()
     tray._start_fetch()
     GLib.timeout_add_seconds(tray.interval, tray._tick)

@@ -19,7 +19,7 @@ class SmartBarApp(rumps.App):
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
-        interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
+        interval = int(os.environ.get("SMARTBAR_INTERVAL", "300"))
         self._rebuild_menu()
         self.timer = rumps.Timer(self._tick, interval)
         self.timer.start()
