@@ -1,5 +1,7 @@
-// Observable state: refresh timer, alert fire-once/re-arm, account switch.
-// Semantics ported from smartbar/core/alerts.py (unit-tested in Python).
+// Observable state: refresh timer, alert fire-once/re-arm, account switch,
+// and the published menu-bar pill icon.
+// Semantics ported from smartbar/core (unit-tested in Python).
+import AppKit
 import Combine
 import Foundation
 
@@ -10,20 +12,22 @@ final class UsageStore: ObservableObject {
     @Published var consecutiveFailures = 0
     @Published var lastRefresh: Date?
     @Published var isRefreshing = false
+    @Published var icon: NSImage = MenuBarIcon.image(for: [])
 
     private var timer: Timer?
     private var fired: [String: String] = [:]  // "acct-metricKey" -> resetsAt at fire time
 
-    var menuBarTitle: String {
-        if consecutiveFailures >= 3 { return "⚪ ?" }
-        return snapshot?.menuBarTitle ?? "⚪ …"
-    }
-
     var isStale: Bool { consecutiveFailures > 0 && snapshot != nil }
+
+    var accessibilitySummary: String {
+        if consecutiveFailures >= 3 { return "AI smartbar: no data" }
+        guard let account = snapshot?.activeAccount else { return "AI smartbar: loading" }
+        return "AI smartbar: \(account.summary)"
+    }
 
     init() {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_INTERVAL"] ?? ""
-        let interval = Double(raw) ?? 60
+        let interval = Double(raw) ?? 300
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -64,10 +68,14 @@ final class UsageStore: ObservableObject {
             lastError = nil
             consecutiveFailures = 0
             lastRefresh = Date()
+            icon = MenuBarIcon.image(for: snap.activeAccount?.pillStates ?? [])
             checkAlerts(snap)
         case .failure(let error):
             consecutiveFailures += 1
             lastError = String(describing: error)
+            if consecutiveFailures >= 3 {
+                icon = MenuBarIcon.image(for: [])
+            }
         }
     }
 
@@ -76,16 +84,16 @@ final class UsageStore: ObservableObject {
         let threshold = Thresholds.red
         for metric in account.metrics {
             let key = "\(account.number)-\(metric.key)"
-            if metric.pct >= threshold {
+            if metric.left <= threshold {
                 if fired[key] == metric.resetsAt { continue }  // held for this window
                 fired[key] = metric.resetsAt
                 var body = metric.countdown.isEmpty ? "" : "Resets in \(metric.countdown). "
                 if let best = snap.bestSwitch {
-                    body += "Best switch: #\(best.number) \(best.email) (\(Int(best.worstPct.rounded()))%)"
+                    body += "Best switch: #\(best.number) \(best.email) (\(best.worstLeftPct)% left)"
                 } else {
                     body += "No other account available."
                 }
-                Self.notify(title: "Claude: \(metric.label) window at \(metric.roundedPct)%",
+                Self.notify(title: "Claude: \(metric.label) — \(metric.leftPct)% left",
                             body: body)
             } else {
                 fired.removeValue(forKey: key)  // re-arm after reset

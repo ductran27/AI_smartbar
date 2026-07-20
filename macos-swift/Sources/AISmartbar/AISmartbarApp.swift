@@ -1,5 +1,6 @@
-// Menu-bar-only SwiftUI app. The label mirrors the Linux badge as dotted
-// text segments; the window-style extra hosts the popover UI.
+// Menu-bar-only SwiftUI app. The label is the twin-pill "% left" icon
+// (same design as the Linux badge); the window-style extra hosts the
+// popover UI.
 import AppKit
 import SwiftUI
 
@@ -13,8 +14,8 @@ struct AISmartbarApp: App {
             PopoverView()
                 .environmentObject(store)
         } label: {
-            Text(store.menuBarTitle)
-                .monospacedDigit()
+            Image(nsImage: store.icon)
+                .accessibilityLabel(store.accessibilitySummary)
         }
         .menuBarExtraStyle(.window)
     }

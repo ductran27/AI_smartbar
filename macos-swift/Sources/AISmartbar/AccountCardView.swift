@@ -1,5 +1,6 @@
 // One card per Claude account: status dot, email, ACTIVE chip or switch
-// button, and a row of ring gauges (5h / 7d / per-model buckets).
+// button, and one horizontal draining bar per metric (5h / 7d / per-model).
+// The active card wears a white outline (dark-only design).
 import SwiftUI
 
 struct AccountCardView: View {
@@ -7,11 +8,11 @@ struct AccountCardView: View {
     @EnvironmentObject private var store: UsageStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
                 Circle()
-                    .fill((account.rows.first?.status ?? Status.gray).color)
-                    .frame(width: 8, height: 8)
+                    .fill(account.worstStatus.color)
+                    .frame(width: 7, height: 7)
                 Text(account.email)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -37,15 +38,15 @@ struct AccountCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 7) {
                     ForEach(account.metrics) { metric in
-                        RingGauge(metric: metric)
+                        MetricBarRow(metric: metric)
                     }
-                    Spacer(minLength: 0)
                 }
             }
         }
-        .padding(12)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 11)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.thinMaterial)
@@ -53,9 +54,9 @@ struct AccountCardView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(account.active
-                              ? Color.accentColor.opacity(0.35)
-                              : Color.primary.opacity(0.06),
-                              lineWidth: 1)
+                              ? Color.white.opacity(0.92)
+                              : Color.white.opacity(0.07),
+                              lineWidth: account.active ? 1.5 : 1)
         )
     }
 }

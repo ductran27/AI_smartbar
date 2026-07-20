@@ -43,18 +43,11 @@ struct CswapScopedRaw: Decodable {
 }
 
 // MARK: - Domain
+// v2 semantics: every user-visible number is "% left"; the 5-step status
+// ramp is judged on what's left (mirror of smartbar/core/model.py).
 
 enum Status: String {
-    case green, yellow, red, gray
-
-    var dot: String {
-        switch self {
-        case .green: return "🟢"
-        case .yellow: return "🟡"
-        case .red: return "🔴"
-        case .gray: return "⚪"
-        }
-    }
+    case green, yellow, low, critical, gray
 }
 
 enum Thresholds {
@@ -64,23 +57,23 @@ enum Thresholds {
         return value
     }
 
-    static var yellow: Double {
+    private static func value(_ name: String, _ fallback: Double) -> Double {
         if ProcessInfo.processInfo.environment["SMARTBAR_TEST_THRESHOLD"] != nil {
-            return envDouble("SMARTBAR_TEST_THRESHOLD", 70)
+            return envDouble("SMARTBAR_TEST_THRESHOLD", fallback)
         }
-        return envDouble("SMARTBAR_YELLOW", 70)
+        return envDouble(name, fallback)
     }
 
-    static var red: Double {
-        if ProcessInfo.processInfo.environment["SMARTBAR_TEST_THRESHOLD"] != nil {
-            return envDouble("SMARTBAR_TEST_THRESHOLD", 90)
-        }
-        return envDouble("SMARTBAR_RED", 90)
-    }
+    static var yellow: Double { value("SMARTBAR_YELLOW", 50) }
+    static var low: Double { value("SMARTBAR_LOW", 25) }
+    static var red: Double { value("SMARTBAR_RED", 10) }
 
-    static func status(for pct: Double) -> Status {
-        if pct >= red { return .red }
-        if pct >= yellow { return .yellow }
+    static func status(forUsedPct pct: Double) -> Status {
+        let left = max(0, 100 - pct)
+        if left <= 0 { return .gray }
+        if left <= red { return .critical }
+        if left <= low { return .low }
+        if left <= yellow { return .yellow }
         return .green
     }
 }
@@ -94,9 +87,12 @@ struct Metric: Identifiable, Equatable {
     var countdown: String  // preformatted by cswap, e.g. "4h 3m"
 
     var id: String { key }
-    var status: Status { Thresholds.status(for: pct) }
+    var status: Status { Thresholds.status(forUsedPct: pct) }
     var isScoped: Bool { key.hasPrefix("scoped:") }
-    var roundedPct: Int { Int(pct.rounded()) }
+
+    /// % of the window remaining, clamped at 0.
+    var left: Double { max(0, 100 - pct) }
+    var leftPct: Int { Int(left.rounded()) }
 }
 
 struct Account: Identifiable, Equatable {
@@ -118,19 +114,30 @@ struct Account: Identifiable, Equatable {
     }
 
     var worstPct: Double { metrics.map { $0.pct }.max() ?? 0 }
+    var worstLeftPct: Int { Int(max(0, 100 - worstPct).rounded()) }
+    var worstStatus: Status {
+        metrics.max(by: { $0.pct < $1.pct })?.status ?? .gray
+    }
 
-    /// Badge rows: the general all-models limit first, then the per-model
-    /// bucket, each carrying its own threshold color.
-    var rows: [(text: String, status: Status)] {
-        var result: [(text: String, status: Status)] = []
-        for metric in [generalWorst, scopedWorst].compactMap({ $0 }) {
-            result.append((text: "\(metric.short)\(metric.roundedPct)",
-                           status: metric.status))
+    /// States for the twin-pill icon: general all-models pill first, then
+    /// one pill per scoped (per-model) metric. Empty when there is no data
+    /// (the renderer draws the hollow "?" state).
+    var pillStates: [(fraction: Double, status: Status)] {
+        var states: [(fraction: Double, status: Status)] = []
+        if let general = generalWorst {
+            states.append((general.left / 100, general.status))
         }
-        if result.isEmpty {
-            result.append((text: "?", status: .gray))
+        for metric in metrics where metric.isScoped {
+            states.append((metric.left / 100, metric.status))
         }
-        return result
+        return states
+    }
+
+    /// One-line "% left" summary (accessibility label for the icon).
+    var summary: String {
+        if metrics.isEmpty { return "no usage data" }
+        return metrics.map { "\($0.label) \($0.leftPct)% left" }
+            .joined(separator: " · ")
     }
 }
 
@@ -139,12 +146,6 @@ struct Snapshot: Equatable {
     var schemaWarning: String?
 
     var activeAccount: Account? { accounts.first(where: { $0.active }) }
-
-    /// Menu-bar text: one dotted segment per badge row, e.g. "🟢 5h31 · 🟢 F30".
-    var menuBarTitle: String {
-        let rows = activeAccount?.rows ?? [(text: "?", status: Status.gray)]
-        return rows.map { "\($0.status.dot) \($0.text)" }.joined(separator: " · ")
-    }
 
     /// Best non-active account to switch to (most headroom), or nil.
     var bestSwitch: Account? {
