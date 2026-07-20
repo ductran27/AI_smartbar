@@ -28,7 +28,7 @@ class AlertManager:
         threshold = red_threshold()
         for metric in account.metrics:
             key = (account.number, metric.key)
-            if metric.pct >= threshold:
+            if metric.left <= threshold:
                 if self._fired.get(key) == metric.resets_at:
                     continue  # already fired for this window
                 self._fired[key] = metric.resets_at
@@ -38,7 +38,7 @@ class AlertManager:
         return alerts
 
     def _build(self, snapshot, metric):
-        title = f"Claude: {metric.label} window at {round(metric.pct)}%"
+        title = f"Claude: {metric.label} — {round(metric.left)}% left"
         lines = []
         if metric.countdown:
             lines.append(f"Resets in {metric.countdown}.")
@@ -46,7 +46,7 @@ class AlertManager:
         if suggestion is not None:
             w = worst(suggestion)
             lines.append(f"Best switch: #{suggestion.number} {suggestion.email} "
-                         f"({w.short} {round(w.pct)}%)")
+                         f"({round(w.left)}% left)")
         else:
             lines.append("No other account available.")
         return Alert(title=title, body="\n".join(lines))

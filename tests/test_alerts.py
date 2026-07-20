@@ -1,4 +1,8 @@
-"""Tests for smartbar.core.alerts — fire-once / re-arm state machine."""
+"""Tests for smartbar.core.alerts — fire-once / re-arm state machine.
+
+v2: alerts fire when a metric's % left drops to the red threshold
+(default 10% left ≡ 90% used); copy speaks in "% left".
+"""
 import os
 import unittest
 
@@ -26,38 +30,43 @@ class TestAlerts(unittest.TestCase):
         os.environ.pop("SMARTBAR_TEST_THRESHOLD", None)
 
     def test_fires_once_at_threshold(self):
-        alerts = self.mgr.check(snap(92))
+        alerts = self.mgr.check(snap(92))          # 8% left
         self.assertEqual(len(alerts), 1)
         self.assertIn("5h", alerts[0].title)
-        self.assertIn("92%", alerts[0].title)
+        self.assertIn("8% left", alerts[0].title)
         self.assertIn("Resets in 1h 12m", alerts[0].body)
         self.assertEqual(self.mgr.check(snap(93)), [])  # held, same window
 
+    def test_fires_when_fully_empty(self):
+        alerts = self.mgr.check(snap(100))         # 0% left -> gray, still alerts
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("0% left", alerts[0].title)
+
     def test_rearm_on_drop_below(self):
         self.mgr.check(snap(92))
-        self.mgr.check(snap(5))          # window reset -> pct low again
+        self.mgr.check(snap(5))          # window reset -> plenty left again
         self.assertEqual(len(self.mgr.check(snap(91))), 1)
 
     def test_rearm_on_resets_at_change(self):
         self.mgr.check(snap(92, resets="r1"))
-        alerts = self.mgr.check(snap(95, resets="r2"))  # new window, still high
+        alerts = self.mgr.check(snap(95, resets="r2"))  # new window, still low
         self.assertEqual(len(alerts), 1)
 
-    def test_below_threshold_never_fires(self):
-        self.assertEqual(self.mgr.check(snap(89.9)), [])
+    def test_above_threshold_never_fires(self):
+        self.assertEqual(self.mgr.check(snap(89.9)), [])  # 10.1% left
 
-    def test_suggestion_names_best_other_account(self):
+    def test_suggestion_names_best_other_account_in_left(self):
         alerts = self.mgr.check(snap(92, other_pct=34))
         self.assertIn("#2 b@x.com", alerts[0].body)
-        self.assertIn("34%", alerts[0].body)
+        self.assertIn("66% left", alerts[0].body)
 
     def test_no_other_account_message(self):
         alerts = self.mgr.check(snap(92))
         self.assertIn("No other account", alerts[0].body)
 
     def test_respects_test_threshold_env(self):
-        os.environ["SMARTBAR_TEST_THRESHOLD"] = "10"
-        self.assertEqual(len(self.mgr.check(snap(11))), 1)
+        os.environ["SMARTBAR_TEST_THRESHOLD"] = "30"
+        self.assertEqual(len(self.mgr.check(snap(75))), 1)  # 25% left <= 30
 
 
 if __name__ == "__main__":

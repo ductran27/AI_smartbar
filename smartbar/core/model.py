@@ -2,16 +2,23 @@
 
 Every user-visible string (icon text, hover title, menu rows, macOS
 menu-bar title) is produced here so both platform UIs render identically.
+
+v2 semantics: every number a user sees is "% left" (tokens remaining);
+pills/bars drain as tokens are spent. Thresholds are remaining-based:
+a metric is yellow at or below SMARTBAR_YELLOW % left, "low" (light red)
+at or below SMARTBAR_LOW, "critical" (dark red, fires the switch alert)
+at or below SMARTBAR_RED, gray when nothing is left.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 
-DEFAULT_YELLOW = 70.0
-DEFAULT_RED = 90.0
+DEFAULT_YELLOW_LEFT = 50.0
+DEFAULT_LOW_LEFT = 25.0
+DEFAULT_RED_LEFT = 10.0
 
-DOT = {"green": "🟢", "yellow": "🟡", "red": "🔴", "gray": "⚪"}
+DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴", "gray": "⚪"}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -21,16 +28,22 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def yellow_threshold() -> float:
+def _threshold(name: str, default: float) -> float:
     if "SMARTBAR_TEST_THRESHOLD" in os.environ:
-        return _env_float("SMARTBAR_TEST_THRESHOLD", DEFAULT_YELLOW)
-    return _env_float("SMARTBAR_YELLOW", DEFAULT_YELLOW)
+        return _env_float("SMARTBAR_TEST_THRESHOLD", default)
+    return _env_float(name, default)
+
+
+def yellow_threshold() -> float:
+    return _threshold("SMARTBAR_YELLOW", DEFAULT_YELLOW_LEFT)
+
+
+def low_threshold() -> float:
+    return _threshold("SMARTBAR_LOW", DEFAULT_LOW_LEFT)
 
 
 def red_threshold() -> float:
-    if "SMARTBAR_TEST_THRESHOLD" in os.environ:
-        return _env_float("SMARTBAR_TEST_THRESHOLD", DEFAULT_RED)
-    return _env_float("SMARTBAR_RED", DEFAULT_RED)
+    return _threshold("SMARTBAR_RED", DEFAULT_RED_LEFT)
 
 
 @dataclass
@@ -38,10 +51,15 @@ class Metric:
     key: str            # "5h", "7d", or "scoped:<Name>"
     label: str          # "5h", "7d", "Fable"
     short: str          # "5h", "7d", "F"
-    pct: float
+    pct: float          # % used, as reported by cswap
     resets_at: str = ""
     countdown: str = ""  # preformatted by cswap, e.g. "4h 3m"
     clock: str = ""
+
+    @property
+    def left(self) -> float:
+        """% of the window remaining, clamped at 0."""
+        return max(0.0, 100.0 - self.pct)
 
 
 @dataclass
@@ -76,9 +94,15 @@ def worst(account):
 
 
 def color(pct: float) -> str:
-    if pct >= red_threshold():
-        return "red"
-    if pct >= yellow_threshold():
+    """Status name for a used-% value, judged on what's left."""
+    left = max(0.0, 100.0 - pct)
+    if left <= 0:
+        return "gray"
+    if left <= red_threshold():
+        return "critical"
+    if left <= low_threshold():
+        return "low"
+    if left <= yellow_threshold():
         return "yellow"
     return "green"
 
@@ -104,7 +128,7 @@ def scoped_worst(account):
 
 
 def icon_rows(account):
-    """Rows for the stacked tray badge: [(text, color)], 1 or 2 rows.
+    """Rows for text-based badges: [(text, color)], 1 or 2 rows, % left.
 
     Row 1 is the general all-models limit, row 2 the per-model bucket;
     each row carries its own threshold color.
@@ -112,10 +136,28 @@ def icon_rows(account):
     rows = []
     for m in (general_worst(account), scoped_worst(account)):
         if m is not None:
-            rows.append((f"{m.short}{round(m.pct)}", color(m.pct)))
+            rows.append((f"{m.short}{round(m.left)}", color(m.pct)))
     if not rows:
         rows.append(("?", "gray"))
     return rows
+
+
+def pill_states(account):
+    """States for the twin-pill icon: [(fraction_left, color)].
+
+    General all-models pill first, then one pill per scoped (per-model)
+    metric in cswap order. Empty list when there is no data — renderers
+    draw the hollow "?" state.
+    """
+    states = []
+    general = general_worst(account)
+    if general is not None:
+        states.append((general.left / 100.0, color(general.pct)))
+    if account is not None:
+        for m in account.metrics:
+            if m.key.startswith("scoped:"):
+                states.append((m.left / 100.0, color(m.pct)))
+    return states
 
 
 def best_switch(snapshot):
@@ -127,7 +169,7 @@ def best_switch(snapshot):
 
 
 def metrics_text(account) -> str:
-    return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
+    return " · ".join(f"{m.short} {round(m.left)}%" for m in account.metrics)
 
 
 def title_line(account) -> str:
@@ -148,7 +190,7 @@ def icon_text(account) -> str:
     m = worst(account)
     if m is None:
         return "?"
-    return f"{m.short}{round(m.pct)}"
+    return f"{m.short}{round(m.left)}"
 
 
 def macos_title(account) -> str:
