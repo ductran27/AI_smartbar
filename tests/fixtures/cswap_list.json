@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "activeAccountNumber": 1,
+  "accounts": [
+    {
+      "number": 1,
+      "email": "ios8build@gmail.com",
+      "organizationName": "ios8build@gmail.com's Organization",
+      "organizationUuid": "973ccb44-31af-457f-8456-632d1c7e95a0",
+      "isOrganization": true,
+      "active": true,
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": {
+          "pct": 28.0,
+          "resetsAt": "2026-07-20T05:40:00.215128+00:00",
+          "countdown": "3h 54m",
+          "clock": "Jul 20 00:40"
+        },
+        "sevenDay": {
+          "pct": 20.0,
+          "resetsAt": "2026-07-26T17:00:00.215151+00:00",
+          "countdown": "6d 15h",
+          "clock": "Jul 26 12:00"
+        },
+        "scoped": [
+          {
+            "pct": 29.0,
+            "resetsAt": "2026-07-26T17:00:00.215459+00:00",
+            "countdown": "6d 15h",
+            "clock": "Jul 26 12:00",
+            "name": "Fable"
+          }
+        ]
+      },
+      "usageFetchedAt": "2026-07-20T01:45:03Z",
+      "usageAgeSeconds": 0.0
+    }
+  ]
+}
