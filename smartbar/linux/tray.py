@@ -88,6 +88,7 @@ class Tray:
         self.snapshot = None
         self.failures = 0
         self.flip = False
+        self.generation = 0  # stamps fetches so superseded results are dropped
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -175,18 +176,22 @@ class Tray:
         Gtk.main_quit()
 
     def _start_fetch(self):
-        threading.Thread(target=self._fetch, daemon=True).start()
+        self.generation += 1
+        threading.Thread(target=self._fetch, args=(self.generation,),
+                         daemon=True).start()
 
-    def _fetch(self):
+    def _fetch(self, generation):
         try:
             snap = cswap.fetch()
         except cswap.CswapError as exc:
             log.warning("fetch failed: %s", exc)
-            GLib.idle_add(self._apply_error, str(exc))
+            GLib.idle_add(self._apply_error, str(exc), generation)
             return
-        GLib.idle_add(self._apply_snapshot, snap)
+        GLib.idle_add(self._apply_snapshot, snap, generation)
 
-    def _apply_snapshot(self, snap):
+    def _apply_snapshot(self, snap, generation):
+        if generation != self.generation:
+            return False  # superseded (e.g. a pre-switch fetch landing late)
         self.failures = 0
         self.snapshot = snap
         if snap.schema_warning:
@@ -199,7 +204,9 @@ class Tray:
             self._send_alert(alert)
         return False
 
-    def _apply_error(self, message):
+    def _apply_error(self, message, generation):
+        if generation != self.generation:
+            return False  # superseded
         self.failures += 1
         if self.failures >= 3:
             self._set_icon([])

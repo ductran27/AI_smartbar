@@ -10,6 +10,12 @@ struct PopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
+            if let switchError = store.switchError {
+                Label(switchError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
             if let snapshot = store.snapshot {
                 accountList(snapshot)
             } else {
@@ -62,6 +68,7 @@ struct PopoverView: View {
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)
             .help("Refresh now")
+            .accessibilityLabel("Refresh now")
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
@@ -71,6 +78,7 @@ struct PopoverView: View {
             }
             .buttonStyle(.borderless)
             .help("Quit AI smartbar")
+            .accessibilityLabel("Quit AI smartbar")
         }
     }
 

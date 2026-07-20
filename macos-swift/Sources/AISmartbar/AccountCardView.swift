@@ -24,13 +24,14 @@ struct AccountCardView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.accentColor))
+                        .background(Capsule().fill(Status.green.color))
                 } else {
                     Button("Make Active") {
                         store.switchTo(account.number)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .accessibilityLabel("Make \(account.email) active")
                 }
             }
             if account.metrics.isEmpty {

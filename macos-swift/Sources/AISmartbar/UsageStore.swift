@@ -13,9 +13,11 @@ final class UsageStore: ObservableObject {
     @Published var lastRefresh: Date?
     @Published var isRefreshing = false
     @Published var icon: NSImage = MenuBarIcon.image(for: [])
+    @Published var switchError: String?  // sticky until the next switch attempt
 
     private var timer: Timer?
     private var fired: [String: String] = [:]  // "acct-metricKey" -> resetsAt at fire time
+    private var fetchGeneration = 0  // stamps fetches so superseded results are dropped
 
     var isStale: Bool { consecutiveFailures > 0 && snapshot != nil }
 
@@ -37,6 +39,8 @@ final class UsageStore: ObservableObject {
     func refresh() {
         guard !isRefreshing else { return }
         isRefreshing = true
+        fetchGeneration += 1
+        let generation = fetchGeneration
         Task.detached(priority: .utility) {
             let result: Result<Snapshot, Error>
             do {
@@ -45,22 +49,43 @@ final class UsageStore: ObservableObject {
                 result = .failure(error)
             }
             await MainActor.run { [weak self] in
-                self?.apply(result)
+                self?.apply(result, generation: generation)
             }
         }
     }
 
     func switchTo(_ number: Int) {
+        // Optimistic flip: ACTIVE chip, outline and icon move immediately;
+        // the follow-up fetch confirms (or reverts and surfaces the error).
+        switchError = nil
+        if var snap = snapshot {
+            for index in snap.accounts.indices {
+                snap.accounts[index].active = snap.accounts[index].number == number
+            }
+            snapshot = snap
+            icon = MenuBarIcon.image(for: snap.activeAccount?.pillStates ?? [])
+        }
+        fetchGeneration += 1  // any in-flight pre-switch fetch is now stale
+        isRefreshing = false
         Task.detached(priority: .userInitiated) {
-            try? CswapClient.switchTo(number)
+            var failure: String?
+            do {
+                try CswapClient.switchTo(number)
+            } catch {
+                failure = String(describing: error)
+            }
             await MainActor.run { [weak self] in
-                self?.isRefreshing = false  // allow the follow-up fetch
+                if let failure {
+                    self?.switchError = "Switch failed: \(failure)"
+                }
+                self?.isRefreshing = false
                 self?.refresh()
             }
         }
     }
 
-    private func apply(_ result: Result<Snapshot, Error>) {
+    private func apply(_ result: Result<Snapshot, Error>, generation: Int) {
+        guard generation == fetchGeneration else { return }  // superseded
         isRefreshing = false
         switch result {
         case .success(let snap):
