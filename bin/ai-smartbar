@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""AI_smartbar launcher: OS dispatch, plus --once headless mode."""
+import argparse
+import os
+import sys
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(os.path.abspath(__file__))))
+sys.path.insert(0, REPO_ROOT)
+
+from smartbar import __version__  # noqa: E402
+
+
+def once() -> int:
+    from smartbar.core import cswap, model
+    try:
+        snap = cswap.fetch()
+    except cswap.CswapError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    if snap.schema_warning:
+        print(f"WARNING: {snap.schema_warning}", file=sys.stderr)
+    account = snap.active_account
+    m = model.worst(account)
+    icon = "?" if m is None else f"{model.icon_text(account)} ({model.color(m.pct)})"
+    print(f"icon:  {icon}")
+    print(f"title: {model.title_line(account)}")
+    for acct in snap.accounts:
+        print(model.menu_row(acct))
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="ai-smartbar",
+                                     description="Claude usage limits in your bar")
+    parser.add_argument("--once", action="store_true",
+                        help="print current state to stdout and exit")
+    parser.add_argument("--version", action="version",
+                        version=f"ai-smartbar {__version__}")
+    args = parser.parse_args()
+    if args.once:
+        return once()
+    if sys.platform == "darwin":
+        from smartbar.macos.menubar import main as ui_main
+    else:
+        from smartbar.linux.tray import main as ui_main
+    ui_main()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
