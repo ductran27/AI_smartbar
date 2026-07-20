@@ -81,6 +81,33 @@ Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstal
 | `SMARTBAR_RED` | `10` | Dark red + notification at or below this % **left** |
 | `SMARTBAR_TEST_THRESHOLD` | – | Sets all three thresholds (testing) |
 | `SMARTBAR_CSWAP` | – | Path override for the cswap binary |
+| `SMARTBAR_CLAUDE` | – | Path override for the claude CLI (warmup) |
+| `SMARTBAR_WARMUP_DAILY_CAP` | `6` | Max warmup pings per account per day |
+| `SMARTBAR_WARMUP_QUIET` | – | Warmup quiet hours, e.g. `23-05` (wraps) |
+
+## Auto window-starter (warmup, opt-in)
+
+The Claude 5-hour window starts at your **first message** — keeping one
+running means the budget reset always comes as early as possible. The
+warmup agent checks every 10 minutes and, for **every registered account**
+whose 5h window is idle, sends one minimal ping (`claude -p "."`, one turn,
+haiku, output discarded) via `cswap run <account>` — accounts added or
+removed in cswap are picked up automatically, nothing to configure.
+
+```bash
+./install/macos-warmup.sh              # opt in (macOS LaunchAgent)
+./install/macos-warmup.sh --uninstall  # opt out
+# Linux: */10 * * * * ~/tools/AI_smartbar/bin/ai-smartbar --warmup-once
+```
+
+Gates before any ping: window actually idle (`resetsAt` absent/past),
+usage data fresh (≤30 min), 30 min per-account cooldown, daily cap,
+optional quiet hours. After a ping the runner re-fetches and verifies the
+window started; failures raise a desktop notification. Every attempt is
+logged to `~/.cache/ai-smartbar/warmup.log`. Trade-off: each ping spends a
+sliver of the general budgets — that is what buys the earlier reset. No
+credentials are touched: account context comes from `cswap run`, auth from
+the official claude CLI.
 
 ## Behavior notes
 

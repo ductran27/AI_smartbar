@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Mock claude CLI: logs argv; MOCK_CLAUDE_FAIL=1 simulates an API failure."""
+import os
+import sys
+import time
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(BASE, "warmup-claude-calls.log"), "a") as f:
+    f.write(f"{time.time():.3f} {' '.join(sys.argv[1:])}\n")
+if os.environ.get("MOCK_CLAUDE_FAIL") == "1":
+    print("simulated API error", file=sys.stderr)
+    sys.exit(1)
+print("pong")

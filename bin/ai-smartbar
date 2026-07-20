@@ -34,11 +34,16 @@ def main() -> int:
                                      description="Claude usage limits in your bar")
     parser.add_argument("--once", action="store_true",
                         help="print current state to stdout and exit")
+    parser.add_argument("--warmup-once", action="store_true",
+                        help="run one gate-checked warmup pass and exit")
     parser.add_argument("--version", action="version",
                         version=f"ai-smartbar {__version__}")
     args = parser.parse_args()
     if args.once:
         return once()
+    if args.warmup_once:
+        from smartbar.warmup_runner import run_once
+        return run_once()
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     else:
