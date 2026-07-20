@@ -27,26 +27,34 @@ COLORS = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
 log = logging.getLogger("ai-smartbar")
 
 
-def render_icon(text: str, color_name: str, path: str) -> None:
-    """Rounded-rect badge (96x48, scaled down by the panel) with bold text."""
-    w, h, r = 96, 48, 12
+def render_icon(rows, path: str) -> None:
+    """Stacked badge: one rounded-rect line per (text, color) row.
+
+    One row (e.g. loading/error) renders as the original single badge; two
+    rows stack general-limit above the per-model bucket, each independently
+    colored. The panel scales the PNG to its height.
+    """
+    w, row_h, gap, r = 96, 40, 6, 10
+    h = row_h * len(rows) + gap * (len(rows) - 1)
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
     ctx = cairo.Context(surface)
-    ctx.new_sub_path()
-    ctx.arc(w - r, r, r, -1.5708, 0)
-    ctx.arc(w - r, h - r, r, 0, 1.5708)
-    ctx.arc(r, h - r, r, 1.5708, 3.1416)
-    ctx.arc(r, r, r, 3.1416, 4.7124)
-    ctx.close_path()
-    ctx.set_source_rgb(*COLORS[color_name])
-    ctx.fill()
-    ctx.set_source_rgb(1, 1, 1)
     ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    ctx.set_font_size(30)
-    ext = ctx.text_extents(text)
-    ctx.move_to((w - ext.width) / 2 - ext.x_bearing,
-                (h - ext.height) / 2 - ext.y_bearing)
-    ctx.show_text(text)
+    for i, (text, color_name) in enumerate(rows):
+        top = i * (row_h + gap)
+        ctx.new_sub_path()
+        ctx.arc(w - r, top + r, r, -1.5708, 0)
+        ctx.arc(w - r, top + row_h - r, r, 0, 1.5708)
+        ctx.arc(r, top + row_h - r, r, 1.5708, 3.1416)
+        ctx.arc(r, top + r, r, 3.1416, 4.7124)
+        ctx.close_path()
+        ctx.set_source_rgb(*COLORS[color_name])
+        ctx.fill()
+        ctx.set_source_rgb(1, 1, 1)
+        ctx.set_font_size(30)
+        ext = ctx.text_extents(text)
+        ctx.move_to((w - ext.width) / 2 - ext.x_bearing,
+                    top + (row_h - ext.height) / 2 - ext.y_bearing)
+        ctx.show_text(text)
     surface.write_to_png(path)
 
 
@@ -63,7 +71,7 @@ class Tray:
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
         self.indicator.set_icon_theme_path(ICON_DIR)
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
-        self._set_icon("...", "gray")
+        self._set_icon([("...", "gray")])
         self.indicator.set_menu(self._build_menu())
         self._init_notify()
 
@@ -88,12 +96,12 @@ class Tray:
         except Exception:
             log.exception("failed to send notification")
 
-    def _set_icon(self, text, color_name):
+    def _set_icon(self, rows):
         # Alternate two icon names: AppIndicator ignores a set_icon_full call
         # with the current name, so a single name would never repaint.
         self.flip = not self.flip
         name = f"state-{'a' if self.flip else 'b'}"
-        render_icon(text, color_name, os.path.join(ICON_DIR, name + ".png"))
+        render_icon(rows, os.path.join(ICON_DIR, name + ".png"))
         self.indicator.set_icon_full(name, "AI smartbar usage")
 
     def _build_menu(self):
@@ -162,11 +170,7 @@ class Tray:
         if snap.schema_warning:
             log.warning("%s", snap.schema_warning)
         account = snap.active_account
-        m = model.worst(account)
-        if m is None:
-            self._set_icon("?", "gray")
-        else:
-            self._set_icon(model.icon_text(account), model.color(m.pct))
+        self._set_icon(model.icon_rows(account))
         self.indicator.set_title(model.title_line(account))
         self.indicator.set_menu(self._build_menu())
         for alert in self.alerts.check(snap):
@@ -176,7 +180,7 @@ class Tray:
     def _apply_error(self, message):
         self.failures += 1
         if self.failures >= 3:
-            self._set_icon("?", "gray")
+            self._set_icon([("?", "gray")])
             self.indicator.set_title(f"AI smartbar — cswap error: {message[:80]}")
         self.indicator.set_menu(self._build_menu())
         return False

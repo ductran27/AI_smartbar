@@ -100,15 +100,52 @@ class TestFormatting(Env):
         self.assertEqual(model.icon_text(self.acct), "F28")
         self.assertEqual(model.icon_text(account(metrics=[])), "?")
 
-    def test_macos_title(self):
-        self.assertEqual(model.macos_title(self.acct), "🟢 F 28%")
+    def test_macos_title_two_segments_with_independent_dots(self):
+        self.assertEqual(model.macos_title(self.acct), "🟢 5h24 · 🟢 F28")
+        mixed = account(metrics=[metric("5h", 24), metric("scoped:Fable", 95, short="F")])
+        self.assertEqual(model.macos_title(mixed), "🟢 5h24 · 🔴 F95")
+
+    def test_macos_title_general_only_and_empty(self):
         red = account(metrics=[metric("5h", 92)])
-        self.assertEqual(model.macos_title(red), "🔴 5h 92%")
-        self.assertEqual(model.macos_title(None), "⚪ –")
+        self.assertEqual(model.macos_title(red), "🔴 5h92")
+        self.assertEqual(model.macos_title(None), "⚪ ?")
 
     def test_active_account_property(self):
         snap = model.Snapshot(accounts=[account(1, active=False), account(2, active=True)])
         self.assertEqual(snap.active_account.number, 2)
+
+
+class TestGeneralScopedRows(Env):
+    def setUp(self):
+        super().setUp()
+        self.acct = account(1, metrics=[
+            metric("5h", 29.0), metric("7d", 21.0),
+            metric("scoped:Fable", 95.0, short="F", label="Fable"),
+        ])
+
+    def test_general_worst_ignores_scoped(self):
+        self.assertEqual(model.general_worst(self.acct).key, "5h")
+
+    def test_scoped_worst_ignores_general(self):
+        self.assertEqual(model.scoped_worst(self.acct).key, "scoped:Fable")
+
+    def test_none_cases(self):
+        self.assertIsNone(model.general_worst(None))
+        self.assertIsNone(model.scoped_worst(account(metrics=[metric("5h", 10)])))
+        self.assertIsNone(model.general_worst(
+            account(metrics=[metric("scoped:Fable", 10, short="F")])))
+
+    def test_icon_rows_two_rows_with_independent_colors(self):
+        self.assertEqual(model.icon_rows(self.acct),
+                         [("5h29", "green"), ("F95", "red")])
+
+    def test_icon_rows_general_only(self):
+        a = account(metrics=[metric("5h", 72.0), metric("7d", 21.0)])
+        self.assertEqual(model.icon_rows(a), [("5h72", "yellow")])
+
+    def test_icon_rows_no_data(self):
+        self.assertEqual(model.icon_rows(account(metrics=[])), [("?", "gray")])
+        self.assertEqual(model.icon_rows(None), [("?", "gray")])
 
 
 if __name__ == "__main__":

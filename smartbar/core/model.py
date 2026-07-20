@@ -83,6 +83,41 @@ def color(pct: float) -> str:
     return "green"
 
 
+def general_worst(account):
+    """Worst non-scoped metric (5h/7d) — the all-models limits."""
+    if account is None:
+        return None
+    general = [m for m in account.metrics if not m.key.startswith("scoped:")]
+    if not general:
+        return None
+    return max(general, key=lambda m: m.pct)
+
+
+def scoped_worst(account):
+    """Worst per-model (scoped) metric, e.g. the Fable weekly bucket."""
+    if account is None:
+        return None
+    scoped = [m for m in account.metrics if m.key.startswith("scoped:")]
+    if not scoped:
+        return None
+    return max(scoped, key=lambda m: m.pct)
+
+
+def icon_rows(account):
+    """Rows for the stacked tray badge: [(text, color)], 1 or 2 rows.
+
+    Row 1 is the general all-models limit, row 2 the per-model bucket;
+    each row carries its own threshold color.
+    """
+    rows = []
+    for m in (general_worst(account), scoped_worst(account)):
+        if m is not None:
+            rows.append((f"{m.short}{round(m.pct)}", color(m.pct)))
+    if not rows:
+        rows.append(("?", "gray"))
+    return rows
+
+
 def best_switch(snapshot):
     """Among non-active accounts with data, the one with most headroom."""
     candidates = [a for a in snapshot.accounts if not a.active and a.ok and a.metrics]
@@ -117,7 +152,6 @@ def icon_text(account) -> str:
 
 
 def macos_title(account) -> str:
-    m = worst(account)
-    if m is None:
-        return "⚪ –"
-    return f"{DOT[color(m.pct)]} {m.short} {round(m.pct)}%"
+    """Menu-bar text mirroring the tray badge: one dotted segment per row."""
+    return " · ".join(f"{DOT[row_color]} {text}"
+                      for text, row_color in icon_rows(account))

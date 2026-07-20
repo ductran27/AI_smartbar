@@ -9,8 +9,10 @@ Fable), colored green → yellow → red, and the click menu shows every account
 so you always know which one to use next.
 
 ```
-Linux tray:    … [🔊] [📶] [F29] [🔋] …      (green badge, drawn per refresh)
-macOS bar:     … 🟢 F 29%  🔋 📶 🔊 …        (native text)
+Linux tray:    … [🔊] [📶] [5h31] [🔋] …     (stacked badge: general row over
+                          [F30 ]             the per-model row, each with its
+                                             own green/yellow/red color)
+macOS bar:     … 🟢 5h31 · 🟢 F30  🔋 📶 🔊 …  (same two segments, dotted)
 
 Click menu:
  ● 1 ios8build@gmail.com   5h 28% · 7d 20% · F 29%
