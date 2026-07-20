@@ -48,12 +48,23 @@ cd ~/tools/AI_smartbar
 # Linux (installs ~/.local/bin/ai-smartbar + autostart, starts it):
 ./install/linux.sh
 
-# macOS (venv + LaunchAgent, starts in the menu bar):
+# macOS — native SwiftUI app (recommended; macOS 13+, needs Xcode CLT):
+./install/macos-swift.sh
+
+# macOS — Python/rumps fallback (older Macs, no Swift toolchain):
 ./install/macos.sh
 ```
 
-> **macOS status:** written to spec but not yet live-verified on a Mac.
-> The shared core is fully unit-tested; report any menu-bar quirks.
+The native app adds a designed popover: one card per account with animated
+ring gauges (5h / 7d / per-model), an `ACTIVE` chip, `Make Active` switch
+buttons, stale/error states, light+dark mode. Both macOS installers share
+the `com.ductran.ai-smartbar` LaunchAgent label — installing one replaces
+the other at login (single instance).
+
+> **macOS status:** both macOS variants are written to spec but not yet
+> live-verified on a Mac (this project is developed on Linux, where SwiftUI
+> cannot compile). The behavior logic is a 1:1 port of the unit-tested
+> Python core; expect at most minor first-build fixes and report anything odd.
 
 Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstall`.
 
