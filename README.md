@@ -2,29 +2,32 @@
 
 Your Claude usage limits, always visible in the bar — with one-click account
 switching. A cross-platform companion for
-[claude-swap](https://github.com/realiti4/claude-swap): the XFCE/Linux system
-tray or macOS menu bar shows the metric closest to its limit for the active
-account (5-hour window, 7-day window, or a per-model weekly limit like
-Fable), colored green → yellow → red, and the click menu shows every account
-so you always know which one to use next.
+[claude-swap](https://github.com/realiti4/claude-swap): a tiny **twin-pill
+icon** (~16 px) shows what's **left** for the active account — first pill =
+the all-models limit (worst of 5-hour / 7-day window), second pill = the
+per-model weekly bucket (e.g. Fable). Pills drain downward as tokens are
+spent and step green → yellow → light red → dark red → gray (empty).
+Click for the details popover / menu with every account, so you always know
+which one to use next.
 
 ```
-Linux tray:    … [🔊] [📶] [5h31] [🔋] …     (stacked badge: general row over
-                          [F30 ]             the per-model row, each with its
-                                             own green/yellow/red color)
-macOS bar:     … 🟢 5h31 · 🟢 F30  🔋 📶 🔊 …  (same two segments, dotted)
+Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills, fill =
+                                             % left, each its own color)
 
-Click menu:
- ● 1 ios8build@gmail.com   5h 28% · 7d 20% · F 29%
- ○ 2 other@account         5h 62% · 7d 40% · F 71%   ← click to switch
- ─────────────────────────
- ⟳ Refresh now
- ⚙ Open cswap TUI
- ⏻ Quit
+macOS popover:                     Linux click menu:
+ AI smartbar  Updated 9:56 PM ⟳⏻    ● 1 ios8build@gmail.com  5h 55% · 7d 76% · F 66%
+ ┌─────────────────────[white]┐    ○ 2 other@account   5h 38% · 7d 60% · F 29%  ← switch
+ │ ● ios8build@…      ACTIVE  │    ─────────────────────────
+ │ 5h    ███████──  55%·2h43m │    ⟳ Refresh now
+ │ 7d    █████████─ 76%·6d14h │    ⚙ Open cswap TUI
+ │ Fable ████████── 66%·6d14h │    ⏻ Quit
+ └─────────────────────────────┘
+ (numbers are % LEFT; active card outlined white; dark-only UI)
 ```
 
-At 90% on any metric of the active account you get one desktop notification
-naming the best account to switch to; it re-arms when the window resets.
+At ≤10% left on any metric of the active account you get one desktop
+notification naming the best account to switch to; it re-arms when the
+window resets.
 
 ## Requirements
 
@@ -55,16 +58,16 @@ cd ~/tools/AI_smartbar
 ./install/macos.sh
 ```
 
-The native app adds a designed popover: one card per account with animated
-ring gauges (5h / 7d / per-model), an `ACTIVE` chip, `Make Active` switch
-buttons, stale/error states, light+dark mode. Both macOS installers share
-the `com.ductran.ai-smartbar` LaunchAgent label — installing one replaces
-the other at login (single instance).
+The native app adds a designed popover: one card per account with draining
+horizontal bars (5h / 7d / per-model, bold labels, `% left · countdown`),
+a white-outlined `ACTIVE` card, `Make Active` switch buttons, stale/error
+states. Dark-only UI. Both macOS installers share the
+`com.ductran.ai-smartbar` LaunchAgent label — installing one replaces the
+other at login (single instance).
 
-> **macOS status:** both macOS variants are written to spec but not yet
-> live-verified on a Mac (this project is developed on Linux, where SwiftUI
-> cannot compile). The behavior logic is a 1:1 port of the unit-tested
-> Python core; expect at most minor first-build fixes and report anything odd.
+> **Status:** the native macOS app is live-verified (2026-07-19). The
+> Linux twin-pill cairo renderer is written to spec from the unit-tested
+> core but has not yet been re-run on a Linux box since the v2 redesign.
 
 Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstall`.
 
@@ -72,18 +75,21 @@ Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstal
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SMARTBAR_INTERVAL` | `60` | Refresh period in seconds |
-| `SMARTBAR_YELLOW` | `70` | Yellow threshold (%) |
-| `SMARTBAR_RED` | `90` | Red + notification threshold (%) |
-| `SMARTBAR_TEST_THRESHOLD` | – | Sets both thresholds (testing) |
+| `SMARTBAR_INTERVAL` | `300` | Refresh period in seconds |
+| `SMARTBAR_YELLOW` | `50` | Yellow at or below this % **left** |
+| `SMARTBAR_LOW` | `25` | Light red at or below this % **left** |
+| `SMARTBAR_RED` | `10` | Dark red + notification at or below this % **left** |
+| `SMARTBAR_TEST_THRESHOLD` | – | Sets all three thresholds (testing) |
 | `SMARTBAR_CSWAP` | – | Path override for the cswap binary |
 
 ## Behavior notes
 
+- **Every number is "% left"** (v2): pills/bars drain as tokens are spent;
+  cswap reports % used and the core converts once, everywhere.
 - **Switching** affects new Claude Code sessions; already-running sessions
   keep their current account (claude-swap semantics).
 - **Restart re-notify:** alert state is in-memory; restarting the app while
-  a metric is ≥90% fires that notification once more.
+  a metric is ≤10% left fires that notification once more.
 - **XFCE hover text** is a single line (StatusNotifier limitation); full
   details are in the menu.
 - cswap polls Anthropic's usage API adaptively with caching — the 60s
@@ -97,13 +103,13 @@ tail ~/.cache/ai-smartbar/tray.log        # Linux log
 tail ~/Library/Logs/ai-smartbar.log       # macOS log
 ```
 
-After 3 consecutive cswap failures the badge turns gray `?` and keeps the
-last data marked `(stale)` in the menu.
+After 3 consecutive cswap failures the pills go hollow with a gray `?` and
+the last data stays visible marked stale.
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 33 tests, no external deps
+python3 -m unittest discover -s tests -v   # 40 tests, no external deps
 ```
 
 Layout: `smartbar/core/` (all logic + formatting, unit-tested) —
