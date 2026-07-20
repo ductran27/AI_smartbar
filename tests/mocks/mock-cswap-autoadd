@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Stateful mock cswap for the auto-registration E2E.
+
+`list --json`: before `add` has run -> zero accounts (fresh install /
+unregistered login, activeAccountNumber null); after -> one active
+account with healthy usage. `add`: writes the marker (MOCK_ADD_FAIL=1
+simulates the logged-out failure instead). Every call is appended to
+calls.log in MOCK_STATE_DIR.
+"""
+import json
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+STATE = (os.environ.get("MOCK_STATE_DIR")
+         or os.path.dirname(os.path.abspath(__file__)))
+MARKER = os.path.join(STATE, "registered")
+
+
+def window(pct):
+    return {"pct": pct,
+            "resetsAt": (datetime.now(timezone.utc)
+                         + timedelta(hours=3)).isoformat(),
+            "countdown": "3h 0m", "clock": ""}
+
+
+def main():
+    with open(os.path.join(STATE, "calls.log"), "a") as handle:
+        handle.write(f"{time.time():.3f} {' '.join(sys.argv[1:])}\n")
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "list":
+        accounts = []
+        if os.path.exists(MARKER):
+            accounts.append({
+                "number": 1, "email": "fresh@login.dev",
+                "organizationName": "fresh", "organizationUuid": "u1",
+                "isOrganization": True, "active": True, "usageStatus": "ok",
+                "usage": {"fiveHour": window(20.0), "sevenDay": window(10.0),
+                          "scoped": [dict(window(15.0), name="Fable")]},
+                "usageFetchedAt": datetime.now(timezone.utc).isoformat(),
+                "usageAgeSeconds": 0.0})
+        print(json.dumps({"schemaVersion": 1,
+                          "activeAccountNumber": 1 if accounts else None,
+                          "accounts": accounts}))
+        return 0
+    if cmd == "add":
+        if os.environ.get("MOCK_ADD_FAIL") == "1":
+            print("No active Claude account found. Please log in first.",
+                  file=sys.stderr)
+            return 1
+        with open(MARKER, "w") as handle:
+            handle.write("ok")
+        print("Account added as #1")
+        return 0
+    print(f"mock: unhandled {sys.argv[1:]}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

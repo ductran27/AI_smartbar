@@ -19,6 +19,8 @@ final class UsageStore: ObservableObject {
     private var fired: [String: String] = [:]  // "acct-metricKey" -> resetsAt at fire time
     private var fetchGeneration = 0  // stamps fetches so superseded results are dropped
     private var lastAttempt: Date?   // throttles stacked refresh triggers
+    private var lastAutoAdd: Date?   // auto-registration cooldown
+    private static let autoAddCooldown: TimeInterval = 600
     private var wakeObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
     // Menu-bar apps get App-Napped, which stretches the refresh timer far
@@ -141,11 +143,33 @@ final class UsageStore: ObservableObject {
             lastRefresh = Date()
             icon = MenuBarIcon.image(for: snap.activeAccount?.pillStates ?? [])
             checkAlerts(snap)
+            maybeAutoRegister(snap)
         case .failure(let error):
             consecutiveFailures += 1
             lastError = String(describing: error)
             if consecutiveFailures >= 3 {
                 icon = MenuBarIcon.image(for: [])
+            }
+        }
+    }
+
+    /// /login with an unregistered account leaves no slot active — register
+    /// it through cswap's own non-interactive `add` so the bar picks it up
+    /// with zero setup. The cooldown stops retry spam while add cannot
+    /// succeed (logged out, locked keychain). SMARTBAR_AUTO_ADD=off disables.
+    private func maybeAutoRegister(_ snap: Snapshot) {
+        let env = ProcessInfo.processInfo.environment
+        guard env["SMARTBAR_AUTO_ADD"] != "off" else { return }
+        guard snap.activeAccount == nil else { return }
+        if let last = lastAutoAdd,
+           Date().timeIntervalSince(last) < Self.autoAddCooldown {
+            return
+        }
+        lastAutoAdd = Date()
+        Task.detached(priority: .utility) {
+            let succeeded = (try? CswapClient.add()) != nil
+            await MainActor.run { [weak self] in
+                if succeeded { self?.refresh(force: true) }
             }
         }
     }

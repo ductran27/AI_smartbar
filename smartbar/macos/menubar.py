@@ -6,11 +6,14 @@ the Mac, then check the menu bar. Logic lives in smartbar.core (unit-tested).
 import os
 import subprocess
 import threading
+import time
 
 import rumps
 
 from smartbar.core import cswap, model
 from smartbar.core.alerts import AlertManager
+
+AUTO_ADD_COOLDOWN = 600  # retry ceiling when `cswap add` cannot succeed
 
 
 class SmartBarApp(rumps.App):
@@ -19,6 +22,7 @@ class SmartBarApp(rumps.App):
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
+        self.last_auto_add = None  # monotonic; auto-registration cooldown
         # 60s harvests cswap's poll plans as they come due; no extra API
         # traffic (the store paces the network).
         interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
@@ -44,6 +48,27 @@ class SmartBarApp(rumps.App):
         self._rebuild_menu()
         for alert in self.alerts.check(snap):
             rumps.notification("AI smartbar", alert.title, alert.body)
+        self._maybe_auto_register(snap)
+
+    def _maybe_auto_register(self, snap):
+        # Mirror of tray.py: register an unregistered /login via `cswap add`.
+        if os.environ.get("SMARTBAR_AUTO_ADD") == "off":
+            return
+        if not model.needs_registration(snap):
+            return
+        now = time.monotonic()
+        if self.last_auto_add is not None \
+                and now - self.last_auto_add < AUTO_ADD_COOLDOWN:
+            return
+        self.last_auto_add = now
+
+        def run():
+            try:
+                cswap.add()
+            except cswap.CswapError:
+                return
+            self._tick(None)
+        threading.Thread(target=run, daemon=True).start()
 
     def _rebuild_menu(self):
         self.menu.clear()

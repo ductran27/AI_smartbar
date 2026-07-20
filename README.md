@@ -31,11 +31,12 @@ window resets.
 
 ## Requirements
 
-- [claude-swap](https://github.com/realiti4/claude-swap) ≥ 0.22 with your
-  accounts registered (`pipx install claude-swap`, then `cswap add` per
-  account). AI_smartbar reads `cswap list --json` and switches via
-  `cswap switch` — it never touches credentials or Anthropic endpoints
-  itself.
+- [claude-swap](https://github.com/realiti4/claude-swap) ≥ 0.22
+  (`pipx install claude-swap`). Registration is automatic: sign in to
+  Claude Code and the bar runs `cswap add` for you (see Behavior notes);
+  manual `cswap add` still works. AI_smartbar reads `cswap list --json`
+  and switches via `cswap switch` — it never touches credentials or
+  Anthropic endpoints itself.
 - Linux: Python 3 with GTK3 bindings (`python3-gi`), AyatanaAppIndicator3
   (`gir1.2-ayatanaappindicator3-0.1`), pycairo — preinstalled on most
   XFCE/GNOME distros. X11 or Wayland with a StatusNotifier-capable tray.
@@ -77,6 +78,7 @@ Uninstall with `./install/linux.sh --uninstall` / `./install/macos.sh --uninstal
 |---|---|---|
 | `SMARTBAR_INTERVAL` | `60` | Poll period in seconds (popover open / wake / switch also refresh) |
 | `SMARTBAR_CSWAP_PYTHON` | auto | Interpreter for the store primer (auto-detected from the pipx cswap launcher) |
+| `SMARTBAR_AUTO_ADD` | on | Auto-run `cswap add` when the current login isn't registered (`off` disables) |
 | `SMARTBAR_YELLOW` | `50` | Yellow at or below this % **left** |
 | `SMARTBAR_LOW` | `25` | Light red at or below this % **left** |
 | `SMARTBAR_RED` | `10` | Dark red + notification at or below this % **left** |
@@ -119,6 +121,14 @@ the official claude CLI.
   API's percentages, so both read the same scale.
 - **Switching** affects new Claude Code sessions; already-running sessions
   keep their current account (claude-swap semantics).
+- **Auto-registration:** `/login` with a new account and, within ≤60 s
+  (instantly on popover open), the bar notices no registered slot is
+  active and runs cswap's non-interactive `add` — the account appears
+  with usage bars, switching and warmup coverage, nothing to configure.
+  This captures every account you sign into on this machine into
+  claude-swap's local backup; set `SMARTBAR_AUTO_ADD=off` to keep
+  registration manual. Failed attempts (logged out, locked keychain)
+  retry at most every 10 min.
 - **Restart re-notify:** alert state is in-memory; restarting the app while
   a metric is ≤10% left fires that notification once more.
 - **XFCE hover text** is a single line (StatusNotifier limitation); full
@@ -151,7 +161,7 @@ the last data stays visible marked stale.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 77 tests, no external deps
+python3 -m unittest discover -s tests -v   # 89 tests, no external deps
 ```
 
 Layout: `smartbar/core/` (all logic + formatting, unit-tested) —

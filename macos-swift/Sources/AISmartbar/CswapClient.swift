@@ -144,4 +144,12 @@ enum CswapClient {
     static func switchTo(_ number: Int) throws {
         try run(["switch", String(number)])
     }
+
+    /// Register the current login. `cswap add` without a slot never
+    /// prompts: a new account auto-assigns the next slot, an
+    /// already-registered one refreshes its stored credential, a
+    /// logged-out state fails cleanly ("Please log in first").
+    static func add() throws {
+        try run(["add"])
+    }
 }

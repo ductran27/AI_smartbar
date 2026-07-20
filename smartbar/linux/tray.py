@@ -21,6 +21,7 @@ from smartbar.core.alerts import AlertManager
 CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
+AUTO_ADD_COOLDOWN = 600  # retry ceiling when `cswap add` cannot succeed
 
 COLORS = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
           "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
@@ -96,6 +97,7 @@ class Tray:
         self.menu = None
         self.pending_menu = None  # rebuilt while open; swapped in on hide
         self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
+        self.last_auto_add = None  # monotonic; auto-registration cooldown
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -236,7 +238,33 @@ class Tray:
         self._refresh_menu()
         for alert in self.alerts.check(snap):
             self._send_alert(alert)
+        self._maybe_auto_register(snap)
         return False
+
+    def _maybe_auto_register(self, snap):
+        # /login with an unregistered account leaves no slot active:
+        # register it via cswap's own non-interactive `add`. The cooldown
+        # stops retry spam while add cannot succeed (logged out, locked
+        # keychain). SMARTBAR_AUTO_ADD=off disables.
+        if os.environ.get("SMARTBAR_AUTO_ADD") == "off":
+            return
+        if not model.needs_registration(snap):
+            return
+        now = time.monotonic()
+        if self.last_auto_add is not None \
+                and now - self.last_auto_add < AUTO_ADD_COOLDOWN:
+            return
+        self.last_auto_add = now
+
+        def run():
+            try:
+                cswap.add()
+            except cswap.CswapError as exc:
+                log.info("auto-add skipped: %s", exc)
+                return
+            log.info("auto-registered current login via cswap add")
+            self._start_fetch()
+        threading.Thread(target=run, daemon=True).start()
 
     def _apply_error(self, message, generation):
         if generation != self.generation:

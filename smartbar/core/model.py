@@ -160,6 +160,17 @@ def pill_states(account):
     return states
 
 
+def needs_registration(snapshot) -> bool:
+    """True when cswap answered but no slot matches the live login.
+
+    Covers both a fresh /login with an unregistered account (all slots
+    active=false) and a fresh install (no accounts at all) — in both cases
+    `cswap add` registers the current login. Callers must only pass
+    snapshots from a successful fetch.
+    """
+    return snapshot.active_account is None
+
+
 def best_switch(snapshot):
     """Among non-active accounts with data, the one with most headroom."""
     candidates = [a for a in snapshot.accounts if not a.active and a.ok and a.metrics]

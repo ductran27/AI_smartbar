@@ -17,6 +17,15 @@ struct PopoverView: View {
                     .lineLimit(2)
             }
             if let snapshot = store.snapshot {
+                if snapshot.activeAccount == nil {
+                    Label(snapshot.accounts.isEmpty
+                            ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
+                            : "Current login isn't registered — adding it automatically",
+                          systemImage: "person.crop.circle.badge.plus")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
                 accountList(snapshot)
             } else {
                 loadingOrError

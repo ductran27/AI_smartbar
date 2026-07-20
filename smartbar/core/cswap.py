@@ -150,3 +150,14 @@ def fetch(fresh: bool = False) -> Snapshot:
 
 def switch(number: int) -> None:
     _run(["switch", str(number)])
+
+
+def add() -> None:
+    """Register the current login as a managed account.
+
+    `cswap add` without a slot never prompts: a new account auto-assigns
+    the next slot, an already-registered one just refreshes its stored
+    credential, and a logged-out state fails cleanly ("Please log in
+    first") — which callers treat as a normal skip.
+    """
+    _run(["add"])

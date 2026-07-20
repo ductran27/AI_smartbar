@@ -98,6 +98,19 @@ class TestBestSwitch(Env):
         self.assertIsNone(model.best_switch(snap))
 
 
+class TestNeedsRegistration(Env):
+    def test_no_active_slot_needs_registration(self):
+        snap = model.Snapshot(accounts=[account(1, active=False, metrics=[metric()])])
+        self.assertTrue(model.needs_registration(snap))
+
+    def test_fresh_install_no_accounts_needs_registration(self):
+        self.assertTrue(model.needs_registration(model.Snapshot()))
+
+    def test_active_slot_does_not(self):
+        snap = model.Snapshot(accounts=[account(1, active=True, metrics=[metric()])])
+        self.assertFalse(model.needs_registration(snap))
+
+
 class TestPillStates(Env):
     def test_general_then_scoped_fractions_left(self):
         a = account(metrics=[metric("5h", 29.0), metric("7d", 21.0),
