@@ -1,7 +1,8 @@
 // Draws the twin-pill menu-bar icon: one vertical pill per metric group
 // (general limit first, then per-model buckets), fill anchored to the
-// bottom = % tokens left, draining downward. Colored image, not a
-// template — the fixed track shade reads on any menu-bar tint.
+// bottom = % tokens USED, rising as the budget is spent (a nearly full
+// pill means nearly at the limit). Colored image, not a template — the
+// fixed track shade reads on any menu-bar tint.
 import AppKit
 
 enum MenuBarIcon {

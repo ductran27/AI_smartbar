@@ -45,8 +45,9 @@ struct CswapScopedRaw: Decodable {
 }
 
 // MARK: - Domain
-// v2 semantics: every user-visible number is "% left"; the 5-step status
-// ramp is judged on what's left (mirror of smartbar/core/model.py).
+// v3 semantics: every user-visible number is "% used" (the /usage scale);
+// the 5-step status ramp is judged on usage and bars/pills FILL as tokens
+// are spent (mirror of smartbar/core/model.py).
 
 enum Status: String {
     case green, yellow, low, critical, gray
@@ -67,16 +68,43 @@ enum Thresholds {
     }
 
     static var yellow: Double { value("SMARTBAR_YELLOW", 50) }
-    static var low: Double { value("SMARTBAR_LOW", 25) }
-    static var red: Double { value("SMARTBAR_RED", 10) }
+    static var low: Double { value("SMARTBAR_LOW", 75) }
+    static var red: Double { value("SMARTBAR_RED", 90) }
 
     static func status(forUsedPct pct: Double) -> Status {
-        let left = max(0, 100 - pct)
-        if left <= 0 { return .gray }
-        if left <= red { return .critical }
-        if left <= low { return .low }
-        if left <= yellow { return .yellow }
+        let used = max(0, pct)
+        if used >= 100 { return .gray }
+        if used >= red { return .critical }
+        if used >= low { return .low }
+        if used >= yellow { return .yellow }
         return .green
+    }
+}
+
+/// Card/row explanation for a cswap usageStatus without usable usage data
+/// (mirror of model.STATE_TEXT).
+enum AccountState {
+    static func text(forStatus status: String) -> String {
+        switch status {
+        case "relogin_required":
+            return "Re-login required — sign in as this account in Claude Code once"
+        case "token_expired":
+            return "Token expired — Claude Code refreshes it on next use"
+        case "keychain_unavailable":
+            return "Keychain locked — credentials unreadable"
+        case "no_credentials":
+            return "No stored credentials"
+        case "api_key":
+            return "API-key account — no subscription usage"
+        default:
+            return "No usage data"
+        }
+    }
+
+    /// Slots whose STORED credential is dead: switching to one would
+    /// restore a credential Anthropic already rejected.
+    static func switchBlocked(status: String) -> Bool {
+        status == "relogin_required" || status == "no_credentials"
     }
 }
 
@@ -84,7 +112,7 @@ struct Metric: Identifiable, Equatable {
     var key: String        // "5h", "7d", or "scoped:<Name>"
     var label: String      // "5h", "7d", "Fable"
     var short: String      // "5h", "7d", "F"
-    var pct: Double
+    var pct: Double        // % used, as reported by cswap (the /usage scale)
     var resetsAt: String
     var countdown: String  // preformatted by cswap, e.g. "4h 3m"
 
@@ -92,9 +120,7 @@ struct Metric: Identifiable, Equatable {
     var status: Status { Thresholds.status(forUsedPct: pct) }
     var isScoped: Bool { key.hasPrefix("scoped:") }
 
-    /// % of the window remaining, clamped at 0.
-    var left: Double { max(0, 100 - pct) }
-    var leftPct: Int { Int(left.rounded()) }
+    var usedPct: Int { Int(max(0, pct).rounded()) }
 
     /// Countdown recomputed from the absolute reset time so the wait shown
     /// stays live however old the snapshot is; cswap's fetch-time string is
@@ -110,10 +136,20 @@ struct Account: Identifiable, Equatable {
     var org: String
     var active: Bool
     var ok: Bool           // usageStatus == "ok" and usage present
+    var status: String     // raw cswap usageStatus ("" when absent)
     var metrics: [Metric]
     var fetchedAt: Date?   // usageFetchedAt: when the measurement was taken
 
     var id: Int { number }
+
+    /// Explanation shown when there is no usable usage data ("" otherwise).
+    var stateText: String {
+        if ok { return metrics.isEmpty ? "No usage data" : "" }
+        return AccountState.text(forStatus: status)
+    }
+
+    /// Activating this slot would restore a dead stored credential.
+    var switchBlocked: Bool { AccountState.switchBlocked(status: status) }
 
     var generalWorst: Metric? {
         metrics.filter { !$0.isScoped }.max(by: { $0.pct < $1.pct })
@@ -124,29 +160,30 @@ struct Account: Identifiable, Equatable {
     }
 
     var worstPct: Double { metrics.map { $0.pct }.max() ?? 0 }
-    var worstLeftPct: Int { Int(max(0, 100 - worstPct).rounded()) }
+    var worstUsedPct: Int { Int(max(0, worstPct).rounded()) }
     var worstStatus: Status {
         metrics.max(by: { $0.pct < $1.pct })?.status ?? .gray
     }
 
     /// States for the twin-pill icon: general all-models pill first, then
-    /// one pill per scoped (per-model) metric. Empty when there is no data
-    /// (the renderer draws the hollow "?" state).
+    /// one pill per scoped (per-model) metric. Pills FILL as tokens are
+    /// spent. Empty when there is no data (the renderer draws the hollow
+    /// "?" state).
     var pillStates: [(fraction: Double, status: Status)] {
         var states: [(fraction: Double, status: Status)] = []
         if let general = generalWorst {
-            states.append((general.left / 100, general.status))
+            states.append((min(general.pct, 100) / 100, general.status))
         }
         for metric in metrics where metric.isScoped {
-            states.append((metric.left / 100, metric.status))
+            states.append((min(metric.pct, 100) / 100, metric.status))
         }
         return states
     }
 
-    /// One-line "% left" summary (accessibility label for the icon).
+    /// One-line "% used" summary (accessibility label for the icon).
     var summary: String {
-        if metrics.isEmpty { return "no usage data" }
-        return metrics.map { "\($0.label) \($0.leftPct)% left" }
+        if metrics.isEmpty { return stateText.isEmpty ? "no usage data" : stateText }
+        return metrics.map { "\($0.label) \($0.usedPct)% used" }
             .joined(separator: " · ")
     }
 }
@@ -165,9 +202,13 @@ struct Snapshot: Equatable {
 
     /// Best non-active account to switch to (most headroom), or nil.
     var bestSwitch: Account? {
-        accounts.filter { !$0.active && $0.ok && !$0.metrics.isEmpty }
+        accounts.filter { !$0.active && $0.ok && !$0.metrics.isEmpty && !$0.switchBlocked }
             .min(by: { $0.worstPct < $1.worstPct })
     }
+
+    /// The live login's own slot reports a dead stored credential — the
+    /// state `cswap add` heals by re-capturing the live credential.
+    var needsRecapture: Bool { activeAccount?.switchBlocked == true }
 
     static func parse(_ data: Data) throws -> Snapshot {
         let decoded: CswapList
@@ -181,7 +222,8 @@ struct Snapshot: Equatable {
             warning = "unexpected cswap schemaVersion \(String(describing: decoded.schemaVersion))"
         }
         let accounts: [Account] = (decoded.accounts ?? []).map { raw in
-            let ok = raw.usageStatus == "ok" && raw.usage != nil
+            let status = raw.usageStatus ?? ""
+            let ok = status == "ok" && raw.usage != nil
             var metrics: [Metric] = []
             if ok, let usage = raw.usage {
                 if let window = usage.fiveHour {
@@ -210,6 +252,7 @@ struct Snapshot: Equatable {
                            org: raw.organizationName ?? "",
                            active: raw.active ?? false,
                            ok: ok,
+                           status: status,
                            metrics: metrics,
                            fetchedAt: TimeRemaining.parseISO(raw.usageFetchedAt ?? ""))
         }

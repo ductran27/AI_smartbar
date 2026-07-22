@@ -1,6 +1,7 @@
 // One card per Claude account: status dot, email, ACTIVE chip or switch
-// button, and one horizontal draining bar per metric (5h / 7d / per-model).
-// The active card wears a white outline (dark-only design).
+// button, and one horizontal filling bar per metric (5h / 7d / per-model).
+// The active card wears a white outline (dark-only design). Accounts whose
+// stored credential is dead say so and cannot be switched to.
 import SwiftUI
 
 struct AccountCardView: View {
@@ -31,13 +32,20 @@ struct AccountCardView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(account.switchBlocked)
+                    .help(account.switchBlocked
+                          ? "Stored credential is dead — switching would log Claude Code out. \(account.stateText)."
+                          : "Switch Claude Code to \(account.email)")
                     .accessibilityLabel("Make \(account.email) active")
                 }
             }
             if account.metrics.isEmpty {
-                Text("No usage data")
+                Label(account.stateText,
+                      systemImage: account.switchBlocked
+                          ? "person.crop.circle.badge.exclamationmark" : "hourglass")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(account.switchBlocked ? .orange : .secondary)
+                    .lineLimit(2)
             } else {
                 VStack(spacing: 7) {
                     ForEach(account.metrics) { metric in

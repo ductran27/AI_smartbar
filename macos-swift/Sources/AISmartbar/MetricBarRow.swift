@@ -1,11 +1,12 @@
-// One metric row: bold label, 6pt draining capsule, mono "% left · countdown".
+// One metric row: bold label, 6pt filling capsule, mono "% used · countdown".
+// The bar fills as tokens are spent — same direction as /usage.
 import SwiftUI
 
 struct MetricBarRow: View {
     let metric: Metric
 
     private var fraction: CGFloat {
-        CGFloat(min(max(metric.left, 0), 100)) / 100
+        CGFloat(min(max(metric.pct, 0), 100)) / 100
     }
 
     var body: some View {
@@ -38,11 +39,11 @@ struct MetricBarRow: View {
 
     private func valueText(now: Date) -> some View {
         let countdown = metric.liveCountdown(now: now)
-        return (Text("\(metric.leftPct)%").fontWeight(.bold)
+        return (Text("\(metric.usedPct)%").fontWeight(.bold)
             + Text(countdown.isEmpty ? "" : " · \(countdown)"))
             .font(.system(size: 10.5, design: .monospaced))
-            .foregroundStyle(metric.left <= 0 ? Color.white.opacity(0.45)
-                                              : Color.white.opacity(0.8))
+            .foregroundStyle(metric.pct >= 100 ? Color.white.opacity(0.45)
+                                               : Color.white.opacity(0.8))
             .lineLimit(1)
     }
 }
