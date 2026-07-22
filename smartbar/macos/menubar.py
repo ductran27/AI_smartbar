@@ -12,8 +12,7 @@ import rumps
 
 from smartbar.core import cswap, model
 from smartbar.core.alerts import AlertManager
-
-AUTO_ADD_COOLDOWN = 600  # retry ceiling when `cswap add` cannot succeed
+from smartbar.core.recapture import RecapturePolicy
 
 
 class SmartBarApp(rumps.App):
@@ -22,7 +21,7 @@ class SmartBarApp(rumps.App):
         self.alerts = AlertManager()
         self.snapshot = None
         self.failures = 0
-        self.last_auto_add = None  # monotonic; auto-registration cooldown
+        self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         # 60s harvests cswap's poll plans as they come due; no extra API
         # traffic (the store paces the network).
         interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
@@ -48,26 +47,23 @@ class SmartBarApp(rumps.App):
         self._rebuild_menu()
         for alert in self.alerts.check(snap):
             rumps.notification("AI smartbar", alert.title, alert.body)
-        self._maybe_auto_register(snap)
+        self._maybe_recapture(snap)
 
-    def _maybe_auto_register(self, snap):
-        # Mirror of tray.py: register an unregistered /login via `cswap add`.
-        if os.environ.get("SMARTBAR_AUTO_ADD") == "off":
+    def _maybe_recapture(self, snap):
+        # Mirror of tray.py: `cswap add` registers an unregistered /login,
+        # heals a dead active backup and periodically re-captures the live
+        # login so token rotations never orphan the backup.
+        action = self.recapture.action(snap, time.monotonic())
+        if action is None:
             return
-        if not model.needs_registration(snap):
-            return
-        now = time.monotonic()
-        if self.last_auto_add is not None \
-                and now - self.last_auto_add < AUTO_ADD_COOLDOWN:
-            return
-        self.last_auto_add = now
 
         def run():
             try:
                 cswap.add()
             except cswap.CswapError:
                 return
-            self._tick(None)
+            if action != "refresh":  # registration/heal changes the display
+                self._tick(None)
         threading.Thread(target=run, daemon=True).start()
 
     def _rebuild_menu(self):
@@ -77,7 +73,10 @@ class SmartBarApp(rumps.App):
             items.append(rumps.MenuItem("Loading…"))
         else:
             for acct in self.snapshot.accounts:
-                callback = None if acct.active else self._make_switch(acct.number)
+                # No callback for the active row or a dead stored credential
+                # (switching to one restores a login Anthropic rejected).
+                blocked = acct.active or model.switch_blocked(acct)
+                callback = None if blocked else self._make_switch(acct.number)
                 items.append(rumps.MenuItem(model.menu_row(acct), callback=callback))
         items.append(None)  # separator
         items.append(rumps.MenuItem("⟳ Refresh now", callback=self._tick))

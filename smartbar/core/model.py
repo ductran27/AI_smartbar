@@ -3,22 +3,37 @@
 Every user-visible string (icon text, hover title, menu rows, macOS
 menu-bar title) is produced here so both platform UIs render identically.
 
-v2 semantics: every number a user sees is "% left" (tokens remaining);
-pills/bars drain as tokens are spent. Thresholds are remaining-based:
-a metric is yellow at or below SMARTBAR_YELLOW % left, "low" (light red)
-at or below SMARTBAR_LOW, "critical" (dark red, fires the switch alert)
-at or below SMARTBAR_RED, gray when nothing is left.
+v3 semantics: every number a user sees is "% used" — the same scale as
+Claude Code's /usage — and pills/bars FILL as tokens are spent.
+Thresholds are used-based: a metric is yellow at or above SMARTBAR_YELLOW
+% used, "low" (light red) at or above SMARTBAR_LOW, "critical" (dark red,
+fires the switch alert) at or above SMARTBAR_RED, gray once exhausted.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 
-DEFAULT_YELLOW_LEFT = 50.0
-DEFAULT_LOW_LEFT = 25.0
-DEFAULT_RED_LEFT = 10.0
+DEFAULT_YELLOW_USED = 50.0
+DEFAULT_LOW_USED = 75.0
+DEFAULT_RED_USED = 90.0
 
 DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴", "gray": "⚪"}
+
+# cswap usageStatus values other than "ok", mapped to the short explanation
+# UIs put on the account's card/row (instead of a bare "No usage data").
+STATE_TEXT = {
+    "relogin_required": "Re-login required — sign in as this account in Claude Code once",
+    "token_expired": "Token expired — Claude Code refreshes it on next use",
+    "keychain_unavailable": "Keychain locked — credentials unreadable",
+    "no_credentials": "No stored credentials",
+    "api_key": "API-key account — no subscription usage",
+}
+
+# Slots whose STORED credential is dead. Switching to one would restore a
+# credential Anthropic already rejected (the "my account suddenly logged
+# out" trap), so UIs disable their switch action until it is re-captured.
+DEAD_CREDENTIAL_STATUSES = frozenset({"relogin_required", "no_credentials"})
 
 
 def _env_float(name: str, default: float) -> float:
@@ -35,15 +50,15 @@ def _threshold(name: str, default: float) -> float:
 
 
 def yellow_threshold() -> float:
-    return _threshold("SMARTBAR_YELLOW", DEFAULT_YELLOW_LEFT)
+    return _threshold("SMARTBAR_YELLOW", DEFAULT_YELLOW_USED)
 
 
 def low_threshold() -> float:
-    return _threshold("SMARTBAR_LOW", DEFAULT_LOW_LEFT)
+    return _threshold("SMARTBAR_LOW", DEFAULT_LOW_USED)
 
 
 def red_threshold() -> float:
-    return _threshold("SMARTBAR_RED", DEFAULT_RED_LEFT)
+    return _threshold("SMARTBAR_RED", DEFAULT_RED_USED)
 
 
 @dataclass
@@ -51,15 +66,10 @@ class Metric:
     key: str            # "5h", "7d", or "scoped:<Name>"
     label: str          # "5h", "7d", "Fable"
     short: str          # "5h", "7d", "F"
-    pct: float          # % used, as reported by cswap
+    pct: float          # % used, as reported by cswap (same scale as /usage)
     resets_at: str = ""
     countdown: str = ""  # preformatted by cswap, e.g. "4h 3m"
     clock: str = ""
-
-    @property
-    def left(self) -> float:
-        """% of the window remaining, clamped at 0."""
-        return max(0.0, 100.0 - self.pct)
 
 
 @dataclass
@@ -68,7 +78,8 @@ class Account:
     email: str
     org: str = ""
     active: bool = False
-    ok: bool = True     # usageStatus == "ok" and usage data present
+    ok: bool = True       # usageStatus == "ok" and usage data present
+    status: str = "ok"    # raw cswap usageStatus (see STATE_TEXT)
     metrics: list = field(default_factory=list)
 
 
@@ -94,15 +105,15 @@ def worst(account):
 
 
 def color(pct: float) -> str:
-    """Status name for a used-% value, judged on what's left."""
-    left = max(0.0, 100.0 - pct)
-    if left <= 0:
+    """Status name for a used-% value."""
+    used = max(0.0, pct)
+    if used >= 100:
         return "gray"
-    if left <= red_threshold():
+    if used >= red_threshold():
         return "critical"
-    if left <= low_threshold():
+    if used >= low_threshold():
         return "low"
-    if left <= yellow_threshold():
+    if used >= yellow_threshold():
         return "yellow"
     return "green"
 
@@ -128,7 +139,7 @@ def scoped_worst(account):
 
 
 def icon_rows(account):
-    """Rows for text-based badges: [(text, color)], 1 or 2 rows, % left.
+    """Rows for text-based badges: [(text, color)], 1 or 2 rows, % used.
 
     Row 1 is the general all-models limit, row 2 the per-model bucket;
     each row carries its own threshold color.
@@ -136,28 +147,41 @@ def icon_rows(account):
     rows = []
     for m in (general_worst(account), scoped_worst(account)):
         if m is not None:
-            rows.append((f"{m.short}{round(m.left)}", color(m.pct)))
+            rows.append((f"{m.short}{round(m.pct)}", color(m.pct)))
     if not rows:
         rows.append(("?", "gray"))
     return rows
 
 
 def pill_states(account):
-    """States for the twin-pill icon: [(fraction_left, color)].
+    """States for the twin-pill icon: [(fraction_used, color)].
 
     General all-models pill first, then one pill per scoped (per-model)
-    metric in cswap order. Empty list when there is no data — renderers
+    metric in cswap order. Pills FILL as tokens are spent (nearly full =
+    nearly at the limit). Empty list when there is no data — renderers
     draw the hollow "?" state.
     """
     states = []
     general = general_worst(account)
     if general is not None:
-        states.append((general.left / 100.0, color(general.pct)))
+        states.append((min(general.pct, 100.0) / 100.0, color(general.pct)))
     if account is not None:
         for m in account.metrics:
             if m.key.startswith("scoped:"):
-                states.append((m.left / 100.0, color(m.pct)))
+                states.append((min(m.pct, 100.0) / 100.0, color(m.pct)))
     return states
+
+
+def state_text(account) -> str:
+    """Explanation shown when an account has no usable usage data."""
+    if account.ok:
+        return "" if account.metrics else "No usage data"
+    return STATE_TEXT.get(account.status, "No usage data")
+
+
+def switch_blocked(account) -> bool:
+    """True when activating this slot would restore a dead credential."""
+    return account.status in DEAD_CREDENTIAL_STATUSES
 
 
 def needs_registration(snapshot) -> bool:
@@ -171,29 +195,41 @@ def needs_registration(snapshot) -> bool:
     return snapshot.active_account is None
 
 
+def needs_recapture(snapshot) -> bool:
+    """True when the live login's own slot reports a dead stored credential.
+
+    Claude Code itself is signed in and working (the slot is active) while
+    cswap's backup of it is dead — exactly the state `cswap add` heals by
+    re-capturing the live credential.
+    """
+    account = snapshot.active_account
+    return account is not None and switch_blocked(account)
+
+
 def best_switch(snapshot):
     """Among non-active accounts with data, the one with most headroom."""
-    candidates = [a for a in snapshot.accounts if not a.active and a.ok and a.metrics]
+    candidates = [a for a in snapshot.accounts
+                  if not a.active and a.ok and a.metrics and not switch_blocked(a)]
     if not candidates:
         return None
     return min(candidates, key=lambda a: worst(a).pct)
 
 
 def metrics_text(account) -> str:
-    return " · ".join(f"{m.short} {round(m.left)}%" for m in account.metrics)
+    return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
 
 
 def title_line(account) -> str:
     if account is None:
         return "AI smartbar — no active account"
     if not account.metrics:
-        return f"{account.email} — no usage data"
-    return f"{account.email} — {metrics_text(account)}"
+        return f"{account.email} — {state_text(account) or 'no usage data'}"
+    return f"{account.email} — {metrics_text(account)} used"
 
 
 def menu_row(account) -> str:
     dot = "●" if account.active else "○"
-    body = metrics_text(account) if account.metrics else "no data"
+    body = metrics_text(account) if account.metrics else (state_text(account) or "no data")
     return f"{dot} {account.number} {account.email}   {body}"
 
 
@@ -201,7 +237,7 @@ def icon_text(account) -> str:
     m = worst(account)
     if m is None:
         return "?"
-    return f"{m.short}{round(m.left)}"
+    return f"{m.short}{round(m.pct)}"
 
 
 def macos_title(account) -> str:

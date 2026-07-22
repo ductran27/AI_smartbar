@@ -18,6 +18,9 @@ command -v cswap >/dev/null || [[ -x "$HOME/.local/bin/cswap" ]] \
 command -v claude >/dev/null || [[ -x "$HOME/.local/bin/claude" ]] \
   || { echo "Install the claude CLI first (the warmup pings through it)"; exit 1; }
 
+# launchd hands agents a bare PATH (/usr/bin:/bin) — cswap resolves the
+# claude CLI via PATH, so bake the usual install dirs in. The runner also
+# hardens its subprocess PATH itself; this is belt and suspenders.
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -29,6 +32,11 @@ cat > "$PLIST" <<EOF
     <string>${REPO}/bin/ai-smartbar</string>
     <string>--warmup-once</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>StartInterval</key><integer>600</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>$HOME/.cache/ai-smartbar/warmup-agent.log</string>

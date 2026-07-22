@@ -16,6 +16,9 @@ DEFAULT_DAILY_CAP = 6
 COOLDOWN_MINUTES = 30
 MAX_SNAPSHOT_AGE_MINUTES = 30
 STATE_KEEP_DAYS = 7
+# After this many failed pings in a row an account pauses until the next
+# day: a broken environment must not eat the daily cap or spam alerts.
+MAX_CONSECUTIVE_FAILURES = 3
 
 
 def _env_int(name: str, default: int) -> int:
@@ -75,15 +78,36 @@ def attempts_today(state: dict, email: str, now) -> int:
     return state.get("days", {}).get(_day_key(now), {}).get(email, 0)
 
 
+def consecutive_failures(state: dict, email: str, now) -> int:
+    """Today's unbroken failure streak; a new day resets it to 0."""
+    entry = state.get("fail", {}).get(email)
+    if not isinstance(entry, dict) or entry.get("day") != _day_key(now):
+        return 0
+    try:
+        return int(entry.get("count", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def should_warm(account, now, state, fetched_at):
     """(bool, reason). fetched_at: aware datetime of the snapshot, or None."""
     if in_quiet_hours(os.environ.get("SMARTBAR_WARMUP_QUIET", ""), now):
         return False, "quiet hours"
     if fetched_at is None or now - fetched_at > timedelta(minutes=MAX_SNAPSHOT_AGE_MINUTES):
         return False, "snapshot stale or unknown age"
+    if five_hour_metric(account) is None:
+        status = getattr(account, "status", "") or ""
+        if status == "relogin_required":
+            return False, "re-login required (stored credential dead)"
+        if status and status != "ok":
+            return False, f"no usage data ({status})"
+        return False, "no 5h usage data"
     if not window_idle(account, now):
-        return False, "window running (or no readable 5h data)"
+        return False, "window running"
     email = account.email
+    streak = consecutive_failures(state, email, now)
+    if streak >= MAX_CONSECUTIVE_FAILURES:
+        return False, f"{streak} failures in a row — paused until tomorrow"
     last = state.get("last", {}).get(email)
     if last is not None and now - datetime.fromtimestamp(last, tz=timezone.utc) \
             < timedelta(minutes=COOLDOWN_MINUTES):
@@ -100,6 +124,22 @@ def record_attempt(state: dict, email: str, now) -> None:
     state.setdefault("last", {})[email] = now.timestamp()
 
 
+def record_failure(state: dict, email: str, now) -> int:
+    """Bump the consecutive-failure streak; returns the new count."""
+    fail = state.setdefault("fail", {})
+    entry = fail.get(email)
+    if not isinstance(entry, dict) or entry.get("day") != _day_key(now):
+        entry = {"count": 0}
+    count = int(entry.get("count", 0)) + 1
+    fail[email] = {"count": count, "day": _day_key(now)}
+    return count
+
+
+def record_success(state: dict, email: str) -> None:
+    """A ping went through — clear the failure streak."""
+    state.get("fail", {}).pop(email, None)
+
+
 def prune_state(state: dict, current_emails, now) -> None:
     """Drop day buckets older than STATE_KEEP_DAYS and unknown emails."""
     keep_from = _day_key(now - timedelta(days=STATE_KEEP_DAYS))
@@ -110,9 +150,10 @@ def prune_state(state: dict, current_emails, now) -> None:
     for day in days.values():
         for email in [e for e in day if e not in known]:
             del day[email]
-    last = state.get("last", {})
-    for email in [e for e in last if e not in known]:
-        del last[email]
+    for section in ("last", "fail"):
+        entries = state.get(section, {})
+        for email in [e for e in entries if e not in known]:
+            del entries[email]
 
 
 def warmed_successfully(account, now) -> bool:

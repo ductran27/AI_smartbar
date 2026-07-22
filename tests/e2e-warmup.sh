@@ -7,8 +7,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-cp "$HERE/mocks/mock-cswap-warmup" "$HERE/mocks/mock-claude" "$WORK/"
-export SMARTBAR_CSWAP="$WORK/mock-cswap-warmup" SMARTBAR_CLAUDE="$WORK/mock-claude"
+cp "$HERE/mocks/mock-cswap-warmup" "$WORK/"
+# Named exactly `claude`: the mock cswap resolves it from PATH the way the
+# real one does (the runner prepends this dir via SMARTBAR_CLAUDE's dirname).
+cp "$HERE/mocks/mock-claude" "$WORK/claude"
+export SMARTBAR_CSWAP="$WORK/mock-cswap-warmup" SMARTBAR_CLAUDE="$WORK/claude"
 export SMARTBAR_WARMUP_NOTIFY=off SMARTBAR_CACHE_DIR="$WORK/cache"
 BIN="$HERE/../bin/ai-smartbar"
 

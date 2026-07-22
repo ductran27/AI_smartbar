@@ -12,13 +12,14 @@ def iso(dt):
     return dt.isoformat()
 
 
-def acct(email="a@x.com", ok=True, resets_at="", pct=0.0, with_5h=True):
+def acct(email="a@x.com", ok=True, status="ok", resets_at="", pct=0.0,
+         with_5h=True):
     metrics = []
     if with_5h:
         metrics.append(model.Metric(key="5h", label="5h", short="5h",
                                     pct=pct, resets_at=resets_at))
-    return model.Account(number=1, email=email, ok=ok, active=True,
-                         metrics=metrics)
+    return model.Account(number=1, email=email, ok=ok, status=status,
+                         active=True, metrics=metrics)
 
 
 def state(last=None, count=0):
@@ -142,6 +143,35 @@ class TestShouldWarm(Env):
         self.assertFalse(ok)
         self.assertIn("quiet", reason)
 
+    def test_relogin_required_names_the_cause(self):
+        dead = acct(ok=False, status="relogin_required", with_5h=False)
+        ok, reason = warmup.should_warm(dead, NOW, state(), NOW)
+        self.assertFalse(ok)
+        self.assertIn("re-login", reason)
+
+    def test_other_bad_status_named(self):
+        odd = acct(ok=False, status="keychain_unavailable", with_5h=False)
+        ok, reason = warmup.should_warm(odd, NOW, state(), NOW)
+        self.assertFalse(ok)
+        self.assertIn("keychain_unavailable", reason)
+
+    def test_no_5h_data_distinct_from_running(self):
+        ok, reason = warmup.should_warm(acct(with_5h=False), NOW, state(), NOW)
+        self.assertFalse(ok)
+        self.assertIn("no 5h", reason)
+
+    def test_failure_streak_pauses_until_tomorrow(self):
+        st = state()
+        for _ in range(warmup.MAX_CONSECUTIVE_FAILURES):
+            warmup.record_failure(st, "a@x.com", NOW)
+        ok, reason = warmup.should_warm(acct(), NOW, st, NOW)
+        self.assertFalse(ok)
+        self.assertIn("paused", reason)
+        # A new day clears the streak.
+        tomorrow = NOW + timedelta(days=1)
+        ok, _ = warmup.should_warm(acct(), tomorrow, st, tomorrow)
+        self.assertTrue(ok)
+
 
 class TestStateHelpers(Env):
     def test_record_attempt_counts_and_stamps(self):
@@ -156,12 +186,26 @@ class TestStateHelpers(Env):
         old_day = (NOW - timedelta(days=9)).astimezone().strftime("%Y-%m-%d")
         day = NOW.astimezone().strftime("%Y-%m-%d")
         st = {"days": {old_day: {"a@x.com": 3}, day: {"a@x.com": 1, "gone@x.com": 2}},
-              "last": {"a@x.com": 1.0, "gone@x.com": 2.0}}
+              "last": {"a@x.com": 1.0, "gone@x.com": 2.0},
+              "fail": {"gone@x.com": {"count": 2, "day": day}}}
         warmup.prune_state(st, ["a@x.com"], NOW)
         self.assertNotIn(old_day, st["days"])
         self.assertNotIn("gone@x.com", st["days"][day])
         self.assertNotIn("gone@x.com", st["last"])
+        self.assertNotIn("gone@x.com", st["fail"])
         self.assertEqual(st["days"][day]["a@x.com"], 1)
+
+    def test_failure_streak_records_and_clears(self):
+        st = {}
+        self.assertEqual(warmup.record_failure(st, "a@x.com", NOW), 1)
+        self.assertEqual(warmup.record_failure(st, "a@x.com", NOW), 2)
+        self.assertEqual(warmup.consecutive_failures(st, "a@x.com", NOW), 2)
+        # Yesterday's streak does not carry into today.
+        tomorrow = NOW + timedelta(days=1)
+        self.assertEqual(warmup.consecutive_failures(st, "a@x.com", tomorrow), 0)
+        self.assertEqual(warmup.record_failure(st, "a@x.com", tomorrow), 1)
+        warmup.record_success(st, "a@x.com")
+        self.assertEqual(warmup.consecutive_failures(st, "a@x.com", tomorrow), 0)
 
 
 class TestVerify(Env):

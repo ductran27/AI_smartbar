@@ -17,11 +17,11 @@ from gi.repository import GLib, Gtk
 from smartbar import __version__
 from smartbar.core import cswap, model
 from smartbar.core.alerts import AlertManager
+from smartbar.core.recapture import RecapturePolicy
 
 CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
-AUTO_ADD_COOLDOWN = 600  # retry ceiling when `cswap add` cannot succeed
 
 COLORS = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
           "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
@@ -43,10 +43,10 @@ def _rounded_rect(ctx, x, y, w, h, r):
 def render_pills(states, path: str) -> None:
     """Twin-pill badge (same design as the macOS icon, 6x scale).
 
-    One vertical pill per (fraction_left, color) state: general limit
-    first, then per-model buckets. Fill anchors to the bottom and drains
-    downward as tokens are spent. Empty states -> hollow pills + "?".
-    The panel scales the PNG to its height.
+    One vertical pill per (fraction_used, color) state: general limit
+    first, then per-model buckets. Fill anchors to the bottom and RISES
+    as tokens are spent (nearly full = nearly at the limit). Empty
+    states -> hollow pills + "?". The panel scales the PNG to its height.
     """
     pill_w, pill_h, gap, margin, radius = 30, 96, 12, 12, 15
     n = len(states) if states else 2
@@ -97,7 +97,7 @@ class Tray:
         self.menu = None
         self.pending_menu = None  # rebuilt while open; swapped in on hide
         self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
-        self.last_auto_add = None  # monotonic; auto-registration cooldown
+        self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -148,7 +148,9 @@ class Tray:
             for acct in self.snapshot.accounts:
                 item = Gtk.MenuItem(label=model.menu_row(acct)
                                     + (stale if acct.active else ""))
-                if acct.active:
+                if acct.active or model.switch_blocked(acct):
+                    # A dead stored credential must not be switched to: it
+                    # would restore a login Anthropic already rejected.
                     item.set_sensitive(False)
                 else:
                     item.connect("activate", self._on_switch, acct.number)
@@ -238,32 +240,29 @@ class Tray:
         self._refresh_menu()
         for alert in self.alerts.check(snap):
             self._send_alert(alert)
-        self._maybe_auto_register(snap)
+        self._maybe_recapture(snap)
         return False
 
-    def _maybe_auto_register(self, snap):
-        # /login with an unregistered account leaves no slot active:
-        # register it via cswap's own non-interactive `add`. The cooldown
-        # stops retry spam while add cannot succeed (logged out, locked
-        # keychain). SMARTBAR_AUTO_ADD=off disables.
-        if os.environ.get("SMARTBAR_AUTO_ADD") == "off":
+    def _maybe_recapture(self, snap):
+        # `cswap add` keeps stored credentials alive: it registers an
+        # unregistered /login, heals an active slot whose backup died
+        # (relogin_required), and periodically re-captures the live login
+        # so Claude Code's token rotations never orphan the backup. The
+        # policy paces all three; SMARTBAR_AUTO_ADD/SMARTBAR_RECAPTURE=off
+        # disable them.
+        action = self.recapture.action(snap, time.monotonic())
+        if action is None:
             return
-        if not model.needs_registration(snap):
-            return
-        now = time.monotonic()
-        if self.last_auto_add is not None \
-                and now - self.last_auto_add < AUTO_ADD_COOLDOWN:
-            return
-        self.last_auto_add = now
 
         def run():
             try:
                 cswap.add()
             except cswap.CswapError as exc:
-                log.info("auto-add skipped: %s", exc)
+                log.info("cswap add (%s) skipped: %s", action, exc)
                 return
-            log.info("auto-registered current login via cswap add")
-            self._start_fetch()
+            log.info("cswap add ran (%s): current login re-captured", action)
+            if action != "refresh":  # registration/heal changes what we show
+                self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
 
     def _apply_error(self, message, generation):

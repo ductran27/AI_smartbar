@@ -43,6 +43,22 @@ class TestParse(unittest.TestCase):
         self.assertFalse(snap.accounts[0].ok)
         self.assertEqual(snap.accounts[0].metrics, [])
 
+    def test_usage_status_carried_through(self):
+        data = json.loads(self.raw)
+        data["accounts"][0]["usage"] = None
+        data["accounts"][0]["usageStatus"] = "relogin_required"
+        snap = cswap.parse_snapshot(json.dumps(data))
+        acct = snap.accounts[0]
+        self.assertEqual(acct.status, "relogin_required")
+        self.assertFalse(acct.ok)
+
+    def test_missing_status_defaults_empty(self):
+        data = json.loads(self.raw)
+        del data["accounts"][0]["usageStatus"]
+        snap = cswap.parse_snapshot(json.dumps(data))
+        self.assertEqual(snap.accounts[0].status, "")
+        self.assertFalse(snap.accounts[0].ok)
+
     def test_invalid_json_raises(self):
         with self.assertRaises(cswap.CswapError):
             cswap.parse_snapshot("not json {")

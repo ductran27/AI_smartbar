@@ -3,7 +3,14 @@
 Invoked by `ai-smartbar --warmup-once` from launchd/cron every ~10 min.
 Security: no credentials touched — `cswap run <n>` provides the account
 context and the official `claude` CLI owns auth. Fixed one-char prompt,
-one turn, output discarded, every attempt logged, failures notified.
+one turn, output discarded, every attempt logged, failures notified
+(first failure and the giving-up notice only — no half-hourly spam).
+
+launchd quirk that broke v1: agents get a bare PATH, and cswap resolves
+`claude` itself via shutil.which — so every subprocess env must carry a
+PATH that contains the claude CLI. Everything after `--` in `cswap run`
+is passed to claude as ARGUMENTS (cswap picks the binary), so the claude
+path itself must never appear there.
 """
 from __future__ import annotations
 
@@ -38,10 +45,36 @@ def claude_binary():
     if found:
         return found
     for candidate in (os.path.expanduser("~/.local/bin/claude"),
-                      "/opt/homebrew/bin/claude"):
+                      "/opt/homebrew/bin/claude",
+                      "/usr/local/bin/claude"):
         if os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def env_with_claude_on_path(claude: str) -> dict:
+    """Subprocess env whose PATH is guaranteed to resolve `claude`.
+
+    Prepends the resolved binary's own directory plus the usual install
+    dirs to whatever PATH launchd handed us (deduplicated, order kept).
+    """
+    env = dict(os.environ)
+    prepend = [os.path.dirname(os.path.abspath(claude)),
+               os.path.expanduser("~/.local/bin"),
+               "/opt/homebrew/bin", "/usr/local/bin"]
+    parts = []
+    for part in prepend + env.get("PATH", "/usr/bin:/bin").split(os.pathsep):
+        if part and part not in parts:
+            parts.append(part)
+    env["PATH"] = os.pathsep.join(parts)
+    return env
+
+
+def ping_argv(account_number: int, extra: list) -> list:
+    """`cswap run <n> -- <claude args>`. cswap resolves the claude binary
+    itself; post-`--` tokens are claude's arguments only."""
+    return [cswap._binary(), "run", str(account_number), "--",
+            *extra, "-p", ".", "--max-turns", "1"]
 
 
 def load_state() -> dict:
@@ -87,18 +120,19 @@ def notify_failure(title: str, body: str) -> None:
 
 def ping(account_number: int, claude: str) -> tuple[bool, str]:
     """One minimal message as the given account. (ok, detail)."""
-    base = [cswap._binary(), "run", str(account_number), "--", claude]
-    tail = ["-p", ".", "--max-turns", "1"]
+    env = env_with_claude_on_path(claude)
+    proc = None
     for extra in (["--model", "haiku"], []):  # haiku first, plain retry
         try:
-            proc = subprocess.run(base + extra + tail, capture_output=True,
-                                  text=True, timeout=PING_TIMEOUT)
+            proc = subprocess.run(ping_argv(account_number, extra),
+                                  capture_output=True, text=True,
+                                  timeout=PING_TIMEOUT, env=env)
         except subprocess.TimeoutExpired:
             return False, f"ping timed out after {PING_TIMEOUT}s"
         except OSError as exc:
             return False, f"could not run ping: {exc}"
         if proc.returncode == 0:
-            return True, "ok" if not extra else "ok (haiku)"
+            return True, "ok (haiku)" if extra else "ok"
         detail = (proc.stderr or proc.stdout or "").strip()[:160]
     return False, f"claude exited rc={proc.returncode}: {detail}"
 
@@ -140,10 +174,21 @@ def run_once() -> int:
         sent, detail = ping(account.number, claude)
         if not sent:
             failures += 1
+            streak = warmup.record_failure(state, account.email, now)
+            save_state(state)
             log.error("warmup #%s %s failed: %s", account.number, account.email, detail)
-            notify_failure("AI smartbar warmup failed",
-                           f"{account.email}: {detail}")
+            # Notify on the first failure of a streak and on the giving-up
+            # notice; the streak gate silences everything in between.
+            if streak == 1:
+                notify_failure("AI smartbar warmup failed",
+                               f"{account.email}: {detail}")
+            elif streak == warmup.MAX_CONSECUTIVE_FAILURES:
+                notify_failure("AI smartbar warmup paused",
+                               f"{account.email}: {streak} failures in a row — "
+                               "paused until tomorrow (see warmup.log)")
             continue
+        warmup.record_success(state, account.email)
+        save_state(state)
         # Verify the window actually started.
         verified = False
         try:

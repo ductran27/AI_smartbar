@@ -3,11 +3,14 @@
 
 `list --json` -> 2 accounts; an account whose marker file exists reports a
 running 5h window (future resetsAt), otherwise an idle one (empty resetsAt).
-`run <n> -- cmd...` -> executes cmd (like real cswap) and, on success,
-writes the marker.
+`run <n> -- args...` mirrors REAL cswap semantics: the claude binary is
+resolved from PATH by cswap itself (session.py does shutil.which), and
+everything after `--` is passed to claude as ARGUMENTS — a path-like
+claude token there is the v1 runner bug and fails loudly.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -54,7 +57,20 @@ def main():
         return 0
     if len(sys.argv) >= 4 and sys.argv[1] == "run" and sys.argv[3] == "--":
         n = sys.argv[2]
-        rc = subprocess.run(sys.argv[4:]).returncode
+        claude_args = sys.argv[4:]
+        # Real cswap resolves `claude` itself (session.py shutil.which) —
+        # the runner must make PATH carry it, and must never smuggle the
+        # binary path in as an argument.
+        claude_bin = shutil.which("claude")
+        if not claude_bin:
+            print("Error: 'claude' was not found on PATH. Install Claude Code first.",
+                  file=sys.stderr)
+            return 1
+        if claude_args and os.path.sep in claude_args[0]:
+            print(f"mock: claude binary path smuggled into args: {claude_args[0]}",
+                  file=sys.stderr)
+            return 1
+        rc = subprocess.run([claude_bin, *claude_args]).returncode
         if rc == 0:
             with open(marker(n), "w") as f:
                 f.write("warm")
