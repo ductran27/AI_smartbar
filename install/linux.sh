@@ -9,7 +9,7 @@ BIN="$HOME/.local/bin/ai-smartbar"
 AUTOSTART="$HOME/.config/autostart/ai-smartbar.desktop"
 CACHE="$HOME/.cache/ai-smartbar"
 UNITS="$HOME/.config/systemd/user"
-CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-release}"
+CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 INTERVAL_H=6
 AGENT_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 # Matches the no-argument tray only: `--update` / `--warmup-once` invocations
@@ -42,6 +42,19 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# No explicit channel: keep whatever this device already uses. Re-running an
+# installer (the updater does exactly that) must not flip a development box
+# onto the release channel behind the user's back.
+if [[ -z "$CHANNEL" ]]; then
+  EXISTING="$(sed -n 's/^Environment=SMARTBAR_UPDATE_CHANNEL=//p' \
+      "$UNITS/ai-smartbar-update.service" 2>/dev/null | head -1)"
+  if [[ -z "$EXISTING" ]] && command -v crontab >/dev/null; then
+    EXISTING="$(crontab -l 2>/dev/null \
+      | sed -n 's/.*SMARTBAR_UPDATE_CHANNEL=\([a-z]*\).*/\1/p' | head -1)"
+  fi
+  case "$EXISTING" in release|main) CHANNEL="$EXISTING" ;; esac
+fi
+CHANNEL="${CHANNEL:-release}"
 case "$CHANNEL" in
   release|main) ;;
   *) echo "channel must be 'release' or 'main' (got '$CHANNEL')" >&2; exit 2 ;;

@@ -11,7 +11,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.update.plist"
 INTERVAL="${SMARTBAR_UPDATE_INTERVAL:-21600}"
-CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-release}"
+CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 AGENT_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 while [[ $# -gt 0 ]]; do
@@ -26,6 +26,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# No explicit channel: keep whatever this device is already set to. Both the
+# updater (which re-runs the installers) and a human re-running one by hand
+# must not silently flip a development box onto the release channel.
+if [[ -z "$CHANNEL" && -f "$PLIST" ]]; then
+  EXISTING="$(/usr/libexec/PlistBuddy -c \
+    'Print :EnvironmentVariables:SMARTBAR_UPDATE_CHANNEL' "$PLIST" 2>/dev/null || true)"
+  case "$EXISTING" in release|main) CHANNEL="$EXISTING" ;; esac
+fi
+CHANNEL="${CHANNEL:-release}"
 case "$CHANNEL" in
   release|main) ;;
   *) echo "channel must be 'release' or 'main' (got '$CHANNEL')" >&2; exit 2 ;;

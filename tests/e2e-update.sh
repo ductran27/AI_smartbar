@@ -135,4 +135,25 @@ set +e; E2E_FAIL_INSTALL=1 run_update --update 2>/dev/null; CODE=$?; set -e
 [[ "$CODE" == "2" ]] || fail "F2: brake did not engage (returned $CODE, wanted 2)"
 [[ "$(head_tag)" == "v0.0.3" ]] || fail "F2: device left off its last good release"
 
-echo "E2E update: A-F all PASS (check, apply, no-op, blocked, reset, rollback, brake)"
+# --- G: re-installing must not silently reset the update channel ----------
+# The updater re-runs the installers on every apply, so a channel that did
+# not survive that would quietly move a dev box onto the release channel.
+# SMARTBAR_UPDATE_APPLY=1 is the updater's own path and touches no launchctl.
+if [[ "$(uname)" == "Darwin" ]]; then
+  CH_HOME="$WORK/chan"; mkdir -p "$CH_HOME/Library/LaunchAgents"
+  CH_PLIST="$CH_HOME/Library/LaunchAgents/com.ductran.ai-smartbar.update.plist"
+  chan() { /usr/libexec/PlistBuddy -c \
+    'Print :EnvironmentVariables:SMARTBAR_UPDATE_CHANNEL' "$CH_PLIST" 2>/dev/null; }
+  env -u SMARTBAR_UPDATE_CHANNEL HOME="$CH_HOME" SMARTBAR_UPDATE_APPLY=1 \
+    "$WORK/device/install/macos-update.sh" --channel main >/dev/null
+  [[ "$(chan)" == "main" ]] || fail "G: --channel main not written (got '$(chan)')"
+  env -u SMARTBAR_UPDATE_CHANNEL HOME="$CH_HOME" SMARTBAR_UPDATE_APPLY=1 \
+    "$WORK/device/install/macos-update.sh" >/dev/null
+  [[ "$(chan)" == "main" ]] || fail "G: re-install reset the channel to '$(chan)'"
+  env -u SMARTBAR_UPDATE_CHANNEL HOME="$CH_HOME" SMARTBAR_UPDATE_APPLY=1 \
+    "$WORK/device/install/macos-update.sh" --channel release >/dev/null
+  [[ "$(chan)" == "release" ]] || fail "G: explicit channel change ignored"
+  echo "  G: channel survives re-install (macOS)"
+fi
+
+echo "E2E update: A-G all PASS (check, apply, no-op, blocked, reset, rollback, brake, channel)"
