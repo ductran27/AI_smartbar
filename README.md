@@ -26,7 +26,8 @@ macOS popover:                     Linux click menu:
   of the 5-hour and 7-day windows), one more pill per per-model weekly
   bucket (e.g. Fable). Pills FILL upward as tokens are spent — a nearly
   full pill means nearly at the limit — and step green → yellow → light
-  red → dark red → gray (exhausted); hollow `?` when there is no data.
+  red → dark red → **purple** (100% used, spent); hollow `?` when there is
+  no data. A small red dot joins the icon when a new release is waiting.
 - **Every number is "% used"** — exactly what Claude Code's `/usage`
   shows, no mental arithmetic. Promo-boosted limits are already baked
   into the API's percentages, so both read the same scale.
@@ -68,9 +69,10 @@ macOS popover:                     Linux click menu:
   [below](#auto-window-starter-warmup-opt-in).
 - **Self-updating (on by default).** Every device checks for a new release
   at login and every 6 hours, then rebuilds, re-installs its agents and
-  restarts itself — or you click **Update to vX.Y.Z** in the popover and it
-  happens now. Rolls itself back if a release fails to build, and never
-  touches a checkout with uncommitted work — see
+  restarts itself. A **red dot appears on the bar icon** the moment one is
+  waiting, and **Update to vX.Y.Z** (popover on macOS, menu row on Linux)
+  applies it immediately. Rolls itself back if a release fails to build, and
+  never touches a checkout with uncommitted work — see
   [Updating](#updating-and-releases).
 - **Linux tray.** The same twin-pill badge and a click menu via
   AppIndicator + cairo, rendered from the same unit-tested core.
@@ -157,8 +159,14 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 
 Every device self-updates. A LaunchAgent (macOS) or systemd user timer
 (Linux, cron fallback) runs `ai-smartbar --update` **at login and every 6
-hours**; the popover's **Update to vX.Y.Z** button runs the same pass
-immediately.
+hours**; the popover's **Update to vX.Y.Z** button (Linux: the **⬆ Update
+to vX.Y.Z** menu row) runs the same pass immediately.
+
+**How a device tells you.** A waiting release badges the bar icon with a
+small red dot — the icon gets slightly wider rather than the dot covering a
+pill, since a pill's top is where "nearly at the limit" is read. A desktop
+notification also fires once the update has been applied. Both UIs learn
+this from `~/.cache/ai-smartbar/update-state.json`, written by the updater.
 
 **What a pass does.** Fetch tags → pick the target for this device's
 channel → check it out → **re-run whichever installers this device has** →
@@ -329,9 +337,11 @@ tail ~/.cache/ai-smartbar/warmup.log      # warmup attempts + skip reasons
 tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ```
 
+- **Purple means spent** — a metric at 100% used is past "critical", so it
+  gets its own step in the ramp rather than looking switched off.
 - **A dot is hollow** when there is no measurement behind it (no data yet,
-  or a dead credential — the text under it says which). A *solid* gray dot
-  is a real reading: that limit is 100% used, i.e. exhausted.
+  or a dead credential — the text under it says which). Gray therefore only
+  ever means "unknown", never "exhausted".
 - **The popover shows a pause marker next to the version** when an update
   was found but held back; hover it for the reason (usually uncommitted
   changes or unpushed commits in the checkout).
@@ -347,7 +357,7 @@ tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 161 tests, no external deps
+python3 -m unittest discover -s tests -v   # 169 tests, no external deps
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
 ./tests/e2e-update.sh                      # self-update against a throwaway origin

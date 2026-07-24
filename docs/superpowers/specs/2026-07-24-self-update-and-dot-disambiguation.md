@@ -1,6 +1,6 @@
 # Self-update across devices + status-dot disambiguation
 
-Date: 2026-07-24. 161 unit tests + 4 e2e suites green; Swift release build
+Date: 2026-07-24. 169 unit tests + 4 e2e suites green; Swift release build
 clean. Live-verified on the Mac: update agent installed and its RunAtLoad
 pass logged `channel=main … -> current`, app rebuilt to 0.2.0 in the bundle
 Info.plist (was hardcoded 0.1.0), popover footer screenshotted.
@@ -25,13 +25,29 @@ The real defect found while confirming it: `worstStatus` also falls back to
 `.gray` when there are no metrics at all, so "the Fable bucket is spent"
 and "this slot's credential is dead" rendered as the same dot.
 
-**Fix.** New `model.dot_style(account)` → `"solid" | "hollow"` (hollow ⟺
-`worst(account) is None`), mirrored as `Account.dotHollow` and rendered by
-AccountCardView as a stroked ring instead of a filled circle. Solid gray
-keeps meaning exhausted. The Python UIs needed no change — their no-data
-rows already say `?` / the state text — but the semantics live in core so
-both renderers agree, with tests for exhausted / no-data / dead-credential
-/ measured.
+**Fix, in two steps.** First, `model.dot_style(account)` →
+`"solid" | "hollow"` (hollow ⟺ `worst(account) is None`), mirrored as
+`Account.dotHollow` and rendered by AccountCardView as a stroked ring
+instead of a filled circle.
+
+Then, on the user's call, the exhausted step got its own colour: a **sixth
+status `full`, purple #8B5CF6**, returned by `color()`/`Thresholds.status`
+for `used >= 100`. Note this could NOT be done by recolouring `gray` —
+`worstStatus` falls back to `.gray` for a dataless account and the hollow
+ring is drawn in that same colour, so the two had to be separated first.
+Result: purple = spent, hollow gray = unknown, red = nearly there, and no
+two states share a rendering any more. MetricBarRow's exhausted row also
+came up from 0.45 → 0.68 white: a purple bar is a deliberate signal, and
+45% text made the row read as disabled instead.
+
+**Palette parity, made testable.** Renderers look colours up *by name*
+(`COLORS[color_name]` in the cairo Linux badge, `DOT[...]` in macos_title),
+so a status missing from a table is a crash on every poll — in the one
+renderer with no hardware to test it on. The RGB table therefore moved into
+core as `model.RGB`, tray.py uses it instead of a private copy, and
+`TestPaletteParity` asserts every value `color()` can return has both a
+glyph and an RGB triple. Swift's exhaustive `switch` gives the same
+guarantee for free.
 
 ## 2. There was no update mechanism at all
 
@@ -69,7 +85,18 @@ nothing at all until a rebuild.
   `repoRoot`) and the popover footer shows the version plus an *Update to
   vX.Y.Z* button. The button `launchctl kickstart`s the **update job**
   rather than spawning a child: applying an update restarts the very app
-  that would be the parent.
+  that would be the parent. Linux/rumps get an equivalent *⬆ Update to
+  vX.Y.Z* menu row, spawned with `start_new_session=True` for the same
+  reason.
+* **Announcing it without being opened.** A waiting release badges the bar
+  icon itself (`MenuBarIcon.badged`, cairo dot in `render_pills`). The dot
+  goes in a *widened* frame, never over a pill — a pill's top is the
+  "nearly at the limit" region and covering it would trade usage
+  information for a notification. Colour is system red #FF3B30, chosen
+  brighter than both usage reds (#E4604B / #CC2F2F) so it cannot be misread
+  as a usage alarm; one constant changes it if it ever does.
+  `UpdateStatus` polls the state file every 300 s (plus on activation) so
+  the badge appears with nothing opened.
 * **`install/release.sh`** bumps the one canonical version, propagates it to
   `Version.swift` + Info.plist, runs the tests, commits, tags, pushes.
   Without this nothing exists to update *to*.
