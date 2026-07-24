@@ -200,6 +200,16 @@ def dot_style(account) -> str:
     return "hollow" if worst(account) is None else "solid"
 
 
+def dot_color(account) -> str:
+    """Status color name for an account's dot — the worst metric's color.
+
+    "gray" when there is nothing to measure, which is exactly when
+    dot_style() says to draw the dot hollow.
+    """
+    metric = worst(account)
+    return "gray" if metric is None else color(metric.pct)
+
+
 def switch_blocked(account) -> bool:
     """True when activating this slot would restore a dead credential."""
     return account.status in DEAD_CREDENTIAL_STATUSES

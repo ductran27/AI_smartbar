@@ -1,4 +1,12 @@
-"""XFCE/Linux system-tray UI: AppIndicator + cairo-drawn badge icon."""
+"""Linux system tray: AppIndicator icon, launcher menu, and the card panel.
+
+The visible UI is the popover window (smartbar/linux/popover_window.py),
+which is the same design as the macOS popover. The menu here is its launcher
+plus the actions, because an AppIndicator menu is serialised to the panel as
+dbusmenu and can carry nothing but labels, icons and checkmarks — never the
+cards and filled bars. If the window cannot be created the menu falls back to
+the old text rows so the tray still works.
+"""
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -10,90 +18,20 @@ import subprocess
 import threading
 import time
 
-import cairo
 from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__
-from smartbar.core import cswap, model
+from smartbar.core import cswap, model, popover_layout
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
+from smartbar.linux.tray_icon import render_pills
 
 CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 
-# Canonical palette (incl. purple "full" for a spent limit). Deliberately
-# NOT a local copy: a status this dict lacked would crash icon rendering on
-# every poll, and tests/test_model.py asserts model.RGB covers every status.
-COLORS = model.RGB
-# "Update waiting" badge — brighter than either usage red so it cannot be
-# mistaken for a usage alarm (mirror of MenuBarIcon.badgeColor).
-BADGE_RGB = (1.0, 0.23, 0.19)
-
 log = logging.getLogger("ai-smartbar")
-
-
-def _rounded_rect(ctx, x, y, w, h, r):
-    r = min(r, h / 2, w / 2)
-    ctx.new_sub_path()
-    ctx.arc(x + w - r, y + r, r, -1.5708, 0)
-    ctx.arc(x + w - r, y + h - r, r, 0, 1.5708)
-    ctx.arc(x + r, y + h - r, r, 1.5708, 3.1416)
-    ctx.arc(x + r, y + r, r, 3.1416, 4.7124)
-    ctx.close_path()
-
-
-def render_pills(states, path: str, update_pending: bool = False) -> None:
-    """Twin-pill badge (same design as the macOS icon, 6x scale).
-
-    One vertical pill per (fraction_used, color) state: general limit
-    first, then per-model buckets. Fill anchors to the bottom and RISES
-    as tokens are spent (nearly full = nearly at the limit). Empty
-    states -> hollow pills + "?". The panel scales the PNG to its height.
-
-    `update_pending` adds a dot in a WIDENED frame rather than over a pill:
-    a pill's top is its most meaningful region, so covering it would trade
-    usage information for a notification.
-    """
-    pill_w, pill_h, gap, margin, radius = 30, 96, 12, 12, 15
-    n = len(states) if states else 2
-    dot_d = 30 if update_pending else 0
-    w = margin * 2 + pill_w * n + gap * (n - 1) + dot_d
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, pill_h)
-    ctx = cairo.Context(surface)
-    for i in range(n):
-        x = margin + i * (pill_w + gap)
-        if not states:
-            _rounded_rect(ctx, x + 3, 3, pill_w - 6, pill_h - 6, radius)
-            ctx.set_source_rgba(0.5, 0.5, 0.5, 0.8)
-            ctx.set_line_width(6)
-            ctx.stroke()
-            continue
-        _rounded_rect(ctx, x, 0, pill_w, pill_h, radius)
-        ctx.set_source_rgba(0.5, 0.5, 0.5, 0.45)
-        ctx.fill()
-        frac, color_name = states[i]
-        if frac > 0:
-            fill_h = max(12, round(pill_h * min(frac, 1.0)))
-            _rounded_rect(ctx, x, pill_h - fill_h, pill_w, fill_h, radius)
-            ctx.set_source_rgb(*COLORS[color_name])
-            ctx.fill()
-    if update_pending:
-        # cairo's origin is top-left, so this lands in the top-right corner.
-        ctx.set_source_rgb(*BADGE_RGB)
-        ctx.arc(w - dot_d / 2.0, dot_d / 2.0, dot_d / 2.0, 0, 6.28319)
-        ctx.fill()
-    if not states:
-        ctx.set_source_rgba(1, 1, 1, 0.85)
-        ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
-                             cairo.FONT_WEIGHT_BOLD)
-        ctx.set_font_size(48)
-        ext = ctx.text_extents("?")
-        ctx.move_to((w - dot_d - ext.width) / 2 - ext.x_bearing,
-                    (pill_h - ext.height) / 2 - ext.y_bearing)
-        ctx.show_text("?")
-    surface.write_to_png(path)
 
 
 class Tray:
@@ -112,7 +50,11 @@ class Tray:
         self.pending_menu = None  # rebuilt while open; swapped in on hide
         self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
+        self.last_error = ""
+        self.update_blocked = ""
+        self.open_item = None
         self.update_pending = self._pending_update()  # "" or "X.Y.Z"
+        self.popover = self._make_popover()
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -121,6 +63,53 @@ class Tray:
         self._set_icon([])  # hollow "?" pills until the first fetch lands
         self._install_menu(self._build_menu())
         self._init_notify()
+
+    def _make_popover(self):
+        """The card panel, or None if this session cannot host a window.
+
+        Never fatal: the menu keeps working as a plain-text fallback (see
+        _build_menu), which matters on a headless or misconfigured session.
+        """
+        try:
+            from smartbar.linux.popover_window import Popover
+            return Popover(self._popover_layout, self._on_popover_action)
+        except Exception:
+            log.exception("popover unavailable; falling back to a text menu")
+            return None
+
+    def _popover_layout(self, hover=""):
+        """Fresh layout for the panel — same builder the macOS popover mirrors."""
+        return popover_layout.build(
+            self.snapshot, version=__version__,
+            pending_version=self.update_pending,
+            blocked_reason=self.update_blocked,
+            fetched_at=self.snapshot.fetched_at if self.snapshot else "",
+            stale=bool(self.failures and self.snapshot),
+            error=self.last_error if self.snapshot is None else "",
+            hover=hover)
+
+    def _on_popover_action(self, name):
+        """Route a hit-tested click from the panel."""
+        if name == "quit":
+            Gtk.main_quit()
+            return
+        if name == "refresh":
+            self._start_fetch()
+        elif name == "update":
+            self._on_update(None)
+        elif name.startswith("switch:"):
+            self._on_switch(None, int(name.split(":", 1)[1]))
+        if self.popover is not None:
+            self.popover.refresh_layout()
+
+    def _on_open(self, _item):
+        if self.popover is None:
+            return
+        self.popover.show_panel()
+        # Opening the panel is the user looking: refresh so what they read is
+        # current (cswap's store paces the real network traffic).
+        if time.monotonic() - self.last_fetch_at > 10:
+            self._start_fetch()
 
     def _init_notify(self):
         self.notify = None
@@ -153,8 +142,20 @@ class Tray:
         self.indicator.set_icon_full(name, "AI smartbar usage")
 
     def _build_menu(self):
+        """The tray menu is the panel's launcher plus the actions.
+
+        dbusmenu can only carry labels/icons/checkmarks, so the cards live in
+        the popover window. When that window could not be created the old
+        text rows come back, so the tray is still usable.
+        """
         menu = Gtk.Menu()
-        if self.snapshot is None:
+        self.open_item = None
+        if self.popover is not None:
+            item = Gtk.MenuItem(label="🔎 Open AI smartbar")
+            item.connect("activate", self._on_open)
+            menu.append(item)
+            self.open_item = item
+        elif self.snapshot is None:
             label = "Loading…" if self.failures == 0 else "cswap error — see tray.log"
             item = Gtk.MenuItem(label=label)
             item.set_sensitive(False)
@@ -191,6 +192,13 @@ class Tray:
         self.menu = menu
         self.pending_menu = None
         self.indicator.set_menu(menu)
+        # StatusNotifier gives no left-click callback — left-click always
+        # shows the menu — so middle-click is the one-gesture way in.
+        if self.open_item is not None:
+            try:
+                self.indicator.set_secondary_activate_target(self.open_item)
+            except Exception:
+                log.debug("middle-click activation unsupported here")
 
     def _refresh_menu(self):
         new_menu = self._build_menu()
@@ -223,15 +231,20 @@ class Tray:
     def _pending_update(self) -> str:
         """The release the updater found waiting, or "" — never raises.
 
-        A broken/absent state file must not be able to take the tray down,
-        so everything here is best-effort and imported lazily.
+        Also records why an update is being held back (dirty checkout,
+        unpushed commits) so the panel footer can say so. A broken or absent
+        state file must not be able to take the tray down.
         """
         try:
             from smartbar import update_runner
             from smartbar.core import update as update_core
-            return update_core.pending_version(update_runner.load_state())
+            state = update_runner.load_state()
+            self.update_blocked = (state.get("reason", "")
+                                   if state.get("action") == "blocked" else "")
+            return update_core.pending_version(state)
         except Exception:
             log.exception("could not read the update state")
+            self.update_blocked = ""
             return ""
 
     def _on_update(self, _item):
@@ -277,6 +290,7 @@ class Tray:
         if generation != self.generation:
             return False  # superseded (e.g. a pre-switch fetch landing late)
         self.failures = 0
+        self.last_error = ""
         self.snapshot = snap
         if snap.schema_warning:
             log.warning("%s", snap.schema_warning)
@@ -287,6 +301,8 @@ class Tray:
         self._set_icon(model.pill_states(account))
         self.indicator.set_title(model.title_line(account))
         self._refresh_menu()
+        if self.popover is not None and self.popover.get_visible():
+            self.popover.refresh_layout()
         for alert in self.alerts.check(snap):
             self._send_alert(alert)
         self._maybe_recapture(snap)
@@ -318,10 +334,13 @@ class Tray:
         if generation != self.generation:
             return False  # superseded
         self.failures += 1
+        self.last_error = message
         if self.failures >= 3:
             self._set_icon([])
             self.indicator.set_title(f"AI smartbar — cswap error: {message[:80]}")
         self._refresh_menu()
+        if self.popover is not None and self.popover.get_visible():
+            self.popover.refresh_layout()
         return False
 
     def _tick(self):

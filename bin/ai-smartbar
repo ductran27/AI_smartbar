@@ -36,6 +36,12 @@ def main() -> int:
                         help="print current state to stdout and exit")
     parser.add_argument("--warmup-once", action="store_true",
                         help="run one gate-checked warmup pass and exit")
+    parser.add_argument("--preview-popover", nargs="?", const="", metavar="PATH",
+                        help="render the popover to a PNG and exit (needs "
+                             "pycairo; works on any OS)")
+    parser.add_argument("--demo", action="store_true",
+                        help="with --preview-popover: sample data covering "
+                             "every card state, no claude-swap needed")
     parser.add_argument("--update", action="store_true",
                         help="fetch and apply the newest release, then restart")
     parser.add_argument("--check-update", action="store_true",
@@ -54,6 +60,10 @@ def main() -> int:
     if args.warmup_once:
         from smartbar.warmup_runner import run_once
         return run_once()
+    if args.preview_popover is not None:
+        from smartbar.linux.popover_preview import render
+        print(render(args.preview_popover, demo=args.demo))
+        return 0
     if args.update or args.check_update:
         from smartbar.update_runner import run_once as update_once
         return update_once(reset=args.reset, force=args.force,
