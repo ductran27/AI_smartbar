@@ -292,5 +292,55 @@ class TestPendingVersion(unittest.TestCase):
             update.pending_version(update.ui_state(current, "0.3.0")), "")
 
 
+class TestManualCheckOutcome(unittest.TestCase):
+    """What the tray says after the user asked, by hand, for a check.
+
+    The tray itself is GTK and untestable here, so the wording and — more
+    importantly — the honesty rules live in core where they can be pinned.
+    """
+
+    def test_a_release_that_is_waiting_names_itself(self):
+        outcome = update.check_outcome(pending="0.6.2")
+        self.assertTrue(outcome.found)
+        self.assertIn("0.6.2", outcome.label)
+        self.assertIn("0.6.2", outcome.body)
+
+    def test_nothing_waiting_says_so_plainly(self):
+        outcome = update.check_outcome()
+        self.assertFalse(outcome.found)
+        self.assertIn("Up to date", outcome.label)
+
+    def test_a_check_that_never_ran_is_not_reported_as_up_to_date(self):
+        # The one that matters. run_once() returns 0 BOTH when a device is
+        # genuinely current and when another update run holds the lock, so a
+        # naive "exit 0 means current" would tell the user an outright lie at
+        # exactly the moment the updater was busy doing something.
+        outcome = update.check_outcome(ran=False)
+        self.assertFalse(outcome.found)
+        self.assertNotIn("Up to date", outcome.label)
+        self.assertIn("progress", outcome.body)
+
+    def test_a_failed_check_outranks_everything_else(self):
+        # If the fetch itself failed, whatever the stale state file says about
+        # a pending release is not news we just learned.
+        outcome = update.check_outcome(pending="0.6.2", failed=True, ran=False)
+        self.assertFalse(outcome.found)
+        self.assertIn("failed", outcome.label.lower())
+        self.assertIn("update.log", outcome.body)
+
+    def test_held_back_explains_why_rather_than_offering_a_button(self):
+        outcome = update.check_outcome(blocked="2 unpushed commit(s)")
+        self.assertFalse(outcome.found)          # nothing to click
+        self.assertIn("2 unpushed commit(s)", outcome.body)
+
+    def test_every_outcome_is_something_a_menu_row_can_show(self):
+        for kwargs in ({}, {"pending": "1.0.0"}, {"blocked": "dirty"},
+                       {"failed": True}, {"ran": False}):
+            outcome = update.check_outcome(**kwargs)
+            for field in (outcome.label, outcome.title, outcome.body):
+                self.assertTrue(field.strip(), kwargs)
+            self.assertNotIn("\n", outcome.label, kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()

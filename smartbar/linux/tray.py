@@ -23,6 +23,7 @@ from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
 from smartbar.core import cswap, model, popover_layout, presence
+from smartbar.core import update as update_core
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
 from smartbar.linux.tray_icon import render_pills
@@ -30,6 +31,14 @@ from smartbar.linux.tray_icon import render_pills
 CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
+# A manual check runs `git fetch`. Bounded so a stalled network leaves the row
+# saying "Check failed" rather than "Checking…" for ever.
+CHECK_TIMEOUT = 120
+# How long the outcome sits in the menu before the row goes back to normal.
+CHECK_RESULT_SECONDS = 20
 
 log = logging.getLogger("ai-smartbar")
 
@@ -54,6 +63,9 @@ class Tray:
         self.update_blocked = ""
         self.presence_started = False  # first beat waits for the first fetch
         self.open_item = None
+        self.checking = False     # a manual update check is in flight
+        self.check_result = ""    # its outcome, shown in the row for a while
+        self.check_token = 0      # so a stale timer cannot clear a newer result
         self.update_pending = self._pending_update()  # "" or "X.Y.Z"
         self.pinned = model.panel_pinned()
         self.popover = self._make_popover()
@@ -128,13 +140,18 @@ class Tray:
         except Exception:
             log.warning("libnotify unavailable; will fall back to notify-send")
 
-    def _send_alert(self, alert):
+    def _send_alert(self, alert, urgency="critical", icon="dialog-warning"):
+        """Any object with .title/.body — a limit alert or an update check.
+
+        Urgency is a parameter because a limit alert should interrupt, while
+        "up to date" is a confirmation the user just asked for.
+        """
         try:
             if self.notify is not None:
                 self.notify.Notification.new(alert.title, alert.body,
-                                             "dialog-warning").show()
+                                             icon).show()
             else:
-                subprocess.run(["notify-send", "-u", "critical",
+                subprocess.run(["notify-send", "-u", urgency,
                                 alert.title, alert.body], timeout=10, check=False)
         except Exception:
             log.exception("failed to send notification")
@@ -184,11 +201,22 @@ class Tray:
             item = Gtk.MenuItem(label=f"⬆ Update to {self.update_pending}")
             item.connect("activate", self._on_update)
             menu.append(item)
-        for label, callback in (("⟳ Refresh now", self._on_refresh),
-                                ("⚙ Open cswap TUI", self._on_tui),
-                                ("⏻ Quit", self._on_quit)):
+        # "Refresh now" re-reads usage; this asks the REMOTE whether a new
+        # release exists, which otherwise only happened on the updater's own
+        # 6-hourly timer — so a device could sit up to 6h behind with no way
+        # to ask. Hidden when this device has opted out of updating, where a
+        # check button would promise something that cannot happen.
+        rows = [("⟳ Refresh now", self._on_refresh, True)]
+        if update_core.enabled():
+            rows.append(self._check_row())
+        rows += [("⚙ Open cswap TUI", self._on_tui, True),
+                 ("⏻ Quit", self._on_quit, True)]
+        for label, callback, clickable in rows:
             item = Gtk.MenuItem(label=label)
-            item.connect("activate", callback)
+            if clickable:
+                item.connect("activate", callback)
+            else:
+                item.set_sensitive(False)
             menu.append(item)
         menu.connect("show", self._on_menu_show)
         menu.connect("hide", self._on_menu_hide)
@@ -243,8 +271,9 @@ class Tray:
         state file must not be able to take the tray down.
         """
         try:
+            # update_runner stays a lazy import (fcntl and friends); core.update
+            # is stdlib-only and comes in at module scope.
             from smartbar import update_runner
-            from smartbar.core import update as update_core
             state = update_runner.load_state()
             self.update_blocked = (state.get("reason", "")
                                    if state.get("action") == "blocked" else "")
@@ -257,14 +286,89 @@ class Tray:
     def _on_update(self, _item):
         """Apply the waiting release. Detached on purpose: the updater
         restarts this very tray, so it must not be our child."""
-        repo = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))))
         try:
-            subprocess.Popen([os.path.join(repo, "bin", "ai-smartbar"), "--update"],
-                             start_new_session=True,
+            subprocess.Popen([LAUNCHER, "--update"], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError:
             log.exception("could not start the updater")
+
+    def _check_row(self):
+        """(label, callback, clickable) for the manual update-check row."""
+        if self.checking:
+            return "⇅ Checking for updates…", None, False
+        if self.check_result:
+            return self.check_result, None, False
+        return "⇅ Check for updates", self._on_check_update, True
+
+    def _on_check_update(self, _item):
+        if self.checking:
+            return
+        self.checking = True
+        self.check_result = ""
+        self.check_token += 1
+        self._refresh_menu()
+        threading.Thread(target=self._check_update, args=(self.check_token,),
+                         daemon=True).start()
+
+    def _check_update(self, token):
+        """Ask the remote, off the main loop — this does a network fetch.
+
+        `--check-update` only reports; applying stays the separate, deliberate
+        "⬆ Update to …" row. The state file is what we actually read afterwards
+        (the runner writes it before returning), so the exit code is used only
+        to tell a failed check from a completed one.
+        """
+        before = self._checked_at()
+        try:
+            done = subprocess.run([LAUNCHER, "--check-update"],
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL,
+                                  timeout=CHECK_TIMEOUT)
+            failed = done.returncode not in (0, 10)  # 10 = a release is waiting
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("update check could not run")
+            failed = True
+        GLib.idle_add(self._checked, token, failed, before)
+
+    def _checked_at(self) -> str:
+        try:
+            from smartbar import update_runner
+            return str(update_runner.load_state().get("checkedAt") or "")
+        except Exception:
+            return ""
+
+    def _checked(self, token, failed, before):
+        if token != self.check_token:
+            return False  # superseded by a newer check
+        self.checking = False
+        self.update_pending = self._pending_update()   # also sets update_blocked
+        # A check that never happened must not be reported as "up to date":
+        # run_once() returns 0 both when a device really is current and when
+        # another update run already holds the lock. checkedAt moving is the
+        # only proof it looked. (One-second resolution, so two checks inside
+        # the same second read as "busy" — erring toward "try again" rather
+        # than toward a false all-clear.)
+        outcome = update_core.check_outcome(
+            pending=self.update_pending, blocked=self.update_blocked,
+            failed=failed, ran=bool(self._checked_at() != before))
+        self.check_result = outcome.label
+        # Clicking a row closes the menu, so the label alone would be invisible
+        # until the user opened it again — the notification is the real feedback.
+        self._send_alert(outcome, urgency="normal", icon="dialog-information")
+        # Repaint: the red dot on the tray icon is driven by update_pending, so
+        # a check that just found a release has to make the badge appear.
+        account = self.snapshot.active_account if self.snapshot else None
+        self._set_icon(model.pill_states(account) if account else [])
+        self._refresh_menu()
+        GLib.timeout_add_seconds(CHECK_RESULT_SECONDS,
+                                 self._clear_check_result, token)
+        return False
+
+    def _clear_check_result(self, token):
+        if token == self.check_token and self.check_result:
+            self.check_result = ""
+            self._refresh_menu()
+        return False
 
     def _on_refresh(self, _item):
         self._start_fetch()

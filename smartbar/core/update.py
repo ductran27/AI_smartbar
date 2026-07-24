@@ -208,6 +208,52 @@ def pending_version(state: dict) -> str:
     return pending if isinstance(pending, str) else ""
 
 
+@dataclass
+class CheckOutcome:
+    """What to say after the user asked, by hand, whether an update is waiting.
+
+    Three surfaces, because a tray menu closes the moment you click a row: the
+    notification is the only immediate feedback, `label` is what the row says
+    when the menu is next opened, and `found` lets a caller decide whether to
+    do anything else.
+    """
+    label: str
+    title: str
+    body: str
+    found: bool = False
+
+
+def check_outcome(*, pending: str = "", blocked: str = "",
+                  failed: bool = False, ran: bool = True) -> CheckOutcome:
+    """Turn a finished manual check into something honest to show.
+
+    `ran` exists because a check that never happened must not be reported as
+    "up to date". `update_runner.run_once` returns 0 both when a device really
+    is current AND when another update run already holds the lock (or updates
+    are switched off) — so the caller compares the state file's checkedAt
+    before and after, and passes ran=False when nothing moved.
+    """
+    if failed:
+        return CheckOutcome("✕ Check failed", "AI smartbar",
+                            "Could not check for updates. See "
+                            "~/.cache/ai-smartbar/update.log")
+    if not ran:
+        return CheckOutcome("… Check busy", "AI smartbar",
+                            "An update run is already in progress — "
+                            "try again in a moment.")
+    if pending:
+        # pendingVersion is only ever set for an actionable update (ui_state
+        # clears it otherwise), so this cannot collide with `blocked`.
+        return CheckOutcome(f"⬆ {pending} available", "AI smartbar update",
+                            f"{pending} is ready. Pick “⬆ Update to {pending}” "
+                            "in the tray menu to apply it now.", found=True)
+    if blocked:
+        return CheckOutcome("✕ Update held back", "AI smartbar update",
+                            "An update is waiting but held back: " + blocked)
+    return CheckOutcome("✓ Up to date", "AI smartbar",
+                        "No new release — this device is current.")
+
+
 def ui_state(plan, version: str, now=None, applied: str = "") -> dict:
     """The JSON blob the UIs read to offer their one-click upgrade button."""
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
