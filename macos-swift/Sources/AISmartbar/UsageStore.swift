@@ -14,6 +14,11 @@ final class UsageStore: ObservableObject {
     @Published var icon: NSImage = MenuBarIcon.image(for: [])
     @Published var switchError: String?  // sticky until the next switch attempt
 
+    /// Per-account device counts. Owned here rather than beside the store
+    /// because it needs every snapshot, including the ones taken while the
+    /// popover is closed and no view exists to observe them.
+    let presence = PresenceStatus()
+
     /// When cswap was last polled. Deliberately NOT @Published: it changes
     /// on every poll and would re-render the UI even when the data didn't
     /// move; the tooltip that shows it reads the current value on hover.
@@ -199,6 +204,7 @@ final class UsageStore: ObservableObject {
                 checkAlerts(snap)
             }
             maybeRecapture(snap)  // paces itself; must run even when unchanged
+            presence.update(from: snap)   // ditto: the beat paces itself
             rescheduleTimer(interval: desiredInterval())
         case .failure(let error):
             consecutiveFailures += 1

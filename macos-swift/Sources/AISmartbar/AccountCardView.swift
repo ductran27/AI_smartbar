@@ -7,15 +7,34 @@ import SwiftUI
 struct AccountCardView: View {
     let account: Account
     @EnvironmentObject private var store: UsageStore
+    @EnvironmentObject private var presence: PresenceStatus
+
+    private var devices: Int { presence.counts[account.email] ?? 0 }
+
+    /// Says what the badge counts, and — the part worth being precise about
+    /// — that it can only ever see devices running AI smartbar.
+    private var devicesHelp: String {
+        switch devices {
+        case 0: return ""      // nobody on it, or the other devices are unseen
+        case 1: return "Only this device has this account active"
+        default:
+            return "\(devices) devices running AI smartbar have this account "
+                 + "active — they share its 5h and weekly limits"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
                 statusDot
-                Text(account.email)
+                // "a@b.com (2)" — how many devices are on this account right
+                // now, so a quota burning twice as fast has a visible cause.
+                // Middle truncation keeps the count even on a long address.
+                Text(presence.label(for: account))
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(devicesHelp)
                 Spacer(minLength: 8)
                 if account.active {
                     Text("ACTIVE")

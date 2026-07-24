@@ -104,6 +104,10 @@ class Account:
     ok: bool = True       # usageStatus == "ok" and usage data present
     status: str = "ok"    # raw cswap usageStatus (see STATE_TEXT)
     metrics: list = field(default_factory=list)
+    # How many devices currently have THIS account as their live slot —
+    # stamped by core/presence.apply_counts, 0 when nobody is on it or the
+    # other devices could not be seen. cswap never reports it.
+    devices: int = 0
 
 
 @dataclass
@@ -263,18 +267,35 @@ def metrics_text(account) -> str:
     return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
 
 
+def account_label(account) -> str:
+    """The address, plus how many devices are on it: "a@b.com (2)".
+
+    Every UI names an account through here so the badge appears in all of
+    them at once (mirrored by PresenceCounts.label in Swift). A count of 0
+    prints nothing: an absent badge reads as "nobody is on it", whereas
+    "(0)" on four idle cards is noise that also lies whenever the other
+    devices simply could not be reached — see core/presence.py.
+
+    Appending rather than prefixing is deliberate: both the cairo painter
+    and SwiftUI truncate a long address in the MIDDLE, so the count
+    survives even on a card too narrow to show the address itself.
+    """
+    count = getattr(account, "devices", 0) or 0
+    return f"{account.email} ({count})" if count > 0 else account.email
+
+
 def title_line(account) -> str:
     if account is None:
         return "AI smartbar — no active account"
     if not account.metrics:
-        return f"{account.email} — {state_text(account) or 'no usage data'}"
-    return f"{account.email} — {metrics_text(account)} used"
+        return f"{account_label(account)} — {state_text(account) or 'no usage data'}"
+    return f"{account_label(account)} — {metrics_text(account)} used"
 
 
 def menu_row(account) -> str:
     dot = "●" if account.active else "○"
     body = metrics_text(account) if account.metrics else (state_text(account) or "no data")
-    return f"{dot} {account.number} {account.email}   {body}"
+    return f"{dot} {account.number} {account_label(account)}   {body}"
 
 
 def icon_text(account) -> str:

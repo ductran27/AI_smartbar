@@ -63,6 +63,10 @@ The panel — identical on macOS and Linux:
   v2), and identical snapshots skip all UI work. Tracks `/usage` within
   claude-swap's per-account poll plan without ever exceeding the usage
   API's per-token request budget (see [Data freshness](#data-freshness)).
+- **Device count per account.** `syu3cs@virginia.edu (2)` means two of your
+  devices have that account active right now — and are therefore spending
+  the same 5-hour and weekly budget. No badge means nobody else is on it.
+  See [Device presence](#device-presence-the-n-next-to-an-address).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
   re-arms when the window resets.
@@ -167,6 +171,65 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 | `SMARTBAR_UPDATE_CHANNEL` | `release` | `release` tracks the newest `vX.Y.Z` tag; `main` follows `origin/main` fast-forward-only |
 | `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between update checks (floor 300) |
 | `SMARTBAR_UPDATE_NOTIFY` | – | `off` silences the updated/failed notifications |
+| `SMARTBAR_PRESENCE` | on | `off` stops this device publishing or counting devices |
+| `SMARTBAR_PRESENCE_INTERVAL` | `300` | Seconds between presence heartbeats (floor 60) |
+| `SMARTBAR_PRESENCE_TTL` | 3 × interval | How long a silent device still counts (floor 2 × interval) |
+| `SMARTBAR_PRESENCE_LABEL` | hostname | Name this device shows in `--presence-status` |
+
+## Device presence: the `(N)` next to an address
+
+`syu3cs@virginia.edu (2)` means **two of your devices have that account
+active right now**, so they are spending the same 5-hour and weekly budget.
+That is usually the answer to "why is this window burning so fast?". No
+badge means nobody else is on that account — the badge never shows `(0)`.
+
+Exactly one account is active per device, so the badges across all cards
+add up to your number of live devices. That is the quickest way to check
+the number is right.
+
+`ai-smartbar --presence-status` names them:
+
+```
+device    13ceb7630470 "ducs-mac"
+remote    readable
+publish   ok
+cadence   beat 300s, counted for 900s after the last beat
+
+counts    syu3cs@virginia.edu (2)
+
+live devices:
+  ducs-mac                 syu3cs@virginia.edu                this device
+  linux-box                syu3cs@virginia.edu                42s ago
+```
+
+**How devices find each other.** They share no server, and a count that
+only works on one network would be wrong exactly when it matters (a laptop
+elsewhere). The one authenticated channel every device already has is this
+repo, so each one parks a single ref under `refs/smartbar/` every 5
+minutes:
+
+```
+refs/smartbar/p1/<device>/<label>/<epoch>/<sha256 of the address>
+```
+
+It points at a commit the remote already has, so **nothing is ever
+committed and no objects are transferred** — no branch, no tag, no
+history, invisible in GitHub's UI, and untouched by clones, fetches and
+`install/release.sh`. Addresses never leave the machine; only a hash does.
+
+**What it can and cannot see.** Only devices running AI smartbar. A machine
+using the same Claude account without this app is invisible, and always
+will be — there is no Anthropic API that reports sessions.
+
+**Accuracy.** A device stops counting 15 minutes after its last heartbeat,
+or immediately when you quit the app. Clock disagreement between machines
+cannot hide a device: a beacon that looks expired still counts while we
+have watched its ref change on our own clock. If the remote cannot be
+reached at all, the last good answer stands briefly and then every badge
+disappears — the app will not claim `(1)` when it cannot see the others.
+
+`SMARTBAR_PRESENCE=off` opts a device out completely: it publishes nothing
+and shows no counts.
 
 ## The Linux panel
 

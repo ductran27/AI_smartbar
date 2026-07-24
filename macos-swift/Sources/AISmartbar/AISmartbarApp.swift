@@ -15,6 +15,7 @@ struct AISmartbarApp: App {
             PopoverView()
                 .environmentObject(store)
                 .environmentObject(updates)
+                .environmentObject(store.presence)
         } label: {
             // A waiting release badges the icon itself, so a device announces
             // an update without the user opening anything.

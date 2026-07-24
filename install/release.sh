@@ -90,6 +90,9 @@ run_suite() {
 echo "Running tests…"
 run_suite "unit tests" python3 -m unittest discover -s tests
 run_suite "e2e-update" "$REPO/tests/e2e-update.sh"
+# Always: presence is the only feature that writes to a REMOTE on a timer,
+# so a release must never ship it broken. Uses a throwaway bare repo.
+run_suite "e2e-presence" "$REPO/tests/e2e-presence.sh"
 if [[ "$FULL" == "1" ]]; then
   run_suite "e2e-warmup" "$REPO/tests/e2e-warmup.sh"
   run_suite "e2e-autoadd" "$REPO/tests/e2e-autoadd.sh"

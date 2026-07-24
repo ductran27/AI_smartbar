@@ -19,7 +19,11 @@ DEFAULT_PATH = os.path.join(CACHE_DIR, "popover-preview.png")
 
 
 def demo_snapshot():
-    """One of every card state: spent, active, near-limit, dead credential."""
+    """One of every card state: spent, active, near-limit, dead credential.
+
+    The active card also carries a device count, since "(2)" next to an
+    address is only reviewable if the preview actually draws one.
+    """
     def rows(five, seven, fable):
         return [model.Metric(key="5h", label="5h", short="5h", pct=five,
                              countdown="1h 38m"),
@@ -31,7 +35,7 @@ def demo_snapshot():
         model.Account(number=1, email="ios8build@gmail.com",
                       metrics=rows(0.0, 79.0, 100.0)),
         model.Account(number=2, email="syu3cs@virginia.edu", active=True,
-                      metrics=rows(49.0, 10.0, 0.0)),
+                      metrics=rows(49.0, 10.0, 0.0), devices=2),
         model.Account(number=3, email="duc.dut.wr@gmail.com",
                       metrics=rows(3.0, 93.0, 89.0)),
         model.Account(number=4, email="an.old.account@gmail.com", ok=False,

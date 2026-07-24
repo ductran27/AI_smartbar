@@ -21,8 +21,8 @@ import time
 from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
-from smartbar import __version__
-from smartbar.core import cswap, model, popover_layout
+from smartbar import __version__, presence_client
+from smartbar.core import cswap, model, popover_layout, presence
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
 from smartbar.linux.tray_icon import render_pills
@@ -52,6 +52,7 @@ class Tray:
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         self.last_error = ""
         self.update_blocked = ""
+        self.presence_started = False  # first beat waits for the first fetch
         self.open_item = None
         self.update_pending = self._pending_update()  # "" or "X.Y.Z"
         self.pinned = model.panel_pinned()
@@ -97,7 +98,7 @@ class Tray:
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel."""
         if name == "quit":
-            Gtk.main_quit()
+            self._quit()
             return
         if name == "refresh":
             self._start_fetch()
@@ -274,8 +275,13 @@ class Tray:
         except OSError:
             log.exception("could not open terminal")
 
-    def _on_quit(self, _item):
+    def _quit(self):
+        """Deliberate quit: stop being counted before going away."""
+        presence_client.leave()
         Gtk.main_quit()
+
+    def _on_quit(self, _item):
+        self._quit()
 
     def _start_fetch(self):
         self.generation += 1
@@ -298,6 +304,15 @@ class Tray:
         self.failures = 0
         self.last_error = ""
         self.snapshot = snap
+        # Stamp the device counts before anything renders: the menu rows and
+        # the panel both name accounts through model.account_label.
+        presence.apply_counts(snap, presence_client.counts())
+        if not self.presence_started:
+            # First real snapshot: announce this device now rather than
+            # after a whole interval, and do it with accounts already in
+            # hand so the beat costs no cswap call.
+            self.presence_started = True
+            presence_client.beat(snap)
         if snap.schema_warning:
             log.warning("%s", snap.schema_warning)
         account = snap.active_account
@@ -353,6 +368,11 @@ class Tray:
         self._start_fetch()
         return True
 
+    def _presence_tick(self):
+        """Re-announce this device; the counts land on the next poll."""
+        presence_client.beat(self.snapshot)
+        return True
+
 
 def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -368,4 +388,6 @@ def main():
     tray = Tray()
     tray._start_fetch()
     GLib.timeout_add_seconds(tray.interval, tray._tick)
+    if presence.enabled():
+        GLib.timeout_add_seconds(int(presence.interval()), tray._presence_tick)
     Gtk.main()

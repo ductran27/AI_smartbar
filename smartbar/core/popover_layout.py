@@ -131,7 +131,8 @@ def _card(shapes, hits, account, top, now, hover):
                             head_cy, "Make Active", hover=hover,
                             enabled=not model.switch_blocked(account))
 
-    shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy, account.email,
+    shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
+                          model.account_label(account),
                           size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
                           max_width=control_l - 8 - (inner_l + t.DOT_R * 2 + 7)))
 

@@ -10,7 +10,8 @@ import time
 
 import rumps
 
-from smartbar.core import cswap, model
+from smartbar import presence_client
+from smartbar.core import cswap, model, presence
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
 
@@ -22,13 +23,21 @@ class SmartBarApp(rumps.App):
         self.snapshot = None
         self.failures = 0
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
+        self.presence_started = False  # first beat waits for the first fetch
         # 60s harvests cswap's poll plans as they come due; no extra API
         # traffic (the store paces the network).
         interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
         self._rebuild_menu()
         self.timer = rumps.Timer(self._tick, interval)
         self.timer.start()
+        if presence.enabled():
+            self.presence_timer = rumps.Timer(self._presence_tick,
+                                              int(presence.interval()))
+            self.presence_timer.start()
         self._tick(None)
+
+    def _presence_tick(self, _sender):
+        presence_client.beat(self.snapshot)
 
     def _tick(self, _sender):
         threading.Thread(target=self._fetch, daemon=True).start()
@@ -43,6 +52,12 @@ class SmartBarApp(rumps.App):
             return
         self.failures = 0
         self.snapshot = snap
+        # Device counts ride along in model.account_label, so the menu rows
+        # pick them up with no further work here.
+        presence.apply_counts(snap, presence_client.counts())
+        if not self.presence_started:
+            self.presence_started = True
+            presence_client.beat(snap)
         self.title = model.macos_title(snap.active_account)
         self._rebuild_menu()
         for alert in self.alerts.check(snap):
@@ -85,7 +100,7 @@ class SmartBarApp(rumps.App):
                                         callback=self._on_update))
         items.append(rumps.MenuItem("⟳ Refresh now", callback=self._tick))
         items.append(rumps.MenuItem("⚙ Open cswap TUI", callback=self._open_tui))
-        items.append(rumps.MenuItem("⏻ Quit", callback=lambda _s: rumps.quit_application()))
+        items.append(rumps.MenuItem("⏻ Quit", callback=self._on_quit))
         self.menu = items
 
     def _pending_update(self) -> str:
@@ -118,6 +133,11 @@ class SmartBarApp(rumps.App):
                 self._tick(None)
             threading.Thread(target=run, daemon=True).start()
         return callback
+
+    def _on_quit(self, _sender):
+        """Deliberate quit: stop being counted before going away."""
+        presence_client.leave()
+        rumps.quit_application()
 
     def _open_tui(self, _sender):
         subprocess.Popen(["osascript", "-e",

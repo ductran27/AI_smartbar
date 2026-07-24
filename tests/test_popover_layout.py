@@ -127,6 +127,28 @@ class TestCardContent(unittest.TestCase):
         built = layout.build(snap(account(number=4, active=True)), now=NOW)
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
 
+    def test_the_device_count_rides_on_the_address(self):
+        card = account(email="a@example.com")
+        card.devices = 2
+        self.assertIn("a@example.com (2)",
+                      labels(layout.build(snap(card), now=NOW)))
+
+    def test_no_badge_when_nobody_else_is_on_the_account(self):
+        self.assertIn("a@example.com", labels(layout.build(snap(account()),
+                                                           now=NOW)))
+
+    def test_the_count_cannot_run_into_the_active_chip(self):
+        # The address is given a max_width so the painter truncates it; that
+        # budget has to shrink to clear the chip, or a long address would be
+        # drawn straight through it.
+        card = account(email="a" * 60 + "@example.com", active=True)
+        card.devices = 3
+        built = layout.build(snap(card), now=NOW)
+        address = next(s for s in built.shapes
+                       if isinstance(s, t.Label) and s.text.startswith("aaa"))
+        chip = next(s for s in boxes(built) if s.fill == t.status_rgba("green"))
+        self.assertLessEqual(address.x + address.max_width, chip.x)
+
     def test_metric_rows_render_used_percent_and_countdown(self):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(

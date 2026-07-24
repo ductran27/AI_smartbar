@@ -52,6 +52,15 @@ def main() -> int:
                              "rescue ref first) and re-install from scratch")
     parser.add_argument("--force", action="store_true",
                         help="with --update: re-apply even when already current")
+    parser.add_argument("--presence-beat", action="store_true",
+                        help="announce this device and refresh the per-account "
+                             "device counts (the UIs run this on a timer)")
+    parser.add_argument("--presence-leave", action="store_true",
+                        help="withdraw this device so the others stop "
+                             "counting it right away")
+    parser.add_argument("--presence-status", action="store_true",
+                        help="name the devices behind the counts, and say "
+                             "whether this one is visible to them")
     parser.add_argument("--version", action="version",
                         version=f"ai-smartbar {__version__}")
     args = parser.parse_args()
@@ -68,6 +77,10 @@ def main() -> int:
         from smartbar.update_runner import run_once as update_once
         return update_once(reset=args.reset, force=args.force,
                            check_only=args.check_update and not args.update)
+    if args.presence_beat or args.presence_leave or args.presence_status:
+        from smartbar.presence_runner import run_once as presence_once
+        return presence_once(leave=args.presence_leave,
+                             report=args.presence_status)
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     else:

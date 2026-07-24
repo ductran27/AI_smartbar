@@ -69,6 +69,13 @@ cat > "$PLIST" <<EOF
   <key>Label</key><string>com.ductran.ai-smartbar</string>
   <key>ProgramArguments</key>
   <array><string>$APP_DIR/Contents/MacOS/AISmartbar</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- The bundle is a COPY in ~/Applications and cannot find the checkout
+         on its own; device presence needs bin/ai-smartbar to announce this
+         Mac to the other devices. -->
+    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/ai-smartbar.log</string>
 </dict>
