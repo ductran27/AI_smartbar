@@ -8,14 +8,21 @@ account switching. A cross-platform companion for
 Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills, fill =
                                              % used, each its own color)
 
-macOS popover:                     Linux click menu:
- AI smartbar  Updated 9:56 PM ⟳⏻    ● 1 ios8build@gmail.com  5h 45% · 7d 24% · F 34%
- ┌─────────────────────[white]┐    ○ 2 other@account   5h 62% · 7d 40% · F 71%  ← switch
- │ ● ios8build@…      ACTIVE  │    ─────────────────────────
- │ 5h    █████─────  45%·2h43m │    ⟳ Refresh now
- │ 7d    ██────────  24%·6d14h │    ⚙ Open cswap TUI
- │ Fable ███───────  34%·6d14h │    ⏻ Quit
- └─────────────────────────────┘
+The panel — identical on macOS and Linux:
+
+ AI smartbar  Updated 9:56 PM        ⟳ ⏻
+ ┌──────────────────────────────────────┐
+ │ ● ios8build@gmail.com   [Make Active]│
+ │ 5h    ████──────────      45% · 2h43m│
+ │ 7d    ██───────────       24% · 6d14h│
+ │ Fable ███──────────       34% · 6d14h│
+ └──────────────────────────────────────┘
+ ╔═════════════════════════════[white]══╗
+ ║ ● other@account              [ACTIVE]║
+ ║ 5h    ██████████──        62% · 1h02m║
+ ╚══════════════════════════════════════╝
+   v0.3.1                [Update to 0.4.0]
+
  (numbers are % USED — the /usage scale; active card outlined white;
   dark-only UI)
 ```
@@ -74,8 +81,13 @@ macOS popover:                     Linux click menu:
   applies it immediately. Rolls itself back if a release fails to build, and
   never touches a checkout with uncommitted work — see
   [Updating](#updating-and-releases).
-- **Linux tray.** The same twin-pill badge and a click menu via
-  AppIndicator + cairo, rendered from the same unit-tested core.
+- **The same panel on Linux.** Cards, filling bars, the ACTIVE chip and the
+  upgrade button — not a stripped-down menu. Geometry and wording come from
+  one unit-tested layout in `smartbar/core/`, and the Linux side paints it
+  with cairo rather than GTK widgets, so it looks the same on XFCE, GNOME
+  and KDE instead of inheriting each distro's theme. `⟳ Open AI smartbar`
+  in the tray menu (or middle-click the icon) opens it — see
+  [Linux panel](#the-linux-panel).
 - **Hands off your credentials.** The bar reads `cswap list --json`,
   switches via `cswap switch`, registers/re-captures via `cswap add`,
   and warms via `cswap run` + the official claude CLI. It never touches
@@ -154,6 +166,44 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 | `SMARTBAR_UPDATE_CHANNEL` | `release` | `release` tracks the newest `vX.Y.Z` tag; `main` follows `origin/main` fast-forward-only |
 | `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between update checks (floor 300) |
 | `SMARTBAR_UPDATE_NOTIFY` | – | `off` silences the updated/failed notifications |
+
+## The Linux panel
+
+The Linux UI is the same panel as the macOS popover, not a reduced menu.
+Open it with **⟳ Open AI smartbar** in the tray menu, or **middle-click**
+the tray icon.
+
+**Why a window and not a nicer menu.** An AppIndicator menu is serialised to
+the panel process over DBus as *dbusmenu*, which carries labels, icons,
+checkmarks and separators — nothing else. `Gtk.MenuItem.add(widget)` works
+in-process and is silently dropped in transit, so cards, filled bars and the
+ACTIVE chip cannot exist inside a tray menu at any level of effort. Hence a
+real window. StatusNotifier also gives no left-click callback (left-click
+always shows the menu), which is why opening it takes the menu row or a
+middle-click.
+
+**Why it is painted, not built from widgets.** Every pixel comes from cairo,
+driven by `smartbar/core/popover_layout.py` — the same geometry the SwiftUI
+popover uses. Nothing is themed, so it looks identical on XFCE, GNOME and
+KDE, and the layout (including where each click lands) is a pure function
+with unit tests. The trade-off is no native keyboard navigation or
+screen-reader support in the panel; the tray menu remains fully native.
+
+**Look at it without a Linux box:**
+
+```bash
+ai-smartbar --preview-popover out.png          # your real accounts
+ai-smartbar --preview-popover out.png --demo   # every card state, no cswap needed
+```
+
+Needs `pycairo` only — it never imports GTK, so this works on macOS too and
+is how the panel is reviewed during development.
+
+Notes: cards are a solid dark fill rather than macOS's translucent material
+(cairo has no portable blur); under Wayland the compositor places the window
+because clients cannot position themselves, while on X11 it appears next to
+the pointer. If the window cannot be created at all, the tray menu falls
+back to the old text rows so nothing is lost.
 
 ## Updating and releases
 
@@ -357,7 +407,8 @@ tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 169 tests, no external deps
+python3 -m unittest discover -s tests -v   # 205 tests, no external deps
+                                           # (8 painter tests need pycairo)
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
 ./tests/e2e-update.sh                      # self-update against a throwaway origin
@@ -369,7 +420,11 @@ rollback → brake. It never touches the real repo, the real LaunchAgents or
 the real `$HOME`, which is what makes it the safety net for devices that
 cannot be tested by hand.
 
-Layout: `smartbar/core/` holds all logic and formatting (unit-tested,
-Python 3.9+); `smartbar/linux/tray.py`, `smartbar/macos/menubar.py` and
-the Swift app (`macos-swift/`, a 1:1 mirror of core) only render what
-core produces. Design docs live in `docs/superpowers/`.
+Layout: `smartbar/core/` holds all logic, formatting and now the popover
+geometry (`popover_theme.py` + `popover_layout.py`, unit-tested, Python
+3.9+); `smartbar/linux/` paints it with cairo (`popover_draw.py`,
+`tray_icon.py` — both GTK-free and therefore renderable anywhere) and hosts
+it in GTK (`popover_window.py`, `tray.py`); the Swift app (`macos-swift/`)
+mirrors core 1:1. `smartbar/macos/menubar.py` is the legacy rumps fallback
+for Macs that cannot build the Swift app — it keeps the simple text menu and
+is not part of the panel work. Design docs live in `docs/superpowers/`.
