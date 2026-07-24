@@ -54,6 +54,7 @@ class Tray:
         self.update_blocked = ""
         self.open_item = None
         self.update_pending = self._pending_update()  # "" or "X.Y.Z"
+        self.pinned = model.panel_pinned()
         self.popover = self._make_popover()
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
@@ -63,6 +64,10 @@ class Tray:
         self._set_icon([])  # hollow "?" pills until the first fetch lands
         self._install_menu(self._build_menu())
         self._init_notify()
+        if self.pinned and self.popover is not None:
+            # Up before the first fetch lands: the panel renders its own
+            # loading/error state and refreshes in place once data arrives.
+            self.popover.show_panel()
 
     def _make_popover(self):
         """The card panel, or None if this session cannot host a window.
@@ -72,7 +77,8 @@ class Tray:
         """
         try:
             from smartbar.linux.popover_window import Popover
-            return Popover(self._popover_layout, self._on_popover_action)
+            return Popover(self._popover_layout, self._on_popover_action,
+                           pinned=self.pinned)
         except Exception:
             log.exception("popover unavailable; falling back to a text menu")
             return None

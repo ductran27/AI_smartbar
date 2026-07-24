@@ -44,6 +44,39 @@ def bars(built):
     return [b for b in boxes(built) if abs(b.h - t.BAR_H) < 0.01]
 
 
+class TestPinOrigin(unittest.TestCase):
+    """Where a pinned panel parks. Geometry only — no GTK involved."""
+
+    def test_single_monitor_top_right_inside_the_workarea(self):
+        # 1920x1053 usable below a 27px top panel
+        self.assertEqual(layout.pin_origin([(0, 27, 1920, 1053)], (330, 181), 12),
+                         (1920 - 330 - 12, 27 + 12))
+
+    def test_ignores_a_smaller_primary_dummy_plug(self):
+        # The real regression: a 1920x1080 headless dummy stacked at the same
+        # origin as the 2560x1440 display the user actually looks at. Anchoring
+        # to the dummy would park the panel mid-screen.
+        dummy = (0, 27, 1920, 1053)
+        real = (0, 0, 2560, 1440)
+        x, y = layout.pin_origin([dummy, real], (330, 181), 12)
+        self.assertEqual(x, 2560 - 330 - 12)   # right edge of the REAL screen
+        self.assertEqual(y, 27 + 12)           # still clears the dummy's panel
+
+    def test_order_does_not_matter(self):
+        a, b = (0, 27, 1920, 1053), (0, 0, 2560, 1440)
+        self.assertEqual(layout.pin_origin([a, b], (330, 181), 12),
+                         layout.pin_origin([b, a], (330, 181), 12))
+
+    def test_offset_monitor_keeps_its_own_x(self):
+        left, right = (0, 24, 1280, 1000), (1280, 24, 2560, 1416)
+        x, _y = layout.pin_origin([left, right], (330, 181), 12)
+        self.assertEqual(x, 1280 + 2560 - 330 - 12)
+
+    def test_no_usable_workarea_returns_none(self):
+        self.assertIsNone(layout.pin_origin([], (330, 181), 12))
+        self.assertIsNone(layout.pin_origin([(0, 0, 0, 0)], (330, 181), 12))
+
+
 class TestStructure(unittest.TestCase):
     def test_width_is_the_shared_design_width(self):
         built = layout.build(snap(account()), now=NOW)

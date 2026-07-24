@@ -151,6 +151,7 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 |---|---|---|
 | `SMARTBAR_INTERVAL` | `60` | Poll period in seconds while near a limit / recovering |
 | `SMARTBAR_INTERVAL_IDLE` | `180` | Relaxed poll period when nothing is near a limit (macOS Swift app) |
+| `SMARTBAR_PANEL` | popover | `always` keeps the Linux panel on screen permanently instead of opening on demand |
 | `SMARTBAR_AUTO_ADD` | on | Auto-run `cswap add` when the current login isn't registered (`off` disables all adds) |
 | `SMARTBAR_RECAPTURE` | on | Periodic re-capture + dead-slot healing via `cswap add` (`off` disables; registration still works) |
 | `SMARTBAR_YELLOW` | `50` | Yellow at or above this % **used** |
@@ -171,16 +172,41 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 
 The Linux UI is the same panel as the macOS popover, not a reduced menu.
 Open it with **⟳ Open AI smartbar** in the tray menu, or **middle-click**
-the tray icon.
+the tray icon. Hovering the icon shows the same numbers as a tooltip.
+
+**Or keep it up permanently.** `SMARTBAR_PANEL=always` turns the panel into a
+desktop readout instead of a popover: shown at startup, never auto-hidden,
+anchored to the top-right of the work area, on every workspace, and never
+taking keyboard focus so it cannot steal typing from the app underneath. The
+tray icon and its menu stay exactly as they are. This is the zero-gesture
+option for hosts where a click cannot reach the app at all (see below).
+
+A pin is a `DOCK` window, and it anchors to the roomiest monitor rather than
+the "primary" one. Both are deliberate. Desktops that must keep a GPU output
+alive often run a small headless dummy plug, and that dummy usually wins
+`primary` while sitting stacked on top of the display you actually use — so
+"top-right of primary" lands mid-screen, and xfwm4 additionally clamps an
+ordinary window to that dummy's width (measured: a move to x=2218 landed at
+1891). `DOCK` is exempt from that clamp. `pin_origin()` in
+`smartbar/core/popover_layout.py` is the pure, unit-tested geometry.
 
 **Why a window and not a nicer menu.** An AppIndicator menu is serialised to
 the panel process over DBus as *dbusmenu*, which carries labels, icons,
 checkmarks and separators — nothing else. `Gtk.MenuItem.add(widget)` works
 in-process and is silently dropped in transit, so cards, filled bars and the
 ACTIVE chip cannot exist inside a tray menu at any level of effort. Hence a
-real window. StatusNotifier also gives no left-click callback (left-click
-always shows the menu), which is why opening it takes the menu row or a
-middle-click.
+real window.
+
+**Why left-click cannot open it.** StatusNotifier gives no left-click
+callback, and on some hosts there is nothing to hook even in principle:
+xfce4-panel 4.20's systray plugin implements exactly `AttentionIconName,
+IconThemePath, ItemIsMenu, OverlayIconName, Scroll, SecondaryActivate,
+Status, Title, ToolTip` — no `Activate` and no `ContextMenu` anywhere in the
+library. Left-click there always opens the dbusmenu, and no amount of
+app-side work changes that, including hand-writing the StatusNotifierItem
+instead of using libayatana-appindicator: the host simply never sends the
+event. `SecondaryActivate` *is* implemented, which is why middle-click works,
+and `SMARTBAR_PANEL=always` is the answer when even one gesture is too many.
 
 **Why it is painted, not built from widgets.** Every pixel comes from cairo,
 driven by `smartbar/core/popover_layout.py` — the same geometry the SwiftUI

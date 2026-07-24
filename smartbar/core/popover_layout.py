@@ -21,6 +21,30 @@ NO_ACCOUNTS = ("No accounts yet — sign in to Claude Code and it will be "
 UNREGISTERED = "Current login isn't registered — adding it automatically"
 
 
+def pin_origin(workareas, size, margin):
+    """Top-right corner for a pinned panel, given every monitor's work area.
+
+    `workareas` is a list of (x, y, width, height); `size` is (width, height).
+
+    Deliberately NOT the "primary" monitor. A headless dummy plug — routine on
+    desktops that must keep a GPU output alive — often claims primary while
+    being smaller than, and stacked on top of, the display the user actually
+    looks at; anchoring to it parks a permanent readout in the middle of the
+    visible screen. The roomiest work area is the real one. `y` then clears
+    the tallest top panel across all monitors, because a monitor that hosts no
+    panel reports no strut for one that overlaps it.
+
+    Returns (x, y), or None when there are no work areas to place against.
+    """
+    areas = [a for a in workareas if a and a[2] > 0 and a[3] > 0]
+    if not areas:
+        return None
+    x0, _y0, width, _height = max(areas, key=lambda a: a[2] * a[3])
+    top = max(a[1] for a in areas)
+    panel_w, _panel_h = size
+    return (x0 + width - panel_w - margin, top + margin)
+
+
 def updated_label(fetched_at: str, now=None) -> str:
     """"Updated 2:02 PM" from an ISO stamp, or "" — mirrors the Swift header."""
     stamp = parse_iso(fetched_at)

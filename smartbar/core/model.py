@@ -71,6 +71,19 @@ def red_threshold() -> float:
     return _threshold("SMARTBAR_RED", DEFAULT_RED_USED)
 
 
+def panel_pinned() -> bool:
+    """True when the panel should stay on screen instead of popping over.
+
+    `SMARTBAR_PANEL=always` turns the Linux panel into a permanent desktop
+    readout: shown at startup, never auto-hidden, anchored to a corner. It
+    exists because StatusNotifier hosts vary in what a click can do — XFCE's
+    systray, for one, implements no `Activate` method at all, so left-click
+    can never be routed to the app and the panel would otherwise always cost
+    a gesture. Anything else (unset, "popover") keeps the popover behaviour.
+    """
+    return os.environ.get("SMARTBAR_PANEL", "").strip().lower() == "always"
+
+
 @dataclass
 class Metric:
     key: str            # "5h", "7d", or "scoped:<Name>"

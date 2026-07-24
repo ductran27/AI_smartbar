@@ -28,7 +28,7 @@ def account(number=1, email="a@x.com", active=True, ok=True, status="ok",
 class Env(unittest.TestCase):
     def setUp(self):
         for var in ("SMARTBAR_YELLOW", "SMARTBAR_LOW", "SMARTBAR_RED",
-                    "SMARTBAR_TEST_THRESHOLD"):
+                    "SMARTBAR_TEST_THRESHOLD", "SMARTBAR_PANEL"):
             os.environ.pop(var, None)
 
     tearDown = setUp
@@ -71,6 +71,25 @@ class TestColor(Env):
         os.environ["SMARTBAR_TEST_THRESHOLD"] = "10"
         self.assertEqual(model.color(10), "critical")  # 10 used >= 10 (red wins)
         self.assertEqual(model.color(9.9), "green")
+
+
+class TestPanelPinned(Env):
+    def test_popover_is_the_default(self):
+        self.assertFalse(model.panel_pinned())
+
+    def test_always_pins_the_panel(self):
+        os.environ["SMARTBAR_PANEL"] = "always"
+        self.assertTrue(model.panel_pinned())
+
+    def test_case_and_whitespace_tolerated(self):
+        for value in ("Always", "ALWAYS", "  always  "):
+            os.environ["SMARTBAR_PANEL"] = value
+            self.assertTrue(model.panel_pinned(), value)
+
+    def test_anything_else_stays_a_popover(self):
+        for value in ("", "popover", "0", "off", "true", "yes"):
+            os.environ["SMARTBAR_PANEL"] = value
+            self.assertFalse(model.panel_pinned(), value)
 
 
 class TestBestSwitch(Env):
