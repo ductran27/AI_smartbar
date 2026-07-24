@@ -66,6 +66,12 @@ macOS popover:                     Linux click menu:
 - **Auto window-starter (opt-in).** Keeps every registered account's
   5-hour window running so budget resets come as early as possible — see
   [below](#auto-window-starter-warmup-opt-in).
+- **Self-updating (on by default).** Every device checks for a new release
+  at login and every 6 hours, then rebuilds, re-installs its agents and
+  restarts itself — or you click **Update to vX.Y.Z** in the popover and it
+  happens now. Rolls itself back if a release fails to build, and never
+  touches a checkout with uncommitted work — see
+  [Updating](#updating-and-releases).
 - **Linux tray.** The same twin-pill badge and a click menu via
   AppIndicator + cairo, rendered from the same unit-tested core.
 - **Hands off your credentials.** The bar reads `cswap list --json`,
@@ -88,7 +94,7 @@ macOS popover:                     Linux click menu:
 ## Install
 
 ```bash
-git clone git@github.com:ductran27/AI_smartbar.git ~/tools/AI_smartbar
+git clone https://github.com/ductran27/AI_smartbar ~/tools/AI_smartbar
 cd ~/tools/AI_smartbar
 
 # Linux (installs ~/.local/bin/ai-smartbar + autostart, starts it):
@@ -101,10 +107,24 @@ cd ~/tools/AI_smartbar
 ./install/macos.sh
 ```
 
+The checkout stays live — it is what the app runs from and what the updater
+fast-forwards, so put it somewhere permanent.
+
 Both macOS installers share the `com.ductran.ai-smartbar` LaunchAgent
 label — installing one replaces the other at login (single instance).
 Uninstall with `./install/linux.sh --uninstall` /
 `./install/macos.sh --uninstall`.
+
+Every installer also turns on [self-updating](#updating-and-releases).
+Add `--no-auto-update` to opt a device out, or `--channel main` to follow
+`origin/main` instead of releases (what a development checkout wants).
+
+> **Private-repo devices:** the updater runs from launchd/systemd where
+> nobody can type a password, so each device needs a working
+> non-interactive credential *before* it can update itself:
+> `gh auth login && gh auth setup-git` (HTTPS, token → keychain) or an SSH
+> key with an `git@github.com:` remote. The installer probes this and
+> refuses loudly rather than letting updates fail silently forever.
 
 > **Status:** the native macOS app is live-verified (2026-07-22: v3
 > %-used UI, re-login card + blocked switch, re-capture, warmup agent
@@ -128,6 +148,75 @@ Uninstall with `./install/linux.sh --uninstall` /
 | `SMARTBAR_CLAUDE` | – | Path override for the claude CLI (warmup) |
 | `SMARTBAR_WARMUP_DAILY_CAP` | `6` | Max warmup pings per account per day |
 | `SMARTBAR_WARMUP_QUIET` | – | Warmup quiet hours, e.g. `23-05` (wraps) |
+| `SMARTBAR_UPDATE` | on | `off` disables self-updating entirely on this device |
+| `SMARTBAR_UPDATE_CHANNEL` | `release` | `release` tracks the newest `vX.Y.Z` tag; `main` follows `origin/main` fast-forward-only |
+| `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between update checks (floor 300) |
+| `SMARTBAR_UPDATE_NOTIFY` | – | `off` silences the updated/failed notifications |
+
+## Updating and releases
+
+Every device self-updates. A LaunchAgent (macOS) or systemd user timer
+(Linux, cron fallback) runs `ai-smartbar --update` **at login and every 6
+hours**; the popover's **Update to vX.Y.Z** button runs the same pass
+immediately.
+
+**What a pass does.** Fetch tags → pick the target for this device's
+channel → check it out → **re-run whichever installers this device has** →
+verify → notify. Re-running the real installers *is* the apply step, so a
+device rebuilds the Swift binary, rewrites its LaunchAgent/systemd units
+and restarts itself with one code path. (This is also why the warmup agent
+no longer needs a manual re-install after an update: its plist gets
+rewritten too.)
+
+**Channels.**
+
+| channel | target | checkout | for |
+|---|---|---|---|
+| `release` (default) | newest `vX.Y.Z` tag | detached at the tag | ordinary devices — HEAD names the release it runs |
+| `main` | `origin/main` | fast-forward only | a development checkout |
+
+```bash
+ai-smartbar --check-update     # report only; exit 10 when a release is waiting
+ai-smartbar --update           # apply it now
+ai-smartbar --update --force   # re-apply the current target (repair a botched install)
+ai-smartbar --update --reset   # discard local drift and re-install from scratch
+./install/macos-update.sh --channel main   # change channel / re-probe credentials
+./install/macos-update.sh --uninstall      # this device stops self-updating
+```
+
+**It will not eat your work.** An update is refused (and the popover shows
+a pause marker with the reason) when the checkout has uncommitted changes
+to tracked files or unpushed commits. `--reset` is the only flag that
+overrides that, and even then local changes are parked in a rescue ref
+first — recover with `git stash apply refs/smartbar-rescue/<stamp>`. A
+device is never walked backwards to an older release either.
+
+**A bad release cannot brick a device.** The app bundle is backed up before
+the rebuild; if the build, the install or the post-install verification
+fails, the checkout and the binary are restored and the old app is
+restarted, and the failure is counted — after 3 failed attempts against the
+same ref in a day the device stops retrying it (`--force` overrides). Every
+pass is logged to `~/.cache/ai-smartbar/update.log`.
+
+**Cutting a release** (from the development checkout, on `main`, clean and
+synced):
+
+```bash
+./install/release.sh patch      # or minor / major / 1.2.3
+```
+
+That bumps the one canonical version (`smartbar/__init__.py`), propagates
+it into `Version.swift` and the app bundle's `Info.plist`, runs the unit
+suite plus `tests/e2e-update.sh`, then commits, tags `vX.Y.Z` and pushes.
+`--no-push` stops before pushing, `--full` also runs the slow e2e suites,
+`--gh` additionally creates a GitHub release. Devices on the release
+channel converge within 6 hours, or instantly from the popover button.
+
+**Bootstrapping a device.** A device running code from before this feature
+has no updater, so its first update is manual — `git pull` then re-run its
+installer. After that it maintains itself. Registration, slot numbers,
+aliases, the active account and warmup state stay per machine (see below);
+only code is shared.
 
 ## Credential lifecycle (re-capture & healing)
 
@@ -196,9 +285,9 @@ machine. No credentials are touched: account context comes from
 
 > **launchd PATH note:** agents get a bare PATH, and cswap resolves the
 > claude CLI via `which`. The runner hardens its subprocess PATH and the
-> installer bakes the usual bin dirs into the LaunchAgent — re-run
-> `./install/macos-warmup.sh` after updating to pick this up (this fixed
-> warmup silently never firing in v2).
+> installer bakes the usual bin dirs into the LaunchAgent (this fixed warmup
+> silently never firing in v2). Since v0.3.0 the self-updater re-runs this
+> installer for you, so plist changes like that one propagate on their own.
 
 ## Data freshness
 
@@ -232,11 +321,20 @@ Design notes with the full audit live in `docs/superpowers/specs/`.
 ## Troubleshooting
 
 ```bash
-ai-smartbar --once     # headless: prints icon state, title, account rows
+ai-smartbar --once          # headless: prints icon state, title, account rows
+ai-smartbar --check-update  # is a newer release waiting?
 tail ~/.cache/ai-smartbar/tray.log        # Linux log
 tail ~/Library/Logs/ai-smartbar.log       # macOS log
 tail ~/.cache/ai-smartbar/warmup.log      # warmup attempts + skip reasons
+tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ```
+
+- **A dot is hollow** when there is no measurement behind it (no data yet,
+  or a dead credential — the text under it says which). A *solid* gray dot
+  is a real reading: that limit is 100% used, i.e. exhausted.
+- **The popover shows a pause marker next to the version** when an update
+  was found but held back; hover it for the reason (usually uncommitted
+  changes or unpushed commits in the checkout).
 
 - **"Re-login required" on an account card** — claude-swap's stored
   credential for that slot is dead (token rotation; see
@@ -249,10 +347,17 @@ tail ~/.cache/ai-smartbar/warmup.log      # warmup attempts + skip reasons
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 122 tests, no external deps
+python3 -m unittest discover -s tests -v   # 161 tests, no external deps
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
+./tests/e2e-update.sh                      # self-update against a throwaway origin
 ```
+
+`tests/e2e-update.sh` builds a fake origin out of the current working tree
+and drives a fake device through check → apply → no-op → blocked → reset →
+rollback → brake. It never touches the real repo, the real LaunchAgents or
+the real `$HOME`, which is what makes it the safety net for devices that
+cannot be tested by hand.
 
 Layout: `smartbar/core/` holds all logic and formatting (unit-tested,
 Python 3.9+); `smartbar/linux/tray.py`, `smartbar/macos/menubar.py` and
