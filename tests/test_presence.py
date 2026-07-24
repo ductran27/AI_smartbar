@@ -8,6 +8,7 @@ screen. tests/e2e-presence.sh then drives the same rules through real git.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -425,6 +426,112 @@ class TestKnobs(unittest.TestCase):
         os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "300"
         os.environ["SMARTBAR_PRESENCE_TTL"] = "60"
         self.assertEqual(presence.ttl(), 600.0)
+
+
+SWIFT_SOURCE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "macos-swift", "Sources", "AISmartbar", "PresenceStatus.swift")
+
+
+class TestMacAndLinuxAgree(unittest.TestCase):
+    """The one place presence exists twice, in two languages.
+
+    Publishing and reading refs is shared Python, so the WIRE cannot drift.
+    But the macOS UI re-implements four policy decisions in Swift that the
+    Linux UI takes from core/presence.py — the badge format, the kill switch,
+    the beat interval and the staleness window. Nothing else in the build
+    compares them, so they can silently diverge and give two machines
+    different answers from identical config. This reads the Swift source and
+    pins the constants to the Python ones.
+
+    Source-scraping is deliberate: it runs in the ordinary unit suite, on
+    Linux, with no Swift toolchain — so a Linux-only contributor still cannot
+    break the Mac.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(SWIFT_SOURCE):
+            raise unittest.SkipTest("no Swift sources in this checkout")
+        with open(SWIFT_SOURCE) as handle:
+            cls.swift = handle.read()
+
+    def setUp(self):
+        self.saved = {k: os.environ.get(k) for k in
+                      ("SMARTBAR_PRESENCE", "SMARTBAR_PRESENCE_INTERVAL",
+                       "SMARTBAR_PRESENCE_TTL")}
+        for key in self.saved:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_the_badge_is_formatted_the_same_on_both(self):
+        # model.account_label is what Linux renders; this is what macOS
+        # renders. Same address, same count, same string.
+        self.assertIn(r'devices > 0 ? "\(email) (\(devices))" : email',
+                      self.swift)
+        account = model.Account(number=1, email="a@b.c", devices=2)
+        self.assertEqual(model.account_label(account), "a@b.c (2)")
+
+    def test_zero_devices_renders_no_badge_on_both(self):
+        # The Swift guard is `devices > 0`; Python's is `count > 0`. A "(0)"
+        # on one platform and a bare address on the other would be the most
+        # visible possible drift.
+        account = model.Account(number=1, email="a@b.c", devices=0)
+        self.assertEqual(model.account_label(account), "a@b.c")
+        self.assertIn("devices > 0 ?", self.swift)
+
+    def test_the_kill_switch_is_spelled_the_same(self):
+        self.assertIn('environment["SMARTBAR_PRESENCE"]', self.swift)
+        self.assertIn(
+            'raw.trimmingCharacters(in: .whitespaces).lowercased() != "off"',
+            self.swift)
+        # …and Python really does trim and lowercase, so " OFF " agrees.
+        for value in ("off", "OFF", " Off "):
+            os.environ["SMARTBAR_PRESENCE"] = value
+            self.assertFalse(presence.enabled())
+        os.environ.pop("SMARTBAR_PRESENCE", None)
+
+    def test_the_beat_interval_default_and_floor_match(self):
+        default = re.search(
+            r"defaultInterval: TimeInterval = (\d+)", self.swift)
+        self.assertIsNotNone(default, "Swift default interval not found")
+        self.assertEqual(float(default.group(1)), presence.DEFAULT_INTERVAL)
+        floor = re.search(
+            r"return max\((\d+), Double\(raw\) \?\? defaultInterval\)",
+            self.swift)
+        self.assertIsNotNone(floor, "Swift interval floor not found")
+        os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "1"
+        self.assertEqual(presence.interval(), float(floor.group(1)))
+        os.environ.pop("SMARTBAR_PRESENCE_INTERVAL", None)
+
+    def test_the_staleness_window_honours_the_same_override(self):
+        # This one HAD drifted: Swift hardcoded `interval * 3` and ignored
+        # SMARTBAR_PRESENCE_TTL, so setting it moved Linux's window and not
+        # the Mac's. The regression is that the Swift side reads the variable
+        # at all, with the same 3x default and 2x floor.
+        self.assertIn('environment["SMARTBAR_PRESENCE_TTL"]', self.swift)
+        self.assertIn("guard let explicit = Double(raw) else { return 3 * beat }",
+                      self.swift)
+        self.assertIn("return max(2 * beat, explicit)", self.swift)
+        os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "300"
+        os.environ["SMARTBAR_PRESENCE_TTL"] = "60"      # below the 2x floor
+        self.assertEqual(presence.ttl(), 600.0)
+        os.environ["SMARTBAR_PRESENCE_TTL"] = "5000"    # above it
+        self.assertEqual(presence.ttl(), 5000.0)
+        for key in ("SMARTBAR_PRESENCE_INTERVAL", "SMARTBAR_PRESENCE_TTL"):
+            os.environ.pop(key, None)
+
+    def test_the_mac_reads_the_window_rather_than_a_bare_multiple(self):
+        # Guards the actual call site, not just the helper: reload() must use
+        # Self.ttl, or the helper above would be correct and unused.
+        self.assertIn("let window = Self.ttl", self.swift)
+        self.assertNotIn("Self.interval * 3", self.swift)
 
 
 if __name__ == "__main__":

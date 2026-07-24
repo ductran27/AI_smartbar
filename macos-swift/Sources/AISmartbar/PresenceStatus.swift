@@ -33,6 +33,18 @@ final class PresenceStatus: ObservableObject {
         return max(60, Double(raw) ?? defaultInterval)
     }
 
+    /// Mirror of core/presence.ttl(): three missed beats by default, and an
+    /// explicit SMARTBAR_PRESENCE_TTL floored at two intervals. Reading the
+    /// override matters — Python honours it, so hardcoding 3x here would make
+    /// this Mac and a Linux box disagree about when a device goes stale while
+    /// both read the same config. tests/test_presence.py pins the two together.
+    nonisolated private static var ttl: TimeInterval {
+        let beat = interval
+        let raw = ProcessInfo.processInfo.environment["SMARTBAR_PRESENCE_TTL"] ?? ""
+        guard let explicit = Double(raw) else { return 3 * beat }
+        return max(2 * beat, explicit)
+    }
+
     /// Mirror of core/presence.enabled() — SMARTBAR_PRESENCE=off is the
     /// kill switch for every remote write this app can make.
     nonisolated private static var isEnabled: Bool {
@@ -119,7 +131,7 @@ final class PresenceStatus: ObservableObject {
         // if beats stop happening at all. Counts older than the window are
         // not an answer.
         let checked = raw["checkedAt"] as? Double ?? 0
-        let window = Self.interval * 3
+        let window = Self.ttl
         guard checked > 0, Date().timeIntervalSince1970 - checked <= window else {
             if !counts.isEmpty { counts = [:] }
             return

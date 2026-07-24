@@ -149,9 +149,49 @@ device, which is why the e2e drives two.
 
 ## Known limits
 
-- Not yet seen on a real second device. The mechanism is verified live
-  against the real remote from this Mac, and two-device behaviour is
-  verified against a local origin; the Linux box joining is still ahead.
+- Only devices running AI smartbar are visible. A machine using the same
+  account without this app cannot be counted and never will be — no
+  Anthropic API reports sessions.
+- The beacon carries a hostname, not a platform, so `--presence-status`
+  cannot tell you which OS a device runs.
+
+## Live two-device confirmation (2026-07-24)
+
+A second real machine joined and was watched from this Mac by polling the
+real remote every 20s for 17 min. Both devices republished on an exact 300s
+cadence (this Mac 1784927640 → 1784927940; the other 1784927384 → 1784927684
+→ 1784927984), each holding exactly one ref, on different accounts, so both
+cards read `(1)`. One 600s gap in the other device's series — a single
+missed beat, absorbed by the 900s TTL without the count ever flickering,
+which is precisely what TTL = 3 × interval is for.
+
+Discovery latency, from that run: a device learns about the others only
+during its OWN beat (the `ls-remote`), every 300s. The 60s UI re-read only
+re-reads what the last local beat wrote, so it does not speed discovery up.
+Join ≈ 300s + round trip + up to 60s render. Departure on quit is immediate
+on the remote but still up to ~6 min to disappear elsewhere; departure on a
+crash or sleep is TTL 900s + up to 300s + 60s ≈ 21 min. Nothing here is
+instant, and the docs should not imply it is.
+
+## The test that must never be relaxed: e2e-autoadd isolation
+
+`tests/e2e-autoadd.sh` launches the REAL app binary. Every other outside-world
+effect in this app funnels through one seam — `SMARTBAR_CSWAP` — so pointing
+that at a mock used to contain the whole blast radius. Presence broke that
+invariant: it reaches the network through git instead, and `repoRoot()`
+deliberately falls back to the real checkout so an installed bundle can find
+it. A test binary with no `SMARTBAR_REPO_ROOT` therefore found the real repo
+and the real origin.
+
+Observed, not theorised: a test run replaced this Mac's beacon with
+`.../-` (no active account) and blanked the live counts to `{}`; the real
+app healed it 59s later. `install/release.sh --full` runs this suite, so
+every full release was corrupting live presence. The suite now sets
+`SMARTBAR_PRESENCE=off` *and* `SMARTBAR_CACHE_DIR` (either alone leaves a
+hole — without the kill switch, presence still finds the repo via the
+`~/AI_smartbar` fallback) and asserts the real state file is byte-identical
+afterwards. That assertion is on the PROPERTY, so it still catches the next
+feature that grows a new seam.
 - Ref epochs have one-second resolution, so two beats in the same second
   push an identical refspec and git answers "everything up-to-date". Real
   beats are five minutes apart; only the e2e had to be made deterministic

@@ -11,12 +11,32 @@ BIN="macos-swift/.build/release/AISmartbar"
 MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
 [ -x "$BIN" ] || { echo "build first: (cd macos-swift && swift build -c release)"; exit 1; }
 
+# This suite launches the REAL app binary, so every way it can reach the
+# outside world has to be fenced off — not just cswap. Presence is the one
+# feature that does NOT go through SMARTBAR_CSWAP: it talks to git directly,
+# and its repoRoot() falls back to the real checkout, so an unfenced run
+# publishes a junk beacon to the real origin and overwrites the user's real
+# device counts. (Observed: a test run replaced this Mac's beacon with
+# "no active account" and blanked the live badges.) PRESENCE=off stops the
+# remote write; CACHE_DIR keeps all other state off the user's disk.
+#
+# The guard below watches the ISOLATED cache, not the user's real one. The
+# obvious check — fingerprint ~/.cache/ai-smartbar/presence-state.json before
+# and after — looks stronger but fails at random: on any machine with the app
+# installed, the real app rewrites that file on its own 300s beat, and a
+# beat landing inside the ~20s test window is indistinguishable from a leak.
+# (That false positive is not hypothetical; it fired here.) With presence
+# disabled the app must write no presence state at all, so its absence in the
+# directory we handed the child is the race-free form of the same assertion.
+
 run_case() {
   local name="$1" add_fail="$2" want_adds="$3" state pid
   state=$(mktemp -d)
   : > "$state/calls.log"
   SMARTBAR_CSWAP="$MOCK" MOCK_STATE_DIR="$state" MOCK_ADD_FAIL="$add_fail" \
-    SMARTBAR_INTERVAL=2 "$BIN" >/dev/null 2>&1 &
+    SMARTBAR_INTERVAL=2 \
+    SMARTBAR_PRESENCE=off SMARTBAR_CACHE_DIR="$state/cache" \
+    "$BIN" >/dev/null 2>&1 &
   pid=$!
   sleep 9   # ≥4 poll cycles at 2s
   kill "$pid" 2>/dev/null || true
@@ -33,7 +53,13 @@ run_case() {
       echo "FAIL($name): no re-list after add"; cat "$state/calls.log"; exit 1
     fi
   fi
-  echo "PASS($name): adds=$adds"
+  if [ -e "$state/cache/presence-state.json" ]; then
+    echo "FAIL($name): the app under test ran a presence beat — it can reach"
+    echo "  the real origin and the user's real device counts. Restore the"
+    echo "  SMARTBAR_PRESENCE=off / SMARTBAR_CACHE_DIR fence above."
+    exit 1
+  fi
+  echo "PASS($name): adds=$adds, no presence leak"
   rm -rf "$state"
 }
 

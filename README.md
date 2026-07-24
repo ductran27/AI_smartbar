@@ -331,6 +331,17 @@ ai-smartbar --update --reset   # discard local drift and re-install from scratch
 ./install/macos-update.sh --uninstall      # this device stops self-updating
 ```
 
+> **A manual `--update` does not inherit this device's channel.** The channel
+> lives in the update agent's LaunchAgent/systemd environment, so it applies
+> to the agent's own runs. Running `ai-smartbar --update` by hand from a
+> terminal starts with a clean environment and falls back to `release`, which
+> checks a **development** checkout out *detached* at the tag — and
+> `install/release.sh` then refuses to cut a release, because it requires
+> `main`. On a development checkout, say which channel you mean:
+> `SMARTBAR_UPDATE_CHANNEL=main ai-smartbar --update`. Recover a detached
+> checkout with `git checkout main` (the tag and `main` are the same commit
+> right after a release, so nothing is lost).
+
 **It will not eat your work.** An update is refused (and the popover shows
 a pause marker with the reason) when the checkout has uncommitted changes
 to tracked files or unpushed commits. `--reset` is the only flag that

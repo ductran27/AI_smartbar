@@ -11,7 +11,8 @@ from smartbar import __version__  # noqa: E402
 
 
 def once() -> int:
-    from smartbar.core import cswap, model
+    from smartbar import presence_client
+    from smartbar.core import cswap, model, presence
     try:
         snap = cswap.fetch()
     except cswap.CswapError as exc:
@@ -19,6 +20,11 @@ def once() -> int:
         return 1
     if snap.schema_warning:
         print(f"WARNING: {snap.schema_warning}", file=sys.stderr)
+    # Both UIs stamp the device counts before rendering, so the headless view
+    # has to as well or it prints a different label than the screen shows for
+    # the same data — which is exactly the thing people run --once to check.
+    # Read-only: no beat, so a diagnostic never announces this device.
+    presence.apply_counts(snap, presence_client.counts())
     account = snap.active_account
     m = model.worst(account)
     icon = "?" if m is None else f"{model.icon_text(account)} ({model.color(m.pct)})"
