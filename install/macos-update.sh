@@ -10,7 +10,11 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.update.plist"
-INTERVAL="${SMARTBAR_UPDATE_INTERVAL:-21600}"
+# How often launchd fires the check. Resolved by the CLI, not here, so the
+# floor and the env-beats-config.env order live in one tested place — and so
+# the value can come from ~/.config/ai-smartbar/config.env and therefore
+# survive the next update, which re-runs this script.
+INTERVAL="$("$REPO/bin/ai-smartbar" --update-interval 2>/dev/null || echo 21600)"
 CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 AGENT_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 

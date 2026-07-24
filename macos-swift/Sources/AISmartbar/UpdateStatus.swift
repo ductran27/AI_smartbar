@@ -12,6 +12,10 @@ final class UpdateStatus: ObservableObject {
     @Published private(set) var pendingVersion = ""   // "" when up to date
     @Published private(set) var blockedReason = ""    // policy hold, e.g. dirty tree
     @Published private(set) var isUpdating = false
+    @Published private(set) var isChecking = false
+    /// What the last manual check found, shown for a moment then cleared. The
+    /// TEXT comes from Python — see checkNow().
+    @Published private(set) var checkResult = ""
 
     // nonisolated: the detached trigger below reads it off the main actor.
     nonisolated static let label = "com.ductran.ai-smartbar.update"
@@ -83,6 +87,72 @@ final class UpdateStatus: ObservableObject {
         let blocked = (raw["action"] as? String) == "blocked"
             ? (raw["reason"] as? String ?? "") : ""
         if blocked != blockedReason { blockedReason = blocked }
+    }
+
+    /// Ask the remote NOW, instead of waiting out the agent's 6-hourly timer.
+    ///
+    /// The button below only ever appears once a check has already FOUND
+    /// something, so without this a device could sit hours behind a release
+    /// with no way to ask.
+    ///
+    /// Deliberately not decided here: `--check-update --json` returns the
+    /// wording AND the rules behind it (chiefly that run_once exits 0 both when
+    /// a device is current and when another run holds the lock, so "up to date"
+    /// may not be inferred from an exit code). Re-implementing that in Swift is
+    /// how this app already came to disagree with itself about the presence
+    /// staleness window — so this side only displays what Python decided.
+    func checkNow() {
+        guard !isChecking, !isUpdating else { return }
+        isChecking = true
+        checkResult = ""
+        let root = repoRoot
+        Task.detached(priority: .userInitiated) {
+            let answer = Self.runCheck(root)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isChecking = false
+                // Every real outcome's wording comes from Python. This string
+                // is the one case Python cannot describe: the helper did not
+                // answer at all (missing checkout, unreadable JSON), so it is
+                // deliberately different from any label check_outcome emits.
+                self.checkResult = answer["label"] as? String ?? "✕ Could not check"
+                self.reload()          // the run rewrote the state file
+                if let title = answer["title"] as? String,
+                   let body = answer["body"] as? String {
+                    UsageStore.notify(title: title, body: body)
+                }
+                // Clear after a moment so the footer goes back to the version.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 20_000_000_000)
+                    if self?.isChecking == false { self?.checkResult = "" }
+                }
+            }
+        }
+    }
+
+    /// Runs the check and returns its JSON, or [:] if anything went wrong.
+    nonisolated private static func runCheck(_ root: String) -> [String: Any] {
+        let launcher = (root.isEmpty ? nil : root).map { $0 + "/bin/ai-smartbar" }
+        guard let launcher, FileManager.default.isExecutableFile(atPath: launcher)
+        else { return [:] }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launcher)
+        process.arguments = ["--check-update", "--json"]
+        var environment = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
+                               "/usr/local/bin", "/usr/bin", "/bin"]
+            .joined(separator: ":")
+        process.environment = environment
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        // Read before waiting: a full pipe buffer would deadlock the child.
+        guard (try? process.run()) != nil else { return [:] }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            ?? [:]
     }
 
     func installUpdate() {

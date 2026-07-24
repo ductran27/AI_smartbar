@@ -26,6 +26,7 @@ CHANNEL_MAIN = "main"
 CHANNELS = (CHANNEL_RELEASE, CHANNEL_MAIN)
 
 DEFAULT_CHECK_INTERVAL = 21600.0   # 6 h between scheduled checks
+MIN_CHECK_INTERVAL = 300.0         # a fetch per 5 min is already generous
 MAX_REF_FAILURES = 3               # per UTC day, per target ref
 
 UPDATE = "update"                  # UpdatePlan.action values
@@ -56,11 +57,39 @@ def channel(default: str = CHANNEL_RELEASE) -> str:
     return raw if raw in CHANNELS else default
 
 
-def check_interval() -> float:
-    try:
-        return max(300.0, float(os.environ["SMARTBAR_UPDATE_INTERVAL"]))
-    except (KeyError, ValueError):
-        return DEFAULT_CHECK_INTERVAL
+def check_interval(fallback: str = "") -> float:
+    """Seconds between scheduled update checks, floored at MIN_CHECK_INTERVAL.
+
+    Resolved at INSTALL time, because what it actually becomes is the
+    LaunchAgent's StartInterval / the systemd timer's period / the crontab
+    spacing — nothing reads it at runtime. Hence the order: this process's
+    environment first (an explicit `SMARTBAR_UPDATE_INTERVAL=… ./install/…`),
+    then `fallback`, which is the device's config.env value, then the default.
+
+    The floor exists because the check is a `git fetch` against the remote,
+    and a device hammering it every few seconds gains nothing.
+    """
+    for raw in (os.environ.get("SMARTBAR_UPDATE_INTERVAL"), fallback):
+        try:
+            return max(MIN_CHECK_INTERVAL, float(raw))
+        except (TypeError, ValueError):
+            continue
+    return DEFAULT_CHECK_INTERVAL
+
+
+def cron_spec(seconds: float) -> str:
+    """A crontab time spec for "check roughly every `seconds`".
+
+    The cron fallback is what a Linux box without a systemd user session gets,
+    and cron has minute resolution and no notion of an interval — so this is
+    the closest honest approximation. Sub-hourly becomes a minute step;
+    anything else runs at a fixed offset past every Nth hour, and the offset is
+    not zero so that every device does not wake on the hour together.
+    """
+    minutes = max(1, int(round((seconds or 0) / 60.0)))
+    if minutes < 60:
+        return f"*/{minutes} * * * *"
+    return f"17 */{min(23, max(1, int(round(minutes / 60.0))))} * * *"
 
 
 def parse_version(text):

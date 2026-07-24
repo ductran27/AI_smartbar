@@ -292,6 +292,117 @@ class TestPendingVersion(unittest.TestCase):
             update.pending_version(update.ui_state(current, "0.3.0")), "")
 
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SWIFT_UPDATE = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                            "UpdateStatus.swift")
+TRAY = os.path.join(REPO, "smartbar", "linux", "tray.py")
+
+
+class TestBothUIsShareOneAnswer(unittest.TestCase):
+    """Neither UI may decide what a manual check means.
+
+    They call `--check-update --json` and display what comes back. That is not
+    tidiness: the honesty rule (exit 0 means "current" OR "another run holds
+    the lock", so it may not be rendered as "up to date") is easy to get wrong
+    once and impossible to keep right twice. This app has already shipped one
+    Mac/Linux divergence of exactly this kind, in the presence staleness window.
+    """
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path) as handle:
+            return handle.read()
+
+    def test_both_call_the_shared_entry_point(self):
+        for path in (SWIFT_UPDATE, TRAY):
+            text = self.source(path)
+            self.assertIn("--check-update", text, path)
+            self.assertIn("--json", text, path)
+
+    def test_the_mac_does_not_reimplement_the_wording(self):
+        # Every phrase check_outcome can produce must be absent from Swift —
+        # if one appears, that side has started deciding for itself.
+        swift = self.source(SWIFT_UPDATE)
+        phrases = set()
+        for kwargs in ({}, {"pending": "1.2.3"}, {"blocked": "dirty"},
+                       {"failed": True}, {"ran": False}):
+            outcome = update.check_outcome(**kwargs)
+            phrases.update({outcome.label, outcome.body})
+        for phrase in phrases:
+            self.assertNotIn(phrase, swift,
+                             f"UpdateStatus.swift hardcodes {phrase!r} instead "
+                             "of showing what --check-update --json returned")
+
+    def test_the_mac_never_infers_up_to_date_from_an_exit_code(self):
+        # The specific mistake this design exists to prevent.
+        swift = self.source(SWIFT_UPDATE)
+        self.assertNotIn("terminationStatus", swift)
+
+
+class TestScheduledInterval(unittest.TestCase):
+    """What the installers turn into a StartInterval / timer / crontab line."""
+
+    def setUp(self):
+        self.saved = os.environ.get("SMARTBAR_UPDATE_INTERVAL")
+        os.environ.pop("SMARTBAR_UPDATE_INTERVAL", None)
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("SMARTBAR_UPDATE_INTERVAL", None)
+        else:
+            os.environ["SMARTBAR_UPDATE_INTERVAL"] = self.saved
+
+    def test_config_env_is_used_when_the_environment_is_silent(self):
+        # The whole point: config.env survives an update, so a device can keep
+        # a cadence it chose. Previously Linux ignored the setting entirely.
+        self.assertEqual(update.check_interval(fallback="1800"), 1800.0)
+
+    def test_an_explicit_environment_beats_config_env(self):
+        os.environ["SMARTBAR_UPDATE_INTERVAL"] = "7200"
+        self.assertEqual(update.check_interval(fallback="1800"), 7200.0)
+
+    def test_the_floor_applies_to_both_sources(self):
+        self.assertEqual(update.check_interval(fallback="10"),
+                         update.MIN_CHECK_INTERVAL)
+        os.environ["SMARTBAR_UPDATE_INTERVAL"] = "10"
+        self.assertEqual(update.check_interval(fallback="99999"),
+                         update.MIN_CHECK_INTERVAL)
+
+    def test_nonsense_falls_through_rather_than_crashing_an_installer(self):
+        os.environ["SMARTBAR_UPDATE_INTERVAL"] = "banana"
+        self.assertEqual(update.check_interval(fallback="1800"), 1800.0)
+        self.assertEqual(update.check_interval(fallback="also junk"),
+                         update.DEFAULT_CHECK_INTERVAL)
+
+    def test_the_default_cron_line_is_exactly_what_linux_used_to_hardcode(self):
+        # Guards against the cadence quietly changing for every existing Linux
+        # device the moment they take this release.
+        self.assertEqual(update.cron_spec(update.DEFAULT_CHECK_INTERVAL),
+                         "17 */6 * * *")
+
+    def test_sub_hourly_becomes_a_minute_step(self):
+        self.assertEqual(update.cron_spec(1800), "*/30 * * * *")
+        self.assertEqual(update.cron_spec(update.MIN_CHECK_INTERVAL),
+                         "*/5 * * * *")
+
+    def test_every_spec_is_one_cron_accepts(self):
+        # Five fields, and the step never exceeds what its field allows —
+        # crontab rejects the whole file otherwise, silently ending updates.
+        for seconds in (0, 1, 300, 3600, 21600, 86400, 86400 * 30):
+            spec = update.cron_spec(seconds)
+            fields = spec.split()
+            self.assertEqual(len(fields), 5, spec)
+            minute, hour = fields[0], fields[1]
+            if minute.startswith("*/"):
+                self.assertLessEqual(int(minute[2:]), 59, spec)
+            else:
+                self.assertLessEqual(int(minute), 59, spec)
+            if hour.startswith("*/"):
+                self.assertLessEqual(int(hour[2:]), 23, spec)
+                self.assertGreaterEqual(int(hour[2:]), 1, spec)
+
+
 class TestManualCheckOutcome(unittest.TestCase):
     """What the tray says after the user asked, by hand, for a check.
 

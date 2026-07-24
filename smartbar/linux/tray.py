@@ -12,6 +12,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 
+import json
 import logging
 import os
 import subprocess
@@ -24,7 +25,7 @@ from gi.repository import GLib, Gtk
 from smartbar import __version__, presence_client
 from smartbar.core import cswap, model, popover_layout, presence
 from smartbar.core import update as update_core
-from smartbar.core.alerts import AlertManager
+from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
 from smartbar.linux.tray_icon import render_pills
 
@@ -313,48 +314,36 @@ class Tray:
     def _check_update(self, token):
         """Ask the remote, off the main loop — this does a network fetch.
 
-        `--check-update` only reports; applying stays the separate, deliberate
-        "⬆ Update to …" row. The state file is what we actually read afterwards
-        (the runner writes it before returning), so the exit code is used only
-        to tell a failed check from a completed one.
+        `--check-update --json` does the whole thing: it only reports (applying
+        stays the separate, deliberate "⬆ Update to …" row) and it decides what
+        to SAY, so the macOS popover and this menu cannot drift apart in either
+        the wording or the rules behind it.
         """
-        before = self._checked_at()
         try:
-            done = subprocess.run([LAUNCHER, "--check-update"],
-                                  stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL,
+            done = subprocess.run([LAUNCHER, "--check-update", "--json"],
+                                  capture_output=True, text=True,
                                   timeout=CHECK_TIMEOUT)
-            failed = done.returncode not in (0, 10)  # 10 = a release is waiting
-        except (OSError, subprocess.TimeoutExpired):
-            log.exception("update check could not run")
-            failed = True
-        GLib.idle_add(self._checked, token, failed, before)
-
-    def _checked_at(self) -> str:
-        try:
-            from smartbar import update_runner
-            return str(update_runner.load_state().get("checkedAt") or "")
+            answer = json.loads(done.stdout)
         except Exception:
-            return ""
+            log.exception("update check could not run")
+            answer = None
+        GLib.idle_add(self._checked, token, answer)
 
-    def _checked(self, token, failed, before):
+    def _checked(self, token, answer):
         if token != self.check_token:
             return False  # superseded by a newer check
         self.checking = False
         self.update_pending = self._pending_update()   # also sets update_blocked
-        # A check that never happened must not be reported as "up to date":
-        # run_once() returns 0 both when a device really is current and when
-        # another update run already holds the lock. checkedAt moving is the
-        # only proof it looked. (One-second resolution, so two checks inside
-        # the same second read as "busy" — erring toward "try again" rather
-        # than toward a false all-clear.)
-        outcome = update_core.check_outcome(
-            pending=self.update_pending, blocked=self.update_blocked,
-            failed=failed, ran=bool(self._checked_at() != before))
-        self.check_result = outcome.label
+        if not isinstance(answer, dict) or not answer.get("label"):
+            failure = update_core.check_outcome(failed=True)
+            answer = {"label": failure.label, "title": failure.title,
+                      "body": failure.body}
+        self.check_result = answer["label"]
         # Clicking a row closes the menu, so the label alone would be invisible
         # until the user opened it again — the notification is the real feedback.
-        self._send_alert(outcome, urgency="normal", icon="dialog-information")
+        self._send_alert(Alert(title=answer.get("title", "AI smartbar"),
+                               body=answer.get("body", "")),
+                         urgency="normal", icon="dialog-information")
         # Repaint: the red dot on the tray icon is driven by update_pending, so
         # a check that just found a release has to make the badge appear.
         account = self.snapshot.active_account if self.snapshot else None

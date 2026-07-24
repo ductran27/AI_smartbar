@@ -175,7 +175,7 @@ from scratch, and applying an update *is* re-running them.
 | `SMARTBAR_WARMUP_QUIET` | – | Warmup quiet hours, e.g. `23-05` (wraps) |
 | `SMARTBAR_UPDATE` | on | `off` disables self-updating entirely on this device |
 | `SMARTBAR_UPDATE_CHANNEL` | `release` | `release` tracks the newest `vX.Y.Z` tag; `main` follows `origin/main` fast-forward-only |
-| `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between update checks. **macOS only, and read at install time** — it becomes the LaunchAgent's `StartInterval`, so it must be set in the installer's own environment (`SMARTBAR_UPDATE_INTERVAL=3600 ./install/macos-update.sh`), not in `config.env`. Linux's timer is fixed at 6 h. Use **⇅ Check for updates** for "right now" |
+| `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between scheduled update checks, floor 300. Resolved at **install** time — it becomes the LaunchAgent's `StartInterval`, the systemd timer's period, or the crontab spacing — so it takes effect when the installer next runs (immediately if you re-run it). Put it in `config.env` to keep it across updates |
 | `SMARTBAR_UPDATE_NOTIFY` | – | `off` silences the updated/failed notifications |
 | `SMARTBAR_PRESENCE` | on | `off` stops this device publishing or counting devices |
 | `SMARTBAR_PRESENCE_INTERVAL` | `300` | Seconds between presence heartbeats (floor 60) |
@@ -361,16 +361,33 @@ Every device self-updates. A LaunchAgent (macOS) or systemd user timer
 hours**; the popover's **Update to vX.Y.Z** button (Linux: the **⬆ Update
 to vX.Y.Z** menu row) runs the same pass immediately.
 
-**Asking now, on Linux.** Those buttons only appear once a check has already
-*found* something, so without one a device could sit up to 6 hours behind with
-no way to ask. **⇅ Check for updates**, directly under *⟳ Refresh now* in the
-tray menu, asks the remote immediately. It only reports — applying stays the
-separate, deliberate **⬆ Update to vX.Y.Z** row — and since clicking a row
-closes the menu, the answer arrives as a desktop notification (the row also
-shows it for 20 s, and the tray icon gains its red dot). The row is hidden on a
-device with `SMARTBAR_UPDATE=off`, where it could not promise anything. If
-another update run is already in progress the check says so rather than
-reporting "up to date", which would be a plain lie at the one moment it matters.
+**Asking now.** Those buttons only appear once a check has already *found*
+something, so without one a device could sit up to 6 hours behind with no way to
+ask. **Check for updates** asks the remote immediately — the popover footer on
+macOS, and a **⇅ Check for updates** row directly under *⟳ Refresh now* in the
+Linux tray menu.
+
+It only reports; applying stays the separate, deliberate **Update to vX.Y.Z**
+button. The answer appears in place, and also as a desktop notification —
+necessary on Linux, where clicking a tray row closes the menu and a changed
+label would be invisible until you reopened it. The tray icon gains its red dot
+if something was found. Hidden on a device with `SMARTBAR_UPDATE=off`, where it
+could not promise anything.
+
+Both UIs call the same `ai-smartbar --check-update --json` and display what it
+returns; neither decides what the result means. That is deliberate. `--update`
+exits 0 both when a device is genuinely current **and** when another update run
+already holds the lock, so "up to date" cannot be inferred from an exit code —
+the check proves it actually looked before claiming it, and says *"an update run
+is already in progress"* otherwise. One copy of that rule is hard enough to keep
+right; two, in two languages, is how this app previously came to disagree with
+itself about a different window.
+
+**Changing the cadence.** `SMARTBAR_UPDATE_INTERVAL=3600` in
+[`config.env`](#settings-that-survive-an-update) checks hourly instead
+(floor 300 s). It becomes the LaunchAgent's `StartInterval`, the systemd timer's
+period, or — where cron is the fallback — the closest crontab spacing cron can
+express, since cron has minute resolution and no notion of an interval.
 
 **How a device tells you.** A waiting release badges the bar icon with a
 small red dot — the icon gets slightly wider rather than the dot covering a

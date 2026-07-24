@@ -16,10 +16,24 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 STUB="$WORK/stub"; mkdir -p "$STUB"
-for tool in launchctl systemctl crontab pkill setsid nohup cswap claude pgrep; do
+for tool in launchctl systemctl pkill setsid nohup cswap claude pgrep; do
   printf '#!/bin/sh\nexit 0\n' > "$STUB/$tool"
   chmod +x "$STUB/$tool"
 done
+# crontab records what would have been installed so the cron fallback can be
+# read back. `-l` exits non-zero when nothing is installed yet, exactly as the
+# real one does on a fresh machine — which is also what made the installer's
+# channel read-back abort under `set -euo pipefail` before it was fixed.
+export CRONFILE="$WORK/crontab.txt"
+cat > "$STUB/crontab" <<'STUBEOF'
+#!/bin/sh
+case "$1" in
+  -l) [ -s "$CRONFILE" ] && cat "$CRONFILE" || exit 1 ;;
+  *)  cat > "$CRONFILE" ;;
+esac
+exit 0
+STUBEOF
+chmod +x "$STUB/crontab"
 
 export HOME="$WORK/home"
 export SMARTBAR_CONFIG_DIR="$WORK/config"
@@ -142,5 +156,39 @@ if [ "$IS_MAC" = "1" ]; then
   grep -q "DYLD" "$UPD_PLIST" && fail "E: DYLD key reached the agent"
 fi
 echo "  E: non-SMARTBAR keys cannot reach an agent's environment"
+
+# --- F: the check cadence, which Linux used to ignore outright -----------
+# Linux hardcoded a 6h timer and never read SMARTBAR_UPDATE_INTERVAL. Now both
+# platforms resolve it the same way, and config.env can set it — which is what
+# makes it survive the next update, since that re-runs these installers.
+write_config <<'EOF'
+SMARTBAR_UPDATE_INTERVAL=1800
+EOF
+"$REPO/install/linux.sh" >/dev/null 2>&1 || true
+grep -q '^OnUnitActiveSec=1800s$' "$HOME/.config/systemd/user/ai-smartbar-update.timer" \
+  || fail "F: systemd timer ignored the configured interval: $(grep OnUnitActive \
+       "$HOME/.config/systemd/user/ai-smartbar-update.timer")"
+if [ "$IS_MAC" = "1" ]; then
+  "$REPO/install/macos-update.sh" --channel release >/dev/null 2>&1
+  plutil -p "$UPD_PLIST" | grep -q '"StartInterval" => 1800' \
+    || fail "F: LaunchAgent StartInterval ignored the configured interval"
+fi
+# The cron fallback: no systemd session, so linux.sh must write a crontab line
+# whose spacing matches. cron has minute resolution, hence */30 rather than a
+# seconds value it could not express.
+printf '#!/bin/sh\nexit 1\n' > "$STUB/systemctl"
+: > "$CRONFILE"
+"$REPO/install/linux.sh" >/dev/null 2>&1 || true
+grep -q '^\*/30 \* \* \* \* .*ai-smartbar --update$' "$CRONFILE" \
+  || fail "F: cron line wrong for a 1800s interval: $(cat "$CRONFILE")"
+# And with no config at all, the line must be byte-identical to the 6h one
+# every existing Linux device already has — a release must not silently
+# re-cadence them.
+rm -f "$SMARTBAR_CONFIG_DIR/config.env"; : > "$CRONFILE"
+"$REPO/install/linux.sh" >/dev/null 2>&1 || true
+grep -q '^17 \*/6 \* \* \* ' "$CRONFILE" \
+  || fail "F: default cron line changed: $(cat "$CRONFILE")"
+printf '#!/bin/sh\nexit 0\n' > "$STUB/systemctl"
+echo "  F: the update cadence is configurable, and unchanged by default"
 
 echo "e2e-config: all scenarios passed"

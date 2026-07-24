@@ -10,7 +10,6 @@ AUTOSTART="$HOME/.config/autostart/ai-smartbar.desktop"
 CACHE="$HOME/.cache/ai-smartbar"
 UNITS="$HOME/.config/systemd/user"
 CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
-INTERVAL_H=6
 AGENT_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 # Matches the no-argument tray only: `--update` / `--warmup-once` invocations
 # must never be caught, or an update would kill itself here.
@@ -78,6 +77,15 @@ ln -sf "$REPO/bin/ai-smartbar" "$BIN"
 CONFIG_EXEC="$("$REPO/bin/ai-smartbar" --print-config exec || true)"
 CONFIG_SYSTEMD="$("$REPO/bin/ai-smartbar" --print-config systemd || true)"
 
+# How often to check for a release. Was hardcoded to 6h here, which silently
+# ignored the documented SMARTBAR_UPDATE_INTERVAL on Linux entirely. The CLI
+# resolves it (env, then config.env, then the default, floored) and renders the
+# crontab spec, so cron's minute-resolution arithmetic is unit-tested rather
+# than open-coded in shell. Defaults reproduce the old `17 */6 * * *` exactly.
+INTERVAL_SEC="$("$REPO/bin/ai-smartbar" --update-interval 2>/dev/null || echo 21600)"
+INTERVAL_CRON="$("$REPO/bin/ai-smartbar" --update-interval cron 2>/dev/null \
+  || echo '17 */6 * * *')"
+
 cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
@@ -121,19 +129,19 @@ EOF
 Description=AI smartbar update check
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=${INTERVAL_H}h
+OnUnitActiveSec=${INTERVAL_SEC}s
 Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable --now ai-smartbar-update.timer
-    echo "Update timer enabled (channel=$CHANNEL, every ${INTERVAL_H}h)."
+    echo "Update timer enabled (channel=$CHANNEL, every ${INTERVAL_SEC}s)."
   elif command -v crontab >/dev/null; then
     { crontab -l 2>/dev/null | grep -v "ai-smartbar --update"
-      echo "17 */$INTERVAL_H * * * SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
+      echo "$INTERVAL_CRON SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
     } | crontab -
-    echo "Update cron entry installed (channel=$CHANNEL, every ${INTERVAL_H}h)."
+    echo "Update cron entry installed (channel=$CHANNEL, '$INTERVAL_CRON')."
   else
     echo "WARNING: neither systemd --user nor crontab available — no auto-update." >&2
     return 1

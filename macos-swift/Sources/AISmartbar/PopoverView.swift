@@ -78,6 +78,25 @@ struct PopoverView: View {
                 .controlSize(.small)
                 .help("Fetch, rebuild and restart AI smartbar")
                 .accessibilityLabel("Update to version \(updates.pendingVersion)")
+            } else if updates.isChecking {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Checking…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if !updates.checkResult.isEmpty {
+                Text(updates.checkResult)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                // The upgrade button above only appears once a check has
+                // already FOUND something, and the agent only looks every 6
+                // hours — so without this there is no way to ask.
+                Button("Check for updates") { updates.checkNow() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Ask now whether a newer release is waiting, instead "
+                          + "of waiting for the 6-hourly check")
             }
         }
         .padding(.top, 1)

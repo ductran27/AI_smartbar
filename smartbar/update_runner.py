@@ -16,6 +16,7 @@ README used to ask for.
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import logging
@@ -249,6 +250,40 @@ def _plan(repo, state, channel, force, reset):
                 if provisional.target_ref else 0)
     return update.plan_update(repo, channel=channel, force=force, reset=reset,
                               failures=failures)
+
+
+def check_now():
+    """One user-requested check, as an update.CheckOutcome.
+
+    Both UIs call this (through `--check-update --json`) rather than deciding
+    for themselves, so the wording and the honesty rules exist exactly once.
+    That matters here more than usual: a second copy in Swift is how the macOS
+    and Linux sides came to disagree about the presence staleness window.
+
+    The `ran` argument is the whole reason this is a function and not four
+    lines in a UI. run_once() returns 0 both when a device is genuinely
+    current AND when another update run already holds the lock (or updates are
+    switched off) — in which case it returns before writing anything. So the
+    only proof a check actually looked is that checkedAt moved.
+    """
+    from smartbar.core import update as update_core
+    before = str(load_state().get("checkedAt") or "")
+    failed = False
+    try:
+        # run_once prints a human line to stdout; the caller wants only JSON
+        # there, so send it to stderr where it still shows up in a log.
+        with contextlib.redirect_stdout(sys.stderr):
+            code = run_once(check_only=True)
+        failed = code not in (0, EXIT_AVAILABLE)
+    except Exception:
+        log.exception("update check failed")
+        failed = True
+    state = load_state()
+    blocked = (state.get("reason", "")
+               if state.get("action") == "blocked" else "")
+    return update_core.check_outcome(
+        pending=update_core.pending_version(state), blocked=blocked,
+        failed=failed, ran=str(state.get("checkedAt") or "") != before)
 
 
 def run_once(*, reset: bool = False, force: bool = False,

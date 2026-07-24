@@ -67,6 +67,38 @@ def print_config(fmt: str) -> int:
     return 0
 
 
+def _device_config() -> dict:
+    """This device's config.env, or {} — never raises, never prints."""
+    from smartbar.core import device_config
+    from smartbar.presence_runner import CONFIG_DIR
+    try:
+        with open(os.path.join(CONFIG_DIR, device_config.FILENAME)) as handle:
+            return device_config.parse(handle.read())[0]
+    except OSError:
+        return {}
+
+
+def print_update_interval(fmt: str) -> int:
+    """How often this device should check, for the installers' timers.
+
+    Resolution lives in core.update.check_interval: this process's environment
+    beats config.env beats the default. The installers ask rather than reading
+    the file themselves so the floor and the cron arithmetic exist once.
+    """
+    from smartbar.core import update
+    seconds = update.check_interval(
+        fallback=_device_config().get("SMARTBAR_UPDATE_INTERVAL", ""))
+    if fmt == "cron":
+        print(update.cron_spec(seconds))
+    elif fmt == "seconds":
+        print(int(seconds))
+    else:
+        print(f"ERROR: unknown interval format {fmt!r} (want seconds or cron)",
+              file=sys.stderr)
+        return 2
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="ai-smartbar",
                                      description="Claude usage limits in your bar")
@@ -99,6 +131,15 @@ def main() -> int:
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
+    parser.add_argument("--json", action="store_true",
+                        help="with --check-update: print the result as JSON "
+                             "(label/title/body/found) — this is how both UIs "
+                             "get one shared answer instead of two copies")
+    parser.add_argument("--update-interval", nargs="?", const="seconds",
+                        metavar="FORMAT",
+                        help="print how often this device should check for "
+                             "updates: 'seconds' (default) or 'cron'. The "
+                             "installers use it to build their timers")
     parser.add_argument("--print-config", metavar="FORMAT",
                         help="render ~/.config/ai-smartbar/config.env for an "
                              "agent file (plist|systemd|exec); the installers "
@@ -108,6 +149,15 @@ def main() -> int:
     args = parser.parse_args()
     if args.print_config:
         return print_config(args.print_config)
+    if args.update_interval:
+        return print_update_interval(args.update_interval)
+    if args.check_update and args.json:
+        import json as json_mod
+        from smartbar.update_runner import check_now
+        outcome = check_now()
+        print(json_mod.dumps({"label": outcome.label, "title": outcome.title,
+                              "body": outcome.body, "found": outcome.found}))
+        return 0
     if args.once:
         return once()
     if args.warmup_once:
