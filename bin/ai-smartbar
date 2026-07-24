@@ -35,6 +35,38 @@ def once() -> int:
     return 0
 
 
+def print_config(fmt: str) -> int:
+    """Render this device's config.env for whichever agent file wants it.
+
+    The installers shell out to this instead of parsing the file in bash four
+    times over: the rules about which keys are honoured and which characters
+    can be passed safely to an agent are semantics, so they live in core with
+    unit tests behind them.
+
+    Never fatal. An installer that cannot read the config must still produce a
+    working agent — losing a setting is a papercut, failing to install is not.
+    """
+    from smartbar.core import device_config
+    # presence_runner owns the canonical ~/.config location (and the
+    # SMARTBAR_CONFIG_DIR override) because the device id already lives there.
+    from smartbar.presence_runner import CONFIG_DIR
+    path = os.path.join(CONFIG_DIR, device_config.FILENAME)
+    try:
+        with open(path) as handle:
+            text = handle.read()
+    except OSError:
+        text = ""
+    settings, problems = device_config.parse(text)
+    for problem in problems:
+        print(f"warning: {path}: {problem}", file=sys.stderr)
+    try:
+        sys.stdout.write(device_config.render(fmt, settings))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="ai-smartbar",
                                      description="Claude usage limits in your bar")
@@ -67,9 +99,15 @@ def main() -> int:
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
+    parser.add_argument("--print-config", metavar="FORMAT",
+                        help="render ~/.config/ai-smartbar/config.env for an "
+                             "agent file (plist|systemd|exec); the installers "
+                             "use this to re-apply settings on every update")
     parser.add_argument("--version", action="version",
                         version=f"ai-smartbar {__version__}")
     args = parser.parse_args()
+    if args.print_config:
+        return print_config(args.print_config)
     if args.once:
         return once()
     if args.warmup_once:

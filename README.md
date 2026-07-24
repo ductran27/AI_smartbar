@@ -151,6 +151,12 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 
 ## Configuration (environment variables)
 
+Everything below is read from the app's environment. To set any of it
+**durably**, put it in `~/.config/ai-smartbar/config.env` — see
+[Settings that survive an update](#settings-that-survive-an-update). Editing a
+LaunchAgent or systemd unit by hand does not last: the installers rewrite those
+from scratch, and applying an update *is* re-running them.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `SMARTBAR_INTERVAL` | `60` | Poll period in seconds while near a limit / recovering |
@@ -176,6 +182,49 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 | `SMARTBAR_PRESENCE_TTL` | 3 × interval | How long a silent device still counts (floor 2 × interval) |
 | `SMARTBAR_PRESENCE_LABEL` | hostname | Name this device shows in `--presence-status` |
 
+## Settings that survive an update
+
+```bash
+mkdir -p ~/.config/ai-smartbar
+cat > ~/.config/ai-smartbar/config.env <<'EOF'
+# one setting per line; # comments and blank lines are ignored
+SMARTBAR_INTERVAL=90
+SMARTBAR_WARMUP_DAILY_CAP=3
+SMARTBAR_PRESENCE=off
+EOF
+./install/macos-swift.sh          # or ./install/linux.sh — re-apply now
+```
+
+**Why a file rather than the agent.** Nothing reads your shell profile: a
+macOS GUI app started by launchd gets no shell environment at all, and every
+agent — the app's LaunchAgent, the warmup and update agents, the Linux
+autostart entry and systemd units — is written *from scratch* by the
+installers. Since applying an update means re-running those installers, a
+variable added to an agent by hand survives exactly until the next release.
+`config.env` sits outside the checkout and outside every generated unit, and
+the installers fold it into each one they write — so it is re-applied by every
+update instead of by anyone remembering to.
+
+Settings take effect when the agent is next started (re-run the installer, or
+just wait for the next update or login) — environment variables are read once
+at process start either way.
+
+Two rules, both deliberate:
+
+- **Only `SMARTBAR_*` keys.** These end up in a launchd agent's environment, so
+  a config file that could set `PATH` or `DYLD_INSERT_LIBRARIES` would be a
+  privilege problem rather than a feature. Anything else is reported and ignored.
+- **`SMARTBAR_UPDATE_CHANNEL` and `SMARTBAR_REPO_ROOT` are not settable here.**
+  Both already have their own mechanism (`--channel` plus the installers'
+  read-back of the installed unit; the checkout the installer built from). Two
+  sources for one key is how the two halves of a system come to disagree.
+
+Anything unusable is named at install time rather than silently dropped:
+
+```
+warning: ~/.config/ai-smartbar/config.env: line 3: 'PATH' is not a SMARTBAR_* setting
+```
+
 ## Device presence: the `(N)` next to an address
 
 `syu3cs@virginia.edu (2)` means **two of your devices have that account
@@ -190,7 +239,7 @@ the number is right.
 `ai-smartbar --presence-status` names them:
 
 ```
-device    13ceb7630470 "ducs-mac"
+device    13ceb7630470 "mac-ducs-mbp"
 remote    readable
 publish   ok
 cadence   beat 300s, counted for 900s after the last beat
@@ -198,9 +247,13 @@ cadence   beat 300s, counted for 900s after the last beat
 counts    syu3cs@virginia.edu (2)
 
 live devices:
-  ducs-mac                 syu3cs@virginia.edu                this device
-  linux-box                syu3cs@virginia.edu                42s ago
+  mac-ducs-mbp             syu3cs@virginia.edu                this device
+  linux-thinkpad           syu3cs@virginia.edu                42s ago
 ```
+
+Each name is `<platform>-<hostname>`, so you can tell *which* machine a count
+came from — a hostname alone does not distinguish a Mac from a Linux box.
+`SMARTBAR_PRESENCE_LABEL` replaces the whole name, prefix included.
 
 **How devices find each other.** They share no server, and a count that
 only works on one network would be wrong exactly when it matters (a laptop
@@ -211,6 +264,13 @@ minutes:
 ```
 refs/smartbar/p1/<device>/<label>/<epoch>/<sha256 of the address>
 ```
+
+The platform lives in that `<label>` rather than in a component of its own, on
+purpose: the label is display-only, so every existing device reads a prefixed
+one without changes. Adding a component would change the ref *shape*, and an
+older device's decoder rejects a shape it does not know — it would quietly stop
+counting every upgraded device until it upgraded too, which is the exact
+undercount this feature exists to prevent.
 
 It points at a commit the remote already has, so **nothing is ever
 committed and no objects are transferred** — no branch, no tag, no
@@ -512,7 +572,15 @@ python3 -m unittest discover -s tests -v   # 205 tests, no external deps
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
 ./tests/e2e-update.sh                      # self-update against a throwaway origin
+./tests/e2e-presence.sh                    # two real clones against a bare origin
+./tests/e2e-config.sh                      # config.env -> real LaunchAgents/units
 ```
+
+`tests/e2e-config.sh` runs the real installers with `launchctl`, `systemctl`,
+`crontab`, `pkill`, `setsid` and `nohup` shadowed by no-op stubs and `HOME`
+pointed at a temporary directory, then reads back the agent files they wrote
+and lints them. It is contained by `PATH` order rather than by trust, so it
+cannot disturb real agents, your crontab or running processes.
 
 `tests/e2e-update.sh` builds a fake origin out of the current working tree
 and drives a fake device through check → apply → no-op → blocked → reset →

@@ -32,6 +32,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# This device's own settings. launchd gives a GUI app no shell environment at
+# all, and the plist below is rewritten from scratch on every update, so
+# ~/.config/ai-smartbar/config.env is the only durable place for them — folded
+# in here, and therefore re-applied by every update, since applying an update
+# IS re-running this script. Never fatal: a device with an unreadable config
+# still gets a working agent.
+CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
+
 command -v swift >/dev/null \
   || { echo "Swift toolchain missing — run: xcode-select --install"; exit 1; }
 command -v cswap >/dev/null || [[ -x "$HOME/.local/bin/cswap" ]] \
@@ -74,7 +82,7 @@ cat > "$PLIST" <<EOF
     <!-- The bundle is a COPY in ~/Applications and cannot find the checkout
          on its own; device presence needs bin/ai-smartbar to announce this
          Mac to the other devices. -->
-    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>
+    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>${CONFIG_PLIST}
   </dict>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/ai-smartbar.log</string>

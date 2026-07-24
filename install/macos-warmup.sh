@@ -18,6 +18,11 @@ command -v cswap >/dev/null || [[ -x "$HOME/.local/bin/cswap" ]] \
 command -v claude >/dev/null || [[ -x "$HOME/.local/bin/claude" ]] \
   || { echo "Install the claude CLI first (the warmup pings through it)"; exit 1; }
 
+# This device's settings (SMARTBAR_WARMUP_DAILY_CAP, _QUIET…) — see the note
+# in install/macos-swift.sh for why config.env exists and why it is re-read
+# here on every install rather than remembered.
+CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
+
 # launchd hands agents a bare PATH (/usr/bin:/bin) — cswap resolves the
 # claude CLI via PATH, so bake the usual install dirs in. The runner also
 # hardens its subprocess PATH itself; this is belt and suspenders.
@@ -35,7 +40,7 @@ cat > "$PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${CONFIG_PLIST}
   </dict>
   <key>StartInterval</key><integer>600</integer>
   <key>RunAtLoad</key><true/>

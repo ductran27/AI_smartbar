@@ -46,11 +46,17 @@ done
 # installer (the updater does exactly that) must not flip a development box
 # onto the release channel behind the user's back.
 if [[ -z "$CHANNEL" ]]; then
+  # `|| true` is load-bearing: on a FRESH install there is no unit and no
+  # crontab, and sed and `crontab -l` both exit non-zero for a missing one.
+  # Under `set -euo pipefail` that status propagates out of the assignment and
+  # kills the installer here — before the symlink, before the autostart entry,
+  # before anything. macOS got this right with `|| true` on its PlistBuddy
+  # read-back; this side did not, so no fresh Linux install could complete.
   EXISTING="$(sed -n 's/^Environment=SMARTBAR_UPDATE_CHANNEL=//p' \
-      "$UNITS/ai-smartbar-update.service" 2>/dev/null | head -1)"
+      "$UNITS/ai-smartbar-update.service" 2>/dev/null | head -1 || true)"
   if [[ -z "$EXISTING" ]] && command -v crontab >/dev/null; then
     EXISTING="$(crontab -l 2>/dev/null \
-      | sed -n 's/.*SMARTBAR_UPDATE_CHANNEL=\([a-z]*\).*/\1/p' | head -1)"
+      | sed -n 's/.*SMARTBAR_UPDATE_CHANNEL=\([a-z]*\).*/\1/p' | head -1 || true)"
   fi
   case "$EXISTING" in release|main) CHANNEL="$EXISTING" ;; esac
 fi
@@ -62,12 +68,22 @@ esac
 
 mkdir -p "$(dirname "$BIN")" "$(dirname "$AUTOSTART")" "$CACHE"
 ln -sf "$REPO/bin/ai-smartbar" "$BIN"
+
+# This device's settings. Both files below are rewritten from scratch on every
+# update (applying an update IS re-running this script), so anything edited
+# into them by hand is lost — ~/.config/ai-smartbar/config.env is the durable
+# place, folded in here and therefore re-applied every time. Both renderings
+# collapse to nothing when the file is absent, leaving these units byte-identical
+# to what they were before. Never fatal: no config must still mean a working unit.
+CONFIG_EXEC="$("$REPO/bin/ai-smartbar" --print-config exec || true)"
+CONFIG_SYSTEMD="$("$REPO/bin/ai-smartbar" --print-config systemd || true)"
+
 cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
 Name=AI smartbar
 Comment=Claude usage limits in the system tray
-Exec=$BIN
+Exec=${CONFIG_EXEC}$BIN
 Icon=dialog-information
 X-GNOME-Autostart-enabled=true
 EOF
@@ -97,7 +113,7 @@ Type=oneshot
 # systemd tears down the whole cgroup and takes the new tray with it.
 KillMode=process
 Environment=PATH=$AGENT_PATH
-Environment=SMARTBAR_UPDATE_CHANNEL=$CHANNEL
+Environment=SMARTBAR_UPDATE_CHANNEL=$CHANNEL${CONFIG_SYSTEMD}
 ExecStart=$REPO/bin/ai-smartbar --update
 EOF
     cat > "$UNITS/ai-smartbar-update.timer" <<EOF
@@ -115,7 +131,7 @@ EOF
     echo "Update timer enabled (channel=$CHANNEL, every ${INTERVAL_H}h)."
   elif command -v crontab >/dev/null; then
     { crontab -l 2>/dev/null | grep -v "ai-smartbar --update"
-      echo "17 */$INTERVAL_H * * * SMARTBAR_UPDATE_CHANNEL=$CHANNEL $REPO/bin/ai-smartbar --update"
+      echo "17 */$INTERVAL_H * * * SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
     } | crontab -
     echo "Update cron entry installed (channel=$CHANNEL, every ${INTERVAL_H}h)."
   else

@@ -40,6 +40,12 @@ case "$CHANNEL" in
   *) echo "channel must be 'release' or 'main' (got '$CHANNEL')" >&2; exit 2 ;;
 esac
 
+# This device's settings (SMARTBAR_UPDATE_INTERVAL, _NOTIFY, SMARTBAR_UPDATE=off…)
+# — see install/macos-swift.sh for why config.env exists. The channel is NOT
+# taken from there: it has its own flag and its own read-back above, and two
+# sources for one key is how the two halves end up disagreeing.
+CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
+
 # launchd hands agents a bare PATH and no TTY, and this repo is typically
 # PRIVATE — so prove a non-interactive fetch works NOW instead of letting the
 # agent fail silently forever (the bug that kept v2's warmup from ever
@@ -79,7 +85,7 @@ cat > "$NEW" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>${AGENT_PATH}</string>
-    <key>SMARTBAR_UPDATE_CHANNEL</key><string>${CHANNEL}</string>
+    <key>SMARTBAR_UPDATE_CHANNEL</key><string>${CHANNEL}</string>${CONFIG_PLIST}
   </dict>
   <key>StartInterval</key><integer>${INTERVAL}</integer>
   <key>RunAtLoad</key><true/>

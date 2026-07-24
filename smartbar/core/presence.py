@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 
@@ -107,6 +108,25 @@ def valid_device_id(text) -> bool:
     announce itself, so the runner mints a fresh one instead.
     """
     return bool(_DEVICE_RE.match((text or "").strip()))
+
+
+def platform_tag() -> str:
+    """"mac" / "linux", to go in front of the hostname in a device's label.
+
+    Deliberately part of the LABEL rather than a new component in the ref.
+    The label is display-only — a device's identity is its id — so every
+    existing p1 reader accepts a prefixed label unchanged. Adding a component
+    would change the ref SHAPE, and an older device's decoder rejects a shape
+    it does not know: it would quietly stop counting every upgraded device
+    until it upgraded too, which is the exact undercount this feature exists
+    to prevent. A cosmetic field is the right place for cosmetic information.
+    """
+    raw = sys.platform
+    if raw == "darwin":
+        return "mac"
+    if raw.startswith("linux"):
+        return "linux"
+    return sanitize_label(raw)
 
 
 def sanitize_label(text: str) -> str:

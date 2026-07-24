@@ -95,17 +95,26 @@ def device_id() -> str:
 def device_label() -> str:
     """Short name shown by --presence-status, so "(3)" can be checked.
 
-    SMARTBAR_PRESENCE_LABEL overrides it (set it empty to publish nothing
-    but "device" — the count works the same, only the diagnostic gets less
-    readable).
+    Platform first, then the hostname: `mac-ducs-mbp`, `linux-thinkpad`. A
+    beacon otherwise carries no hint of what a machine IS, so "which of my
+    devices is that, and is my Linux box even in the loop?" could not be
+    answered from the count at all — including by me, when checking whether
+    this feature works across operating systems.
+
+    SMARTBAR_PRESENCE_LABEL overrides the whole thing, prefix included (set
+    it empty to publish nothing but "device" — the count works the same, only
+    the diagnostic gets less readable).
     """
     raw = os.environ.get("SMARTBAR_PRESENCE_LABEL")
-    if raw is None:
-        try:
-            raw = socket.gethostname()
-        except OSError:
-            raw = ""
-    return presence.sanitize_label(raw)
+    if raw is not None:
+        return presence.sanitize_label(raw)
+    try:
+        host = socket.gethostname()
+    except OSError:
+        host = ""
+    # sanitize_label truncates, so the prefix is what survives on a machine
+    # with a very long name — which is the part worth keeping.
+    return presence.sanitize_label("{}-{}".format(presence.platform_tag(), host))
 
 
 def _accounts():

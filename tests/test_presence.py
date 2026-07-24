@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from smartbar.core import model, presence
 
@@ -58,6 +59,88 @@ class TestLabel(unittest.TestCase):
         label = presence.sanitize_label("a" * 23 + "-bbbb")
         self.assertLessEqual(len(label), presence.LABEL_MAX)
         self.assertFalse(label.endswith("-"))
+
+
+class TestPlatformInTheLabel(unittest.TestCase):
+    """A beacon otherwise says nothing about what a machine IS.
+
+    Without this, "which of my devices is that, and is my Linux box even in
+    the loop?" cannot be answered from the count — the hostname alone does
+    not distinguish a Mac from a Linux box, since sanitize_label drops the
+    domain that would have hinted at it.
+    """
+
+    def setUp(self):
+        self.saved_platform = presence.sys.platform
+        self.saved_label = os.environ.get("SMARTBAR_PRESENCE_LABEL")
+        os.environ.pop("SMARTBAR_PRESENCE_LABEL", None)
+
+    def tearDown(self):
+        presence.sys.platform = self.saved_platform
+        if self.saved_label is None:
+            os.environ.pop("SMARTBAR_PRESENCE_LABEL", None)
+        else:
+            os.environ["SMARTBAR_PRESENCE_LABEL"] = self.saved_label
+
+    def test_the_two_platforms_that_matter(self):
+        for raw, want in (("darwin", "mac"), ("linux", "linux"),
+                          ("linux2", "linux")):
+            presence.sys.platform = raw
+            self.assertEqual(presence.platform_tag(), want)
+
+    def test_an_unknown_platform_still_yields_a_usable_label(self):
+        for raw in ("freebsd14", "win32"):
+            presence.sys.platform = raw
+            tag = presence.platform_tag()
+            self.assertTrue(tag)
+            self.assertEqual(presence.sanitize_label(tag), tag)
+
+    def test_the_runner_puts_the_platform_in_front_of_the_hostname(self):
+        from smartbar import presence_runner
+        presence.sys.platform = "linux"
+        with mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="thinkpad.lan"):
+            self.assertEqual(presence_runner.device_label(), "linux-thinkpad")
+        presence.sys.platform = "darwin"
+        with mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="Ducs-MacBook.local"):
+            self.assertEqual(presence_runner.device_label(), "mac-ducs-macbook")
+
+    def test_the_prefix_survives_a_hostname_too_long_to_fit(self):
+        # Truncation has to eat the hostname, not the part that says which
+        # machine this is.
+        from smartbar import presence_runner
+        presence.sys.platform = "linux"
+        with mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="x" * 60):
+            label = presence_runner.device_label()
+        self.assertTrue(label.startswith("linux-"))
+        self.assertLessEqual(len(label), presence.LABEL_MAX)
+
+    def test_an_explicit_label_is_still_exactly_what_was_asked_for(self):
+        from smartbar import presence_runner
+        presence.sys.platform = "linux"
+        os.environ["SMARTBAR_PRESENCE_LABEL"] = "kitchen-pi"
+        self.assertEqual(presence_runner.device_label(), "kitchen-pi")
+        os.environ["SMARTBAR_PRESENCE_LABEL"] = ""
+        self.assertEqual(presence_runner.device_label(), "device")
+
+    def test_a_prefixed_label_is_still_a_ref_git_accepts(self):
+        # TestRefRoundTrip makes this promise for raw hostnames; the prefix
+        # must not be the thing that finally produces an invalid ref.
+        from smartbar import presence_runner
+        for platform in ("darwin", "linux", "freebsd14"):
+            presence.sys.platform = platform
+            for host in ("", "???", "HOST.sub.example.com", "x" * 60, "-lead-"):
+                with mock.patch.object(presence_runner.socket, "gethostname",
+                                       return_value=host):
+                    label = presence_runner.device_label()
+                ref = presence.encode_ref("abc123", label, 1753380000,
+                                          presence.account_key("a@b.com"))
+                self.assertEqual(
+                    subprocess.run(["git", "check-ref-format", ref]).returncode,
+                    0, f"git rejected {ref!r} ({platform}, host {host!r})")
+                self.assertEqual(presence.decode_ref(ref).label, label)
 
 
 class TestRefRoundTrip(unittest.TestCase):

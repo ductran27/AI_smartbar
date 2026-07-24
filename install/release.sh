@@ -93,6 +93,11 @@ run_suite "e2e-update" "$REPO/tests/e2e-update.sh"
 # Always: presence is the only feature that writes to a REMOTE on a timer,
 # so a release must never ship it broken. Uses a throwaway bare repo.
 run_suite "e2e-presence" "$REPO/tests/e2e-presence.sh"
+# Always: this one generates the LaunchAgents and systemd units every device
+# re-installs on update. A malformed unit is not a degraded feature, it is a
+# device that stops running the app — and it would ship to all of them at once.
+# Fully sandboxed (stubbed launchctl/systemctl/crontab, temporary HOME).
+run_suite "e2e-config" "$REPO/tests/e2e-config.sh"
 if [[ "$FULL" == "1" ]]; then
   run_suite "e2e-warmup" "$REPO/tests/e2e-warmup.sh"
   run_suite "e2e-autoadd" "$REPO/tests/e2e-autoadd.sh"
