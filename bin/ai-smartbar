@@ -36,6 +36,16 @@ def main() -> int:
                         help="print current state to stdout and exit")
     parser.add_argument("--warmup-once", action="store_true",
                         help="run one gate-checked warmup pass and exit")
+    parser.add_argument("--update", action="store_true",
+                        help="fetch and apply the newest release, then restart")
+    parser.add_argument("--check-update", action="store_true",
+                        help="report whether a newer release is waiting "
+                             "(exit 10 when one is)")
+    parser.add_argument("--reset", action="store_true",
+                        help="with --update: discard local drift (parked in a "
+                             "rescue ref first) and re-install from scratch")
+    parser.add_argument("--force", action="store_true",
+                        help="with --update: re-apply even when already current")
     parser.add_argument("--version", action="version",
                         version=f"ai-smartbar {__version__}")
     args = parser.parse_args()
@@ -44,6 +54,10 @@ def main() -> int:
     if args.warmup_once:
         from smartbar.warmup_runner import run_once
         return run_once()
+    if args.update or args.check_update:
+        from smartbar.update_runner import run_once as update_once
+        return update_once(reset=args.reset, force=args.force,
+                           check_only=args.check_update and not args.update)
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     else:

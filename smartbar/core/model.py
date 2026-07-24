@@ -179,6 +179,18 @@ def state_text(account) -> str:
     return STATE_TEXT.get(account.status, "No usage data")
 
 
+def dot_style(account) -> str:
+    """"solid" or "hollow" for an account's status dot.
+
+    v3 paints a dot gray at 100% used (exhausted) — the very same gray a
+    dataless account gets, so "the Fable bucket is spent" and "this slot's
+    credential is dead" rendered identically. Hollow means there is NO
+    usable measurement behind the dot (see state_text); solid means the
+    color is a real reading.
+    """
+    return "hollow" if worst(account) is None else "solid"
+
+
 def switch_blocked(account) -> bool:
     """True when activating this slot would restore a dead credential."""
     return account.status in DEAD_CREDENTIAL_STATUSES

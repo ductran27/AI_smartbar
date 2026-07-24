@@ -6,13 +6,23 @@ SUPPORT="$HOME/Library/Application Support/ai-smartbar"
 VENV="$SUPPORT/venv"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.plist"
 
-if [[ "${1:-}" == "--uninstall" ]]; then
-  launchctl unload "$PLIST" 2>/dev/null || true
-  rm -f "$PLIST"
-  rm -rf "$SUPPORT"
-  echo "ai-smartbar uninstalled."
-  exit 0
-fi
+AUTO_UPDATE=1
+CHANNEL_ARG=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --uninstall)
+      launchctl unload "$PLIST" 2>/dev/null || true
+      rm -f "$PLIST"
+      rm -rf "$SUPPORT"
+      "$REPO/install/macos-update.sh" --uninstall >/dev/null 2>&1 || true
+      echo "ai-smartbar uninstalled."
+      exit 0 ;;
+    --no-auto-update) AUTO_UPDATE=0; shift ;;
+    --channel)   CHANNEL_ARG=(--channel "${2:?--channel needs release|main}"); shift 2 ;;
+    --channel=*) CHANNEL_ARG=(--channel "${1#*=}"); shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 command -v cswap >/dev/null || { echo "Install claude-swap first (pipx install claude-swap)"; exit 1; }
 mkdir -p "$SUPPORT"
@@ -37,3 +47,9 @@ EOF
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 echo "ai-smartbar installed — check your menu bar."
+
+# Self-updating is ON by default (see install/macos-update.sh).
+if [[ "$AUTO_UPDATE" == "1" ]]; then
+  "$REPO/install/macos-update.sh" ${CHANNEL_ARG[@]+"${CHANNEL_ARG[@]}"} || \
+    echo "WARNING: update agent NOT installed — this device will not self-update." >&2
+fi
