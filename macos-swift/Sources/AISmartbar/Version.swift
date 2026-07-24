@@ -2,5 +2,5 @@
 // Mirrors smartbar/__init__.py so the popover, the CLI, the app bundle's
 // Info.plist and the git tag all name the same build.
 enum AppVersion {
-    static let current = "0.3.1"
+    static let current = "0.4.0"
 }
