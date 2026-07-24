@@ -165,6 +165,12 @@ struct Account: Identifiable, Equatable {
         metrics.max(by: { $0.pct < $1.pct })?.status ?? .gray
     }
 
+    /// Mirror of model.dot_style. v3 paints a dot gray at 100% used, which is
+    /// the very same gray a dataless account gets — so "the Fable bucket is
+    /// spent" and "this slot's credential is dead" rendered identically.
+    /// Hollow means there is NO measurement behind the dot.
+    var dotHollow: Bool { metrics.isEmpty }
+
     /// States for the twin-pill icon: general all-models pill first, then
     /// one pill per scoped (per-model) metric. Pills FILL as tokens are
     /// spent. Empty when there is no data (the renderer draws the hollow

@@ -8,11 +8,13 @@ import SwiftUI
 struct AISmartbarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = UsageStore()
+    @StateObject private var updates = UpdateStatus()
 
     var body: some Scene {
         MenuBarExtra {
             PopoverView()
                 .environmentObject(store)
+                .environmentObject(updates)
         } label: {
             Image(nsImage: store.icon)
                 .accessibilityLabel(store.accessibilitySummary)

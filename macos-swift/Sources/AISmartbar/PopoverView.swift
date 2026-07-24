@@ -1,11 +1,13 @@
 // Content of the MenuBarExtra window: compact header (title, Updated
-// stamp, stale marker, equal-size refresh/quit), then one card per
-// account. Dark-only design; no footer row.
+// stamp, stale marker, equal-size refresh/quit), one card per account, and
+// a quiet footer naming the running version — which grows an upgrade
+// button when the updater has a newer release waiting. Dark-only design.
 import AppKit
 import SwiftUI
 
 struct PopoverView: View {
     @EnvironmentObject private var store: UsageStore
+    @EnvironmentObject private var updates: UpdateStatus
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -30,13 +32,55 @@ struct PopoverView: View {
             } else {
                 loadingOrError
             }
+            footer
         }
         .padding(11)
         .frame(width: 330)
         .preferredColorScheme(.dark)
         // Opening the popover is the user looking: fetch now so the numbers
-        // match /usage (cswap's store paces the real network traffic).
-        .onAppear { store.refresh() }
+        // match /usage (cswap's store paces the real network traffic), and
+        // re-read the updater's state file (a cheap local read).
+        .onAppear {
+            store.refresh()
+            updates.reload()
+        }
+    }
+
+    /// Version line, plus the one-click upgrade when a release is waiting.
+    /// The button hands off to the launchd update job rather than doing the
+    /// work here — applying an update restarts this very app.
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Text("v\(updates.currentVersion)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help(updates.blockedReason.isEmpty
+                      ? "AI smartbar \(updates.currentVersion)"
+                      : "Update held back: \(updates.blockedReason)")
+            if !updates.blockedReason.isEmpty {
+                Image(systemName: "pause.circle")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .help("Update held back: \(updates.blockedReason)")
+            }
+            Spacer(minLength: 6)
+            if updates.isUpdating {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Updating…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if !updates.pendingVersion.isEmpty {
+                Button("Update to \(updates.pendingVersion)") {
+                    updates.installUpdate()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Fetch, rebuild and restart AI smartbar")
+                .accessibilityLabel("Update to version \(updates.pendingVersion)")
+            }
+        }
+        .padding(.top, 1)
     }
 
     @ViewBuilder

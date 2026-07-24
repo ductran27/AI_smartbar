@@ -11,9 +11,7 @@ struct AccountCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 7) {
-                Circle()
-                    .fill(account.worstStatus.color)
-                    .frame(width: 7, height: 7)
+                statusDot
                 Text(account.email)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -67,5 +65,22 @@ struct AccountCardView: View {
                               : Color.white.opacity(0.07),
                               lineWidth: account.active ? 1.5 : 1)
         )
+    }
+
+    /// Solid = a real reading, so solid gray means "this limit is exhausted".
+    /// Hollow = no measurement at all (no data yet, or a dead credential —
+    /// the label below spells out which).
+    @ViewBuilder
+    private var statusDot: some View {
+        if account.dotHollow {
+            Circle()
+                .strokeBorder(account.worstStatus.color, lineWidth: 1.5)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel("no usage data")
+        } else {
+            Circle()
+                .fill(account.worstStatus.color)
+                .frame(width: 7, height: 7)
+        }
     }
 }
