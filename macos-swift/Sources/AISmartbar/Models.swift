@@ -49,8 +49,10 @@ struct CswapScopedRaw: Decodable {
 // the 5-step status ramp is judged on usage and bars/pills FILL as tokens
 // are spent (mirror of smartbar/core/model.py).
 
+/// The used ramp — green → yellow → low → critical → full (purple, spent) —
+/// plus `gray`, which is OFF that ramp: it means "no measurement at all".
 enum Status: String {
-    case green, yellow, low, critical, gray
+    case green, yellow, low, critical, full, gray
 }
 
 enum Thresholds {
@@ -73,7 +75,7 @@ enum Thresholds {
 
     static func status(forUsedPct pct: Double) -> Status {
         let used = max(0, pct)
-        if used >= 100 { return .gray }
+        if used >= 100 { return .full }   // spent, not merely critical
         if used >= red { return .critical }
         if used >= low { return .low }
         if used >= yellow { return .yellow }

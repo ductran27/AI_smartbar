@@ -23,9 +23,13 @@ CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 
-COLORS = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
-          "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
-          "gray": (0.45, 0.45, 0.45)}
+# Canonical palette (incl. purple "full" for a spent limit). Deliberately
+# NOT a local copy: a status this dict lacked would crash icon rendering on
+# every poll, and tests/test_model.py asserts model.RGB covers every status.
+COLORS = model.RGB
+# "Update waiting" badge — brighter than either usage red so it cannot be
+# mistaken for a usage alarm (mirror of MenuBarIcon.badgeColor).
+BADGE_RGB = (1.0, 0.23, 0.19)
 
 log = logging.getLogger("ai-smartbar")
 
@@ -40,17 +44,22 @@ def _rounded_rect(ctx, x, y, w, h, r):
     ctx.close_path()
 
 
-def render_pills(states, path: str) -> None:
+def render_pills(states, path: str, update_pending: bool = False) -> None:
     """Twin-pill badge (same design as the macOS icon, 6x scale).
 
     One vertical pill per (fraction_used, color) state: general limit
     first, then per-model buckets. Fill anchors to the bottom and RISES
     as tokens are spent (nearly full = nearly at the limit). Empty
     states -> hollow pills + "?". The panel scales the PNG to its height.
+
+    `update_pending` adds a dot in a WIDENED frame rather than over a pill:
+    a pill's top is its most meaningful region, so covering it would trade
+    usage information for a notification.
     """
     pill_w, pill_h, gap, margin, radius = 30, 96, 12, 12, 15
     n = len(states) if states else 2
-    w = margin * 2 + pill_w * n + gap * (n - 1)
+    dot_d = 30 if update_pending else 0
+    w = margin * 2 + pill_w * n + gap * (n - 1) + dot_d
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, pill_h)
     ctx = cairo.Context(surface)
     for i in range(n):
@@ -70,13 +79,18 @@ def render_pills(states, path: str) -> None:
             _rounded_rect(ctx, x, pill_h - fill_h, pill_w, fill_h, radius)
             ctx.set_source_rgb(*COLORS[color_name])
             ctx.fill()
+    if update_pending:
+        # cairo's origin is top-left, so this lands in the top-right corner.
+        ctx.set_source_rgb(*BADGE_RGB)
+        ctx.arc(w - dot_d / 2.0, dot_d / 2.0, dot_d / 2.0, 0, 6.28319)
+        ctx.fill()
     if not states:
         ctx.set_source_rgba(1, 1, 1, 0.85)
         ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
                              cairo.FONT_WEIGHT_BOLD)
         ctx.set_font_size(48)
         ext = ctx.text_extents("?")
-        ctx.move_to((w - ext.width) / 2 - ext.x_bearing,
+        ctx.move_to((w - dot_d - ext.width) / 2 - ext.x_bearing,
                     (pill_h - ext.height) / 2 - ext.y_bearing)
         ctx.show_text("?")
     surface.write_to_png(path)
@@ -98,6 +112,7 @@ class Tray:
         self.pending_menu = None  # rebuilt while open; swapped in on hide
         self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
+        self.update_pending = self._pending_update()  # "" or "X.Y.Z"
         self.indicator = AppIndicator.Indicator.new(
             "ai-smartbar", "dialog-information",
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -133,7 +148,8 @@ class Tray:
         # with the current name, so a single name would never repaint.
         self.flip = not self.flip
         name = f"state-{'a' if self.flip else 'b'}"
-        render_pills(states, os.path.join(ICON_DIR, name + ".png"))
+        render_pills(states, os.path.join(ICON_DIR, name + ".png"),
+                     update_pending=bool(self.update_pending))
         self.indicator.set_icon_full(name, "AI smartbar usage")
 
     def _build_menu(self):
@@ -156,6 +172,10 @@ class Tray:
                     item.connect("activate", self._on_switch, acct.number)
                 menu.append(item)
         menu.append(Gtk.SeparatorMenuItem())
+        if self.update_pending:
+            item = Gtk.MenuItem(label=f"⬆ Update to {self.update_pending}")
+            item.connect("activate", self._on_update)
+            menu.append(item)
         for label, callback in (("⟳ Refresh now", self._on_refresh),
                                 ("⚙ Open cswap TUI", self._on_tui),
                                 ("⏻ Quit", self._on_quit)):
@@ -200,6 +220,32 @@ class Tray:
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
 
+    def _pending_update(self) -> str:
+        """The release the updater found waiting, or "" — never raises.
+
+        A broken/absent state file must not be able to take the tray down,
+        so everything here is best-effort and imported lazily.
+        """
+        try:
+            from smartbar import update_runner
+            from smartbar.core import update as update_core
+            return update_core.pending_version(update_runner.load_state())
+        except Exception:
+            log.exception("could not read the update state")
+            return ""
+
+    def _on_update(self, _item):
+        """Apply the waiting release. Detached on purpose: the updater
+        restarts this very tray, so it must not be our child."""
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        try:
+            subprocess.Popen([os.path.join(repo, "bin", "ai-smartbar"), "--update"],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            log.exception("could not start the updater")
+
     def _on_refresh(self, _item):
         self._start_fetch()
 
@@ -235,6 +281,9 @@ class Tray:
         if snap.schema_warning:
             log.warning("%s", snap.schema_warning)
         account = snap.active_account
+        # Cheap local file read; keeps the badge and the menu row in step
+        # with whatever the update agent last decided.
+        self.update_pending = self._pending_update()
         self._set_icon(model.pill_states(account))
         self.indicator.set_title(model.title_line(account))
         self._refresh_menu()

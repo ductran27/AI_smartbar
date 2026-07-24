@@ -202,6 +202,12 @@ def clear_failures(state: dict, ref: str, now=None) -> None:
     state.get("failures", {}).get(_day(now), {}).pop(ref, None)
 
 
+def pending_version(state: dict) -> str:
+    """The release a UI should offer, or "" — read from the runner's state."""
+    pending = state.get("pendingVersion") or ""
+    return pending if isinstance(pending, str) else ""
+
+
 def ui_state(plan, version: str, now=None, applied: str = "") -> dict:
     """The JSON blob the UIs read to offer their one-click upgrade button."""
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)

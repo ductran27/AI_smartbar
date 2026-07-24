@@ -7,7 +7,8 @@ v3 semantics: every number a user sees is "% used" — the same scale as
 Claude Code's /usage — and pills/bars FILL as tokens are spent.
 Thresholds are used-based: a metric is yellow at or above SMARTBAR_YELLOW
 % used, "low" (light red) at or above SMARTBAR_LOW, "critical" (dark red,
-fires the switch alert) at or above SMARTBAR_RED, gray once exhausted.
+fires the switch alert) at or above SMARTBAR_RED, and purple ("full") once
+exhausted at 100%. Gray is NOT part of that ramp: it means no measurement.
 """
 from __future__ import annotations
 
@@ -18,7 +19,16 @@ DEFAULT_YELLOW_USED = 50.0
 DEFAULT_LOW_USED = 75.0
 DEFAULT_RED_USED = 90.0
 
-DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴", "gray": "⚪"}
+# Glyphs and RGB for every status `color()` can return: the 5-step used ramp
+# (green → yellow → low → critical → full) plus the off-ramp "gray", which
+# means "no measurement at all" and nothing else. Renderers must not keep
+# their own copy — a missing key here is a runtime crash in a UI we may not
+# be able to run (tests/test_model.py asserts parity).
+DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴",
+       "full": "🟣", "gray": "⚪"}
+RGB = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
+       "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
+       "full": (0.545, 0.361, 0.965), "gray": (0.45, 0.45, 0.45)}
 
 # cswap usageStatus values other than "ok", mapped to the short explanation
 # UIs put on the account's card/row (instead of a bare "No usage data").
@@ -108,7 +118,7 @@ def color(pct: float) -> str:
     """Status name for a used-% value."""
     used = max(0.0, pct)
     if used >= 100:
-        return "gray"
+        return "full"   # purple: the limit is spent, not merely critical
     if used >= red_threshold():
         return "critical"
     if used >= low_threshold():
@@ -182,11 +192,10 @@ def state_text(account) -> str:
 def dot_style(account) -> str:
     """"solid" or "hollow" for an account's status dot.
 
-    v3 paints a dot gray at 100% used (exhausted) — the very same gray a
-    dataless account gets, so "the Fable bucket is spent" and "this slot's
-    credential is dead" rendered identically. Hollow means there is NO
-    usable measurement behind the dot (see state_text); solid means the
-    color is a real reading.
+    Hollow means there is NO usable measurement behind the dot (see
+    state_text); solid means the color is a real reading. Together with the
+    purple "full" status this keeps the three states apart: purple = the
+    limit is spent, hollow gray = we don't know, red = nearly there.
     """
     return "hollow" if worst(account) is None else "solid"
 

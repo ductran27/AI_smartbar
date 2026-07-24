@@ -55,4 +55,31 @@ enum MenuBarIcon {
         image.isTemplate = false
         return image
     }
+
+    /// The same icon plus an "update waiting" dot, drawn in a widened frame.
+    ///
+    /// The dot deliberately does NOT overlay a pill: a pill's top is its
+    /// most meaningful region (nearly full = nearly at the limit), so
+    /// covering it would trade usage information for a notification. Making
+    /// the icon a little wider IS the notification.
+    static func badged(_ base: NSImage) -> NSImage {
+        let size = NSSize(width: base.size.width + badgeDiameter,
+                          height: base.size.height)
+        let image = NSImage(size: size, flipped: false) { _ in
+            base.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+            let dot = NSRect(x: size.width - badgeDiameter,
+                             y: pillHeight - badgeDiameter,
+                             width: badgeDiameter, height: badgeDiameter)
+            badgeColor.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    static let badgeDiameter: CGFloat = 5
+    /// System red — brighter than either usage red (#E4604B / #CC2F2F) so an
+    /// update never reads as a usage alarm.
+    static let badgeColor = NSColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1)
 }

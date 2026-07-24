@@ -67,9 +67,9 @@ struct AccountCardView: View {
         )
     }
 
-    /// Solid = a real reading, so solid gray means "this limit is exhausted".
-    /// Hollow = no measurement at all (no data yet, or a dead credential —
-    /// the label below spells out which).
+    /// Solid = a real reading (purple when a limit is spent). Hollow gray =
+    /// no measurement at all — no data yet, or a dead credential; the label
+    /// below spells out which.
     @ViewBuilder
     private var statusDot: some View {
         if account.dotHollow {

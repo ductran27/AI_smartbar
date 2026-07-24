@@ -79,10 +79,34 @@ class SmartBarApp(rumps.App):
                 callback = None if blocked else self._make_switch(acct.number)
                 items.append(rumps.MenuItem(model.menu_row(acct), callback=callback))
         items.append(None)  # separator
+        pending = self._pending_update()
+        if pending:
+            items.append(rumps.MenuItem(f"⬆ Update to {pending}",
+                                        callback=self._on_update))
         items.append(rumps.MenuItem("⟳ Refresh now", callback=self._tick))
         items.append(rumps.MenuItem("⚙ Open cswap TUI", callback=self._open_tui))
         items.append(rumps.MenuItem("⏻ Quit", callback=lambda _s: rumps.quit_application()))
         self.menu = items
+
+    def _pending_update(self) -> str:
+        """The release the updater found waiting, or "" — never raises."""
+        try:
+            from smartbar import update_runner
+            from smartbar.core import update as update_core
+            return update_core.pending_version(update_runner.load_state())
+        except Exception:
+            return ""
+
+    def _on_update(self, _sender):
+        """Apply it detached: the updater restarts this very app."""
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        try:
+            subprocess.Popen([os.path.join(repo, "bin", "ai-smartbar"), "--update"],
+                             start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
 
     def _make_switch(self, number):
         def callback(_sender):

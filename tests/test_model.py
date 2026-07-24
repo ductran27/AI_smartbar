@@ -1,8 +1,9 @@
 """Tests for smartbar.core.model — pure logic, no I/O.
 
 v3 semantics: every user-visible number is "% used" (the /usage scale);
-the 5-step status ramp (green/yellow/low/critical/gray) is judged on
-usage, and pills/bars fill as tokens are spent.
+the status ramp (green/yellow/low/critical/full) is judged on usage, and
+pills/bars fill as tokens are spent. "gray" is off that ramp: it means
+there is no measurement at all.
 """
 import os
 import unittest
@@ -54,8 +55,8 @@ class TestColor(Env):
         self.assertEqual(model.color(89.9), "low")
         self.assertEqual(model.color(90.0), "critical")
         self.assertEqual(model.color(99.9), "critical")
-        self.assertEqual(model.color(100.0), "gray")
-        self.assertEqual(model.color(105.0), "gray")   # over-limit stays gray
+        self.assertEqual(model.color(100.0), "full")   # purple: spent
+        self.assertEqual(model.color(105.0), "full")   # over-limit stays full
 
     def test_env_overrides_are_used_based(self):
         os.environ["SMARTBAR_YELLOW"] = "40"
@@ -179,7 +180,7 @@ class TestPillStates(Env):
 
     def test_over_limit_fraction_clamps_at_one(self):
         a = account(metrics=[metric("5h", 130.0)])
-        self.assertEqual(model.pill_states(a), [(1.0, "gray")])
+        self.assertEqual(model.pill_states(a), [(1.0, "full")])
 
     def test_empty_for_no_data(self):
         self.assertEqual(model.pill_states(account(metrics=[])), [])
@@ -265,6 +266,37 @@ class TestGeneralScopedRows(Env):
     def test_icon_rows_no_data(self):
         self.assertEqual(model.icon_rows(account(metrics=[])), [("?", "gray")])
         self.assertEqual(model.icon_rows(None), [("?", "gray")])
+
+
+class TestPaletteParity(unittest.TestCase):
+    """Renderers look colors up BY NAME, so a status missing from either table
+    is a runtime crash in a UI we may not be able to run — the cairo Linux
+    badge does `COLORS[color_name]` on every poll."""
+
+    def test_every_status_color_has_a_glyph_and_an_rgb(self):
+        for pct in (0.0, 49.9, 50.0, 74.9, 75.0, 89.9, 90.0, 99.9, 100.0, 150.0):
+            name = model.color(pct)
+            self.assertIn(name, model.DOT, f"{pct}% -> {name!r} has no glyph")
+            self.assertIn(name, model.RGB, f"{pct}% -> {name!r} has no RGB")
+
+    def test_the_no_data_status_is_covered_too(self):
+        # icon_rows/worst fall back to "gray" without ever calling color().
+        self.assertIn("gray", model.DOT)
+        self.assertIn("gray", model.RGB)
+
+    def test_both_tables_cover_the_same_statuses(self):
+        self.assertEqual(set(model.DOT), set(model.RGB))
+
+    def test_rgb_values_are_unit_triples(self):
+        for name, rgb in model.RGB.items():
+            self.assertEqual(len(rgb), 3, name)
+            for channel in rgb:
+                self.assertTrue(0.0 <= channel <= 1.0, f"{name}: {rgb}")
+
+    def test_full_is_visually_distinct_from_the_reds_and_from_gray(self):
+        for other in ("low", "critical", "gray"):
+            self.assertNotEqual(model.RGB["full"], model.RGB[other], other)
+            self.assertNotEqual(model.DOT["full"], model.DOT[other], other)
 
 
 if __name__ == "__main__":

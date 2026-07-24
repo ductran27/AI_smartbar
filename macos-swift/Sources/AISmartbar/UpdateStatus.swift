@@ -4,6 +4,7 @@
 // trigger *outside* this process on purpose: applying an update restarts
 // this very app, so it has to run as the launchd update job, not as a child
 // of the window that started it.
+import AppKit
 import Foundation
 
 @MainActor
@@ -20,8 +21,36 @@ final class UpdateStatus: ObservableObject {
 
     private var repoRoot = ""      // learned from the state file
     private var triggeredAt: Date?
+    private var timer: Timer?
+    private var activationObserver: NSObjectProtocol?
 
     var currentVersion: String { AppVersion.current }
+
+    init() {
+        reload()
+        // The badge has to appear without the user opening anything, so poll
+        // the state file — slowly, since the updater itself only looks for a
+        // new release every 6 h. This is a small local file read.
+        let timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) {
+            [weak self] _ in
+            Task { @MainActor in self?.reload() }
+        }
+        timer.tolerance = 30
+        self.timer = timer
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reload() }
+        }
+    }
+
+    deinit {
+        timer?.invalidate()
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+        }
+    }
 
     private static var stateURL: URL {
         let env = ProcessInfo.processInfo.environment
@@ -54,7 +83,6 @@ final class UpdateStatus: ObservableObject {
         let blocked = (raw["action"] as? String) == "blocked"
             ? (raw["reason"] as? String ?? "") : ""
         if blocked != blockedReason { blockedReason = blocked }
-        if !next.isEmpty && isUpdating == false { triggeredAt = nil }
     }
 
     func installUpdate() {

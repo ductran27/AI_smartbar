@@ -245,17 +245,17 @@ class TestUiState(unittest.TestCase):
 
 
 class TestDotStyle(unittest.TestCase):
-    """The gray dot used to mean both "exhausted" and "no data"."""
+    """Gray used to mean both "exhausted" and "no data"."""
 
     def account(self, metrics, **kwargs):
         return model.Account(number=1, email="a@x.com", metrics=metrics, **kwargs)
 
-    def test_exhausted_stays_solid(self):
+    def test_exhausted_is_solid_purple(self):
         spent = [model.Metric(key="scoped:Fable", label="Fable", short="F",
                               pct=100.0)]
         acct = self.account(spent)
         self.assertEqual(model.dot_style(acct), "solid")
-        self.assertEqual(model.color(model.worst(acct).pct), "gray")
+        self.assertEqual(model.color(model.worst(acct).pct), "full")
 
     def test_no_data_is_hollow(self):
         self.assertEqual(model.dot_style(self.account([])), "hollow")
@@ -269,6 +269,27 @@ class TestDotStyle(unittest.TestCase):
         acct = self.account([model.Metric(key="5h", label="5h", short="5h",
                                           pct=49.0)])
         self.assertEqual(model.dot_style(acct), "solid")
+
+
+class TestPendingVersion(unittest.TestCase):
+    """What the UIs read to decide whether to badge the icon."""
+
+    def test_reads_the_pending_version(self):
+        self.assertEqual(update.pending_version({"pendingVersion": "0.4.0"}),
+                         "0.4.0")
+
+    def test_empty_when_current_absent_or_malformed(self):
+        for state_dict in ({}, {"pendingVersion": ""}, {"pendingVersion": None},
+                           {"pendingVersion": 3}, {"other": "0.4.0"}):
+            self.assertEqual(update.pending_version(state_dict), "")
+
+    def test_matches_what_ui_state_writes(self):
+        plan = update.plan_update(state())
+        self.assertEqual(update.pending_version(update.ui_state(plan, "0.2.0")),
+                         "0.3.0")
+        current = update.plan_update(state(head_tags=["v0.3.0"]))
+        self.assertEqual(
+            update.pending_version(update.ui_state(current, "0.3.0")), "")
 
 
 if __name__ == "__main__":

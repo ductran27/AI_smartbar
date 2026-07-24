@@ -16,8 +16,15 @@ struct AISmartbarApp: App {
                 .environmentObject(store)
                 .environmentObject(updates)
         } label: {
-            Image(nsImage: store.icon)
-                .accessibilityLabel(store.accessibilitySummary)
+            // A waiting release badges the icon itself, so a device announces
+            // an update without the user opening anything.
+            Image(nsImage: updates.pendingVersion.isEmpty
+                  ? store.icon
+                  : MenuBarIcon.badged(store.icon))
+                .accessibilityLabel(updates.pendingVersion.isEmpty
+                    ? store.accessibilitySummary
+                    : "\(store.accessibilitySummary). Update to "
+                      + "\(updates.pendingVersion) available")
         }
         .menuBarExtraStyle(.window)
     }

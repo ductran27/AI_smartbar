@@ -42,7 +42,9 @@ struct MetricBarRow: View {
         return (Text("\(metric.usedPct)%").fontWeight(.bold)
             + Text(countdown.isEmpty ? "" : " · \(countdown)"))
             .font(.system(size: 10.5, design: .monospaced))
-            .foregroundStyle(metric.pct >= 100 ? Color.white.opacity(0.45)
+            // A spent limit is a deliberate signal (purple bar), not a
+            // disabled row — keep its number readable, just distinguishable.
+            .foregroundStyle(metric.pct >= 100 ? Color.white.opacity(0.68)
                                                : Color.white.opacity(0.8))
             .lineLimit(1)
     }
