@@ -222,18 +222,20 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
             width = (t.text_width(text, t.SIZE_CAPTION, bold=current)
                      + t.BUTTON_PAD_H * 2)
             hit_name = f"tab:{name}"
+            # Faded / not-faded, not colored: the selected provider is full
+            # strength and the other recedes (mirrored by tabButton in
+            # PopoverView.swift).
             if current:
-                fill, border = t.ACCENT, None
+                fill, color = t.TAB_BG_SELECTED, t.TEXT
             elif hover == hit_name:
-                fill, border = t.BUTTON_BG_HOVER, t.BUTTON_BORDER
+                fill, color = t.TAB_BG_HOVER, t.TEXT
             else:
-                fill, border = t.BUTTON_BG, t.BUTTON_BORDER
+                fill, color = t.TAB_BG, t.TEXT_TERTIARY
             shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
-                                radius=t.BUTTON_H / 2, fill=fill,
-                                stroke=border))
+                                radius=t.BUTTON_H / 2, fill=fill))
             shapes.append(t.Label(x + width / 2, cy, text,
                                   size=t.SIZE_CAPTION, bold=current,
-                                  anchor="center", color=t.TEXT))
+                                  anchor="center", color=color))
             hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
                               t.BUTTON_H))
             x += width + t.TAB_GAP

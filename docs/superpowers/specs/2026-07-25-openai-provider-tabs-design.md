@@ -75,8 +75,9 @@ possible later opt-in, warmup-style); keychain (Codex keeps auth on disk).
 - **Layout** (`popover_layout.build(snapshot, provider="claude", …)`): when
   both `snapshot.accounts` and `snapshot.openai` are non-empty, render a
   tab row under the header — two pill buttons with hit rects
-  `tab:claude` / `tab:openai`, selected one accent-filled; cards below are
-  the selected provider's. Single provider → no tab row (today's layout,
+  `tab:claude` / `tab:openai`; the selected pill is full strength and the
+  other faded (user-picked over an accent fill); cards below are the
+  selected provider's. Single provider → no tab row (today's layout,
   byte-identical for Claude-only snapshots). OpenAI cards: ACTIVE chip on
   the live login, no switch button, no registration banner (that text is
   Claude/cswap-specific). Linux window keeps the selection in-memory
