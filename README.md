@@ -11,6 +11,7 @@ Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills,
 The panel — identical on macOS and Linux:
 
  AI smartbar  Updated 9:56 PM        ⟳ ⏻
+ [Claude]  OpenAI
  ┌──────────────────────────────────────┐
  │ ● ios8build@gmail.com   [Make Active]│
  │ 5h    ████──────────      45% · 2h43m│
@@ -24,6 +25,8 @@ The panel — identical on macOS and Linux:
    v0.3.1                [Update to 0.4.0]
 
  (numbers are % USED — the /usage scale; active card outlined white;
+  [Claude] OpenAI = provider tabs, selected pill bright and the other
+  faded, row only present when both providers have accounts;
   dark-only UI)
 ```
 
@@ -156,10 +159,11 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 > key with an `git@github.com:` remote. The installer probes this and
 > refuses loudly rather than letting updates fail silently forever.
 
-> **Status:** the native macOS app is live-verified (2026-07-22: v3
-> %-used UI, re-login card + blocked switch, re-capture, warmup agent
-> with fixed PATH). The Linux tray is written to spec from the
-> unit-tested core but has not been re-run on a Linux box since v2.
+> **Status:** the native macOS app is live-verified (2026-07-25: v0.8.0
+> OpenAI tab with faded tab pills; 2026-07-22: v3 %-used UI, re-login
+> card + blocked switch, re-capture, warmup agent with fixed PATH). The
+> Linux tray is written to spec from the unit-tested core but has not
+> been re-run on a Linux box since v2.
 
 ## Configuration (environment variables)
 
