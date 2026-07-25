@@ -363,9 +363,9 @@ to vX.Y.Z** menu row) runs the same pass immediately.
 
 **Asking now.** Those buttons only appear once a check has already *found*
 something, so without one a device could sit up to 6 hours behind with no way to
-ask. **Check for updates** asks the remote immediately — the popover footer on
-macOS, and a **⇅ Check for updates** row directly under *⟳ Refresh now* in the
-Linux tray menu.
+ask. **Check for Updates** asks the remote immediately — in the macOS
+popover's **More options** menu, and as a **⇅ Check for updates** row directly
+under *⟳ Refresh now* in the Linux tray menu.
 
 It only reports; applying stays the separate, deliberate **Update to vX.Y.Z**
 button. The answer appears in place, and also as a desktop notification —
