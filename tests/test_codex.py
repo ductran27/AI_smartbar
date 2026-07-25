@@ -46,14 +46,17 @@ class TestPlanLabel(unittest.TestCase):
 
 
 class _CodexHome(unittest.TestCase):
-    """Base: a tmp codex home wired through the env seam."""
+    """Base: tmp codex home + tmp cache (registry), wired through the seams."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.home = Path(self.tmp.name)
-        patch = mock.patch.dict(os.environ,
-                                {"SMARTBAR_CODEX_HOME": str(self.home)})
+        self.home = Path(self.tmp.name) / "codex"
+        self.cache = Path(self.tmp.name) / "cache"
+        self.home.mkdir()
+        patch = mock.patch.dict(os.environ, {
+            "SMARTBAR_CODEX_HOME": str(self.home),
+            "SMARTBAR_CACHE_DIR": str(self.cache)})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -192,6 +195,81 @@ class TestRateLimits(_CodexHome):
             ("2026-07-25T10:30:00Z", _rl(primary=_win(300, 60.0)))])
         os.utime(path, (os.stat(path).st_atime, os.stat(path).st_mtime + 5))
         self.assertEqual(self.limits()[0]["5h"]["pct"], 60.0)
+
+
+class TestAccounts(_CodexHome):
+    def test_cold_start_attributes_existing_history_to_the_live_login(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        accts = codex.accounts()
+        self.assertEqual(len(accts), 1)
+        acct = accts[0]
+        self.assertEqual((acct.email, acct.plan, acct.active, acct.status,
+                          acct.provider),
+                         ("a@x.com", "Pro", True, "ok", "openai"))
+        self.assertEqual([(m.key, m.pct) for m in acct.metrics],
+                         [("5h", 42.0)])
+
+    def test_login_change_freezes_the_predecessor(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(300, 42.0, PAST), secondary=_win(10080, 61.0)))])
+        codex.accounts()
+        _write_auth(self.home, "b@x.com", "plus")
+        accts = codex.accounts()
+        self.assertEqual([a.email for a in accts], ["b@x.com", "a@x.com"])
+        new, old = accts
+        self.assertTrue(new.active)
+        # Nothing after the cutoff yet: the new login has no bars.
+        self.assertEqual(new.metrics, [])
+        self.assertFalse(old.active)
+        self.assertEqual(old.status, "signed_out")
+        # The frozen card keeps only windows that have not reset since:
+        # the expired 5h row is dropped, the still-running 7d row stays.
+        self.assertEqual([(m.key, m.pct) for m in old.metrics],
+                         [("7d", 61.0)])
+
+    def test_plan_badge_refreshes_from_the_claim(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        _write_auth(self.home, "a@x.com", "prolite")
+        self.assertEqual(codex.accounts()[0].plan, "Pro Lite")
+
+    def test_registry_holds_labels_and_numbers_only(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        codex.accounts()
+        raw = (self.cache / "openai-accounts.json").read_text().lower()
+        for needle in ("token", "refresh_", "access_", "sk-", "key"):
+            self.assertNotIn(needle, raw, needle)
+
+    def test_unchanged_state_skips_the_registry_write(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        path = self.cache / "openai-accounts.json"
+        stamp = (path.stat().st_mtime_ns, path.read_text())
+        codex.accounts()
+        self.assertEqual((path.stat().st_mtime_ns, path.read_text()), stamp)
+
+    def test_payload_is_display_ready(self):
+        _write_auth(self.home, "a@x.com", "prolite")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        body = codex.payload()
+        self.assertEqual(len(body["accounts"]), 1)
+        acct = body["accounts"][0]
+        self.assertEqual(acct["email"], "a@x.com")
+        self.assertEqual(acct["plan"], "Pro Lite")
+        self.assertTrue(acct["active"])
+        self.assertEqual(acct["status"], "ok")
+        self.assertIn("stateText", acct)
+        self.assertEqual(acct["metrics"][0]["key"], "5h")
+        self.assertEqual(acct["metrics"][0]["pct"], 42.0)
+        self.assertTrue(acct["metrics"][0]["resetsAt"].endswith("Z"))
+        self.assertEqual(acct["updatedAt"], "2026-07-25T10:00:00Z")
 
 
 if __name__ == "__main__":  # pragma: no cover

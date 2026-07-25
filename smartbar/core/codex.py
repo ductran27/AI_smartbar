@@ -15,6 +15,7 @@ import json
 import os
 from datetime import datetime, timezone
 
+from smartbar.core import model
 from smartbar.core.reset_countdown_format import parse_iso
 
 DEFAULT_CODEX_HOME = "~/.codex"
@@ -219,8 +220,139 @@ def rate_limits(home=None, cutoff="", now=None):
     return metrics, (measured[1] if measured else "")
 
 
+def _registry_path() -> str:
+    cache = (os.environ.get("SMARTBAR_CACHE_DIR")
+             or os.path.expanduser("~/.cache/ai-smartbar"))
+    return os.path.join(cache, "openai-accounts.json")
+
+
+def _load_registry() -> dict:
+    try:
+        with open(_registry_path(), encoding="utf-8") as handle:
+            reg = json.load(handle)
+        return reg if isinstance(reg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _sync(now) -> dict:
+    """Fold the live login + fresh rate limits into the registry.
+
+    The registry remembers every ChatGPT account seen on this machine —
+    labels and numbers ONLY (email, plan badge, %-used snapshots), never
+    anything from the token fields. Saved only when the content actually
+    changed, so a quiet poll costs no write.
+
+    Attribution: rollouts carry no account id, so when the login changes
+    the predecessor's numbers freeze as they stand and a cutoff timestamp
+    keeps its traffic from bleeding into the new login. A cold start (empty
+    registry) has no predecessor, so existing history belongs to the
+    current login.
+    """
+    reg = _load_registry()
+    before = json.dumps(reg, sort_keys=True)
+    now_iso = _iso(now.timestamp())
+    live = login()
+    if live:
+        email, badge = live
+        if reg.get("active") != email:
+            previous = reg.get("active") or ""
+            if previous in (reg.get("accounts") or {}):
+                reg["accounts"][previous]["lastSeen"] = now_iso
+            reg["cutoff"] = now_iso if reg.get("accounts") else ""
+            reg["active"] = email
+        entry = reg.setdefault("accounts", {}).setdefault(
+            email, {"lastSeen": now_iso})
+        entry["plan"] = badge   # the claim is fresher than any old event
+        metrics, measured = rate_limits(cutoff=reg.get("cutoff", ""), now=now)
+        if metrics:
+            entry["metrics"] = metrics
+            entry["measuredAt"] = measured
+    elif reg.get("active"):
+        previous = reg["active"]
+        if previous in (reg.get("accounts") or {}):
+            reg["accounts"][previous]["lastSeen"] = now_iso
+        reg["active"] = ""
+        reg["cutoff"] = now_iso
+    after = json.dumps(reg, sort_keys=True)
+    if after != before:
+        try:
+            os.makedirs(os.path.dirname(_registry_path()), exist_ok=True)
+            with open(_registry_path(), "w", encoding="utf-8") as handle:
+                handle.write(after)
+        except OSError:
+            pass                # a read-only cache must not break the tab
+    return reg
+
+
+def _rows(entry: dict, active: bool, now) -> list:
+    """Stored window snapshots -> ordered model.Metric rows.
+
+    A signed-out account drops windows whose reset time has passed — that
+    budget came back while nobody was watching, so the old number would be
+    a lie. The live login keeps its idle rows (rate_limits already zeroed
+    them) so the card still names its windows.
+    """
+    stored = entry.get("metrics") or {}
+    keys = [k for k in ("5h", "7d") if k in stored]
+    keys += sorted(k for k in stored
+                   if k not in ("5h", "7d") and not k.startswith("scoped:"))
+    keys += sorted(k for k in stored if k.startswith("scoped:"))
+    rows = []
+    for key in keys:
+        window = stored[key]
+        resets_at = window.get("resets_at") or ""
+        if not active:
+            resets = parse_iso(resets_at)
+            if resets is None or resets <= now:
+                continue
+        rows.append(model.Metric(
+            key=key, label=window.get("label") or key,
+            short=window.get("short") or key,
+            pct=float(window.get("pct") or 0.0), resets_at=resets_at))
+    return rows
+
+
 def accounts(now=None) -> list:
-    """[model.Account] for the OpenAI tab; [] when disabled or empty."""
+    """[model.Account] for the OpenAI tab: live login first, then the
+    remembered (signed-out, read-only) accounts by last-seen. [] when
+    disabled, or when this machine has never had a ChatGPT login."""
     if not enabled():
         return []
-    return []
+    now = now or datetime.now(timezone.utc)
+    reg = _sync(now)
+    entries = reg.get("accounts") or {}
+    active_email = reg.get("active") or ""
+    ordered = [(active_email, True)] if active_email in entries else []
+    ordered += [(email, False) for email in
+                sorted((e for e in entries if e != active_email),
+                       key=lambda e: entries[e].get("lastSeen") or "",
+                       reverse=True)]
+    out = []
+    for number, (email, is_active) in enumerate(ordered, 1):
+        entry = entries[email]
+        account = model.Account(
+            number=number, email=email, active=is_active, ok=is_active,
+            status="ok" if is_active else "signed_out",
+            metrics=_rows(entry, is_active, now))
+        account.plan = entry.get("plan") or ""
+        account.provider = "openai"
+        out.append(account)
+    return out
+
+
+def payload(now=None) -> dict:
+    """The `--openai --json` body: FINAL display data, Swift maps nothing."""
+    accts = accounts(now)
+    entries = _load_registry().get("accounts") or {}
+    return {"accounts": [{
+        "email": account.email,
+        "plan": account.plan,
+        "active": account.active,
+        "status": account.status,
+        "stateText": model.state_text(account),
+        "updatedAt": entries.get(account.email, {}).get("measuredAt", ""),
+        "metrics": [{"key": m.key, "label": m.label, "short": m.short,
+                     "pct": m.pct, "resetsAt": m.resets_at}
+                    for m in account.metrics],
+    } for account in accts]}
