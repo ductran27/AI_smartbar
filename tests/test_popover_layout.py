@@ -133,6 +133,13 @@ class TestCardContent(unittest.TestCase):
         self.assertIn("a@example.com (2)",
                       labels(layout.build(snap(card), now=NOW)))
 
+    def test_the_plan_badge_rides_on_the_address(self):
+        card = account(email="a@example.com")
+        card.plan = "20x"
+        card.devices = 2
+        self.assertIn("a@example.com · 20x (2)",
+                      labels(layout.build(snap(card), now=NOW)))
+
     def test_no_badge_when_nobody_else_is_on_the_account(self):
         self.assertIn("a@example.com", labels(layout.build(snap(account()),
                                                            now=NOW)))

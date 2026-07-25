@@ -11,7 +11,7 @@ import time
 import rumps
 
 from smartbar import presence_client
-from smartbar.core import cswap, model, presence
+from smartbar.core import cswap, model, plan, presence
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
 
@@ -52,9 +52,10 @@ class SmartBarApp(rumps.App):
             return
         self.failures = 0
         self.snapshot = snap
-        # Device counts ride along in model.account_label, so the menu rows
-        # pick them up with no further work here.
+        # Device counts and plan badges ride along in model.account_label,
+        # so the menu rows pick them up with no further work here.
         presence.apply_counts(snap, presence_client.counts())
+        plan.apply_plans(snap, plan.plans_by_email())
         if not self.presence_started:
             self.presence_started = True
             presence_client.beat(snap)
