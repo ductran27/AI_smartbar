@@ -11,7 +11,7 @@ import time
 import rumps
 
 from smartbar import presence_client
-from smartbar.core import cswap, model, plan, presence
+from smartbar.core import codex, cswap, model, plan, presence
 from smartbar.core.alerts import AlertManager
 from smartbar.core.recapture import RecapturePolicy
 
@@ -56,6 +56,9 @@ class SmartBarApp(rumps.App):
         # so the menu rows pick them up with no further work here.
         presence.apply_counts(snap, presence_client.counts())
         plan.apply_plans(snap, plan.plans_by_email())
+        # ChatGPT accounts ride the snapshot's separate list; this text
+        # menu shows them as read-only rows under an OpenAI header.
+        snap.openai = codex.accounts()
         if not self.presence_started:
             self.presence_started = True
             presence_client.beat(snap)
@@ -94,6 +97,12 @@ class SmartBarApp(rumps.App):
                 blocked = acct.active or model.switch_blocked(acct)
                 callback = None if blocked else self._make_switch(acct.number)
                 items.append(rumps.MenuItem(model.menu_row(acct), callback=callback))
+            if self.snapshot.openai:
+                items.append(None)
+                items.append(rumps.MenuItem("OpenAI"))
+                for acct in self.snapshot.openai:
+                    # Read-only: no switcher exists for ChatGPT logins.
+                    items.append(rumps.MenuItem(model.menu_row(acct)))
         items.append(None)  # separator
         pending = self._pending_update()
         if pending:
