@@ -36,6 +36,7 @@ run_case() {
   SMARTBAR_CSWAP="$MOCK" MOCK_STATE_DIR="$state" MOCK_ADD_FAIL="$add_fail" \
     SMARTBAR_INTERVAL=2 \
     SMARTBAR_PRESENCE=off SMARTBAR_CACHE_DIR="$state/cache" \
+    SMARTBAR_OPENAI=off \
     "$BIN" >/dev/null 2>&1 &
   pid=$!
   sleep 9   # ≥4 poll cycles at 2s

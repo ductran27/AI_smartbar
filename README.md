@@ -1,7 +1,7 @@
 # AI smartbar
 
-Your Claude usage limits, always visible in the bar — with one-click
-account switching. A cross-platform companion for
+Your Claude — and ChatGPT/Codex — usage limits, always visible in the bar,
+with one-click Claude account switching. A cross-platform companion for
 [claude-swap](https://github.com/realiti4/claude-swap).
 
 ```
@@ -72,6 +72,13 @@ The panel — identical on macOS and Linux:
   from claude-swap's local per-slot config backups; no network, no
   credential fields touched. Unknown plans show no badge. Disable with
   `SMARTBAR_PLANS=off`.
+- **OpenAI/ChatGPT tab.** Sign in to Codex CLI (or the ChatGPT desktop
+  app) and within ~2 min an **OpenAI** tab appears next to Claude — one
+  card per ChatGPT account (`you@… · Pro`, same 5h / 7d / per-model
+  %-used bars), read entirely from Codex's own local files. The tab row
+  only exists when both providers have accounts, so a single-provider
+  machine looks exactly like before — see
+  [The OpenAI tab](#the-openai-tab-chatgptcodex-accounts).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
   re-arms when the window resets.
@@ -187,6 +194,8 @@ from scratch, and applying an update *is* re-running them.
 | `SMARTBAR_PRESENCE_TTL` | 3 × interval | How long a silent device still counts (floor 2 × interval) |
 | `SMARTBAR_PRESENCE_LABEL` | hostname | Name this device shows in `--presence-status` |
 | `SMARTBAR_PLANS` | on | `off` hides the plan badges (`· 20x`) and skips the local tier reads |
+| `SMARTBAR_OPENAI` | on | `off` hides the OpenAI tab and skips every Codex read |
+| `SMARTBAR_CODEX_HOME` | `~/.codex` | Where Codex CLI keeps its files (tests, relocated installs) |
 
 ## Settings that survive an update
 
@@ -296,6 +305,33 @@ disappears — the app will not claim `(1)` when it cannot see the others.
 
 `SMARTBAR_PRESENCE=off` opts a device out completely: it publishes nothing
 and shows no counts.
+
+## The OpenAI tab (ChatGPT/Codex accounts)
+
+Signing in with `codex login` (or the ChatGPT desktop app) is caught the
+same way a Claude `/login` is: the card appears by itself, labeled with the
+account's plan (`Free` / `Plus` / `Pro` / `Pro Lite` / `Team`). Everything
+is read from Codex's **own local files** — the login's label fields for
+who/which plan, and the rate-limit snapshots Codex records while it works
+for the 5h / 7d / per-model bars. No network requests, no credential
+fields, nothing ever written under `~/.codex`.
+
+Three honest differences from the Claude tab, all consequences of what
+exists to read:
+
+- **Numbers move while Codex is being used** and hold still between uses
+  (hover a card for when they were measured). There is no polling a usage
+  API here without handling OAuth tokens, which this app never does. A
+  window whose reset time passes while idle reads 0% — the budget is back.
+- **No "Make Active".** claude-swap has no Codex equivalent, so ChatGPT
+  accounts are shown, not switched. The live login wears the ACTIVE chip.
+- **Signed-out accounts are remembered** (labels + last numbers only, in
+  `~/.cache/ai-smartbar/openai-accounts.json`) and shown as read-only
+  cards — "Signed out — usage from its last session" — with rows whose
+  windows have since reset dropped rather than displayed stale.
+
+The menu-bar pills stay Claude-only; the tab is the OpenAI surface.
+`SMARTBAR_OPENAI=off` removes all of it.
 
 ## The Linux panel
 
@@ -601,7 +637,7 @@ tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 205 tests, no external deps
+python3 -m unittest discover -s tests -v   # 386 tests, no external deps
                                            # (8 painter tests need pycairo)
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
