@@ -23,7 +23,7 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
-from smartbar.core import cswap, model, popover_layout, presence
+from smartbar.core import cswap, model, plan, popover_layout, presence
 from smartbar.core import update as update_core
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
@@ -397,9 +397,11 @@ class Tray:
         self.failures = 0
         self.last_error = ""
         self.snapshot = snap
-        # Stamp the device counts before anything renders: the menu rows and
-        # the panel both name accounts through model.account_label.
+        # Stamp the device counts and plan badges before anything renders:
+        # the menu rows and the panel both name accounts through
+        # model.account_label.
         presence.apply_counts(snap, presence_client.counts())
+        plan.apply_plans(snap, plan.plans_by_email())
         if not self.presence_started:
             # First real snapshot: announce this device now rather than
             # after a whole interval, and do it with accounts already in
