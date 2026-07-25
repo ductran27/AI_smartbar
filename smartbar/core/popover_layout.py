@@ -215,6 +215,10 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
     selected = provider or ("openai" if openai and not accounts else "claude")
     if accounts and openai:
+        # The tab row is part of the header block, not a section of its
+        # own, so it sits TAB_TOP_GAP under the title instead of a full
+        # SECTION_GAP (mirrored by PopoverView's nested header VStack).
+        cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
         for name, text in (("claude", "Claude"), ("openai", "OpenAI")):

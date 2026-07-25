@@ -42,6 +42,8 @@ BAR_GAP = 9.0              # HStack(spacing: 9)
 BUTTON_H = 18.0
 TAB_H = 20.0               # provider tab row (Claude | OpenAI), when shown
 TAB_GAP = 6.0              # gap between the two tab pills
+TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
+                           # under it than the SECTION_GAP between sections
 CHIP_H = 15.0
 
 # Tab pills read as faded / not-faded rather than colored: the selected
