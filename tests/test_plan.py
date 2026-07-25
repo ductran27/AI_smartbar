@@ -151,5 +151,42 @@ class TestPlansCli(unittest.TestCase):
                              {"plans": {"a@x.com": "20x"}})
 
 
+SWIFT_DIR = REPO / "macos-swift" / "Sources" / "AISmartbar"
+
+
+class TestPlanParity(unittest.TestCase):
+    """Pin the decisions that exist in both languages (source-scrape, runs
+    on Linux without a Swift toolchain — same trick as
+    tests/test_presence.py::TestMacAndLinuxAgree)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text()
+        cls.status = (SWIFT_DIR / "PlanStatus.swift").read_text()
+        cls.all_swift = "".join(
+            p.read_text() for p in sorted(SWIFT_DIR.glob("*.swift")))
+
+    def test_badge_composition_matches_python(self):
+        # Swift renders exactly " · <plan>" between email and device count,
+        # which is what model.account_label produces.
+        self.assertIn('Text(" \\u{00B7} \\(plan)")', self.card)
+        self.assertEqual(
+            model.account_label(_account(plan_label="20x", devices=2)),
+            "a@x.com · 20x (2)")
+
+    def test_swift_maps_nothing(self):
+        for marker in ("organizationRateLimitTier", "default_claude",
+                       "subscriptionType", "SMARTBAR_PLANS"):
+            self.assertNotIn(marker, self.all_swift,
+                             f"tier policy leaked into Swift: {marker}")
+
+    def test_swift_refresh_cadence_is_pinned(self):
+        self.assertIn("refreshInterval: TimeInterval = 900", self.status)
+
+    def test_both_python_uis_stamp_plans(self):
+        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
+            self.assertIn("apply_plans", (REPO / path).read_text(), path)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
