@@ -287,8 +287,11 @@ class TestProviderTabs(unittest.TestCase):
         self.assertIn("tab:claude", names)
         self.assertIn("tab:openai", names)
         plain = layout.build(snap(account(active=True)), now=NOW)
+        # The row costs its own height plus only the tight TAB_TOP_GAP:
+        # it rides the header, it is not a full SECTION_GAP-separated
+        # section of its own.
         self.assertAlmostEqual(both.height - plain.height,
-                               t.TAB_H + t.SECTION_GAP)
+                               t.TAB_H + t.TAB_TOP_GAP)
 
     def test_default_selection_is_claude(self):
         built = layout.build(self.snap_both(), now=NOW)

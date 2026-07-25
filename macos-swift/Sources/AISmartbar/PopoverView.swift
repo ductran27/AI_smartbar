@@ -12,15 +12,22 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
+            // The tab row rides the header (TAB_TOP_GAP in the shared
+            // theme) rather than being a section of its own — spacing 2
+            // instead of the theme's 3 because the 28pt header controls
+            // already leave slack under the title that the 22pt cairo
+            // header does not.
+            VStack(alignment: .leading, spacing: 2) {
+                header
+                if showsTabs {
+                    providerTabs
+                }
+            }
             if let switchError = store.switchError {
                 Label(switchError, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)
-            }
-            if showsTabs {
-                providerTabs
             }
             if selectedProvider == "openai" {
                 openAIList
