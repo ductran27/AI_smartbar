@@ -294,5 +294,40 @@ class TestOpenAICli(_CodexHome):
         self.assertEqual(body["accounts"][0]["metrics"][0]["pct"], 42.0)
 
 
+SWIFT_DIR = REPO / "macos-swift" / "Sources" / "AISmartbar"
+
+
+class TestOpenAIParity(unittest.TestCase):
+    """Pin the decisions that exist in both languages (source-scrape, runs
+    on Linux without a Swift toolchain — the TestPlanParity trick)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.status = (SWIFT_DIR / "OpenAIStatus.swift").read_text()
+        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text()
+        cls.all_swift = "".join(
+            p.read_text() for p in sorted(SWIFT_DIR.glob("*.swift")))
+
+    def test_swift_maps_nothing(self):
+        # Plan strings, claim names, window arithmetic and the data sources
+        # all live in core/codex.py; Swift renders the helper's JSON.
+        for marker in ("chatgpt_plan_type", "id_token", "window_minutes",
+                       "rollout", "prolite", "SMARTBAR_OPENAI"):
+            self.assertNotIn(marker, self.all_swift,
+                             f"openai policy leaked into Swift: {marker}")
+
+    def test_swift_refresh_cadence_is_pinned(self):
+        self.assertIn("refreshInterval: TimeInterval = 120", self.status)
+
+    def test_swift_card_guards_cross_provider_lookups(self):
+        # The same address can be a Claude AND a ChatGPT account; the card
+        # must not borrow the Claude plan badge or device count for it.
+        self.assertIn('account.provider == "openai"', self.card)
+
+    def test_both_python_uis_stamp_openai_accounts(self):
+        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
+            self.assertIn("codex.accounts", (REPO / path).read_text(), path)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

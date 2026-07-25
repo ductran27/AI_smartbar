@@ -10,14 +10,23 @@ struct AccountCardView: View {
     @EnvironmentObject private var presence: PresenceStatus
     @EnvironmentObject private var planStatus: PlanStatus
 
-    private var devices: Int { presence.counts[account.email] ?? 0 }
+    /// Same address, different provider: duc@… can be a Claude AND a
+    /// ChatGPT account, so an OpenAI card must not borrow the Claude
+    /// device count (pinned by TestOpenAIParity).
+    private var devices: Int {
+        account.provider == "openai" ? 0
+            : (presence.counts[account.email] ?? 0)
+    }
 
     /// "a@b.com · 20x (2)" — one string, three segments; the plan segment
     /// is dimmed. MUST stay in step with model.account_label (pinned by
-    /// TestPlanParity in tests/test_plan.py).
+    /// TestPlanParity in tests/test_plan.py). An OpenAI card's badge comes
+    /// with its account payload; the Claude badge from the plans helper.
     private var headerText: Text {
         var text = Text(account.email)
-        let plan = planStatus.plans[account.email] ?? ""
+        let plan = account.provider == "openai"
+            ? account.plan
+            : (planStatus.plans[account.email] ?? "")
         if !plan.isEmpty {
             text = text + Text(" \u{00B7} \(plan)").foregroundColor(.secondary)
         }
@@ -25,6 +34,17 @@ struct AccountCardView: View {
             text = text + Text(" (\(devices))")
         }
         return text
+    }
+
+    /// OpenAI cards say when their numbers were measured (they move only
+    /// while Codex is actually used); Claude cards keep the device story.
+    private var headerHelp: String {
+        if account.provider == "openai" {
+            guard let measured = account.fetchedAt else { return "" }
+            return "Usage measured "
+                + measured.formatted(date: .abbreviated, time: .shortened)
+        }
+        return devicesHelp
     }
 
     /// Says what the badge counts, and — the part worth being precise about
@@ -51,7 +71,7 @@ struct AccountCardView: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help(devicesHelp)
+                    .help(headerHelp)
                 Spacer(minLength: 8)
                 if account.active {
                     Text("ACTIVE")
@@ -60,6 +80,9 @@ struct AccountCardView: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(Status.green.color))
+                } else if account.provider == "openai" {
+                    // Read-only card: no switcher exists for ChatGPT logins.
+                    EmptyView()
                 } else {
                     Button("Make Active") {
                         store.switchTo(account.number)

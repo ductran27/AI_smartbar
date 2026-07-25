@@ -7,6 +7,8 @@ import SwiftUI
 struct PopoverView: View {
     @EnvironmentObject private var store: UsageStore
     @EnvironmentObject private var updates: UpdateStatus
+    @EnvironmentObject private var openai: OpenAIStatus
+    @AppStorage("providerTab") private var providerTab = "claude"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -17,7 +19,12 @@ struct PopoverView: View {
                     .foregroundStyle(.orange)
                     .lineLimit(2)
             }
-            if let snapshot = store.snapshot {
+            if showsTabs {
+                providerTabs
+            }
+            if selectedProvider == "openai" {
+                openAIList
+            } else if let snapshot = store.snapshot {
                 if snapshot.activeAccount == nil {
                     Label(snapshot.accounts.isEmpty
                             ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
@@ -44,6 +51,60 @@ struct PopoverView: View {
         .onAppear {
             store.refresh()
             updates.reload()
+            openai.refresh()
+        }
+    }
+
+    private var hasClaudeAccounts: Bool {
+        !(store.snapshot?.accounts.isEmpty ?? true)
+    }
+
+    /// The tab row exists only when BOTH providers have accounts — a
+    /// single-provider Mac keeps exactly the popover it always had
+    /// (mirror of popover_layout.build's rule).
+    private var showsTabs: Bool {
+        hasClaudeAccounts && !openai.accounts.isEmpty
+    }
+
+    private var selectedProvider: String {
+        if showsTabs { return providerTab == "openai" ? "openai" : "claude" }
+        return (!openai.accounts.isEmpty && !hasClaudeAccounts)
+            ? "openai" : "claude"
+    }
+
+    private var providerTabs: some View {
+        HStack(spacing: 6) {
+            tabButton("Claude", id: "claude")
+            tabButton("OpenAI", id: "openai")
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func tabButton(_ title: String, id: String) -> some View {
+        if selectedProvider == id {
+            Button(title) {}
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        } else {
+            Button(title) { providerTab = id }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private var openAIList: some View {
+        let cards = VStack(spacing: 7) {
+            ForEach(openai.accounts) { account in
+                AccountCardView(account: account)
+            }
+        }
+        if openai.accounts.count > 4 {
+            ScrollView(showsIndicators: false) { cards }
+                .frame(maxHeight: 440)
+        } else {
+            cards
         }
     }
 
