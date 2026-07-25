@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from smartbar.core import plan
+from smartbar.core import model, plan
 
 
 class TestTierLabel(unittest.TestCase):
@@ -90,6 +90,40 @@ class TestPlansByEmail(unittest.TestCase):
         }}))
         os.utime(path, (os.stat(path).st_atime, os.stat(path).st_mtime + 5))
         self.assertEqual(self.plans()["a@x.com"], "20x")
+
+
+def _account(email="a@x.com", plan_label="", devices=0):
+    acct = model.Account(number=1, email=email)
+    acct.plan = plan_label
+    acct.devices = devices
+    return acct
+
+
+class TestLabelComposition(unittest.TestCase):
+    def test_email_only(self):
+        self.assertEqual(model.account_label(_account()), "a@x.com")
+
+    def test_plan_slots_between_email_and_devices(self):
+        self.assertEqual(model.account_label(_account(plan_label="20x")),
+                         "a@x.com · 20x")
+        self.assertEqual(
+            model.account_label(_account(plan_label="5x", devices=2)),
+            "a@x.com · 5x (2)")
+
+    def test_devices_without_plan_is_unchanged(self):
+        self.assertEqual(model.account_label(_account(devices=3)),
+                         "a@x.com (3)")
+
+
+class TestApplyPlans(unittest.TestCase):
+    def test_stamps_matching_accounts_and_blanks_the_rest(self):
+        snap = mock.Mock(accounts=[_account("a@x.com"), _account("b@x.com")])
+        plan.apply_plans(snap, {"a@x.com": "20x"})
+        self.assertEqual(snap.accounts[0].plan, "20x")
+        self.assertEqual(snap.accounts[1].plan, "")
+
+    def test_none_snapshot_is_a_no_op(self):
+        plan.apply_plans(None, {"a@x.com": "20x"})  # must not raise
 
 
 if __name__ == "__main__":  # pragma: no cover
