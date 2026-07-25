@@ -80,17 +80,21 @@ struct PopoverView: View {
         }
     }
 
-    @ViewBuilder
+    /// Faded / not-faded rather than colored: the selected provider reads
+    /// full strength, the other recedes (mirror of the cairo tab pills —
+    /// popover_theme.TAB_BG*).
     private func tabButton(_ title: String, id: String) -> some View {
-        if selectedProvider == id {
-            Button(title) {}
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        } else {
-            Button(title) { providerTab = id }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+        let selected = selectedProvider == id
+        return Button { providerTab = id } label: {
+            Text(title)
+                .font(.caption.weight(selected ? .semibold : .regular))
+                .foregroundStyle(Color.white.opacity(selected ? 0.92 : 0.45))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule()
+                    .fill(Color.white.opacity(selected ? 0.16 : 0.06)))
         }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -197,7 +201,10 @@ struct PopoverView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12.5, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    // 28pt keeps a comfortable pointer target without the
+                    // 44pt frame padding the whole header row out — the gap
+                    // between the title and the cards/tabs was mostly this.
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)
