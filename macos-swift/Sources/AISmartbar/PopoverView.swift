@@ -1,8 +1,7 @@
 // Content of the MenuBarExtra window: compact header (title, Updated
-// stamp, stale marker, equal-size refresh/quit), one card per account, and
-// a quiet footer naming the running version — which grows an upgrade
-// button when the updater has a newer release waiting. Dark-only design.
-import AppKit
+// stamp, stale marker, refresh and More menu), one card per account, and a
+// transient updater footer that appears only while there is status to show.
+// Dark-only design.
 import SwiftUI
 
 struct PopoverView: View {
@@ -34,7 +33,9 @@ struct PopoverView: View {
             }
             footer
         }
-        .padding(11)
+        .padding(.horizontal, 11)
+        .padding(.bottom, 11)
+        .padding(.top, 5)
         .frame(width: 330)
         .preferredColorScheme(.dark)
         // Opening the popover is the user looking: fetch now so the numbers
@@ -46,60 +47,56 @@ struct PopoverView: View {
         }
     }
 
-    /// Version line, plus the one-click upgrade when a release is waiting.
-    /// The button hands off to the launchd update job rather than doing the
-    /// work here — applying an update restarts this very app.
+    /// Transient updater status, plus the one-click upgrade when a release is
+    /// waiting. With no update activity this section disappears completely;
+    /// the running version lives in the About menu row.
+    @ViewBuilder
     private var footer: some View {
-        HStack(spacing: 8) {
-            Text("v\(updates.currentVersion)")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .help(updates.blockedReason.isEmpty
-                      ? "AI smartbar \(updates.currentVersion)"
-                      : "Update held back: \(updates.blockedReason)")
-            if !updates.blockedReason.isEmpty {
-                Image(systemName: "pause.circle")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .help("Update held back: \(updates.blockedReason)")
-            }
-            Spacer(minLength: 6)
-            if updates.isUpdating {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Updating…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else if !updates.pendingVersion.isEmpty {
-                Button("Update to \(updates.pendingVersion)") {
-                    updates.installUpdate()
+        if showsFooter {
+            HStack(spacing: 8) {
+                if !updates.blockedReason.isEmpty {
+                    Label("Update held", systemImage: "pause.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .help("Update held back: \(updates.blockedReason)")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .help("Fetch, rebuild and restart AI smartbar")
-                .accessibilityLabel("Update to version \(updates.pendingVersion)")
-            } else if updates.isChecking {
-                ProgressView()
+                Spacer(minLength: 6)
+                if updates.isUpdating {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Updating…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if !updates.pendingVersion.isEmpty {
+                    Button("Update to \(updates.pendingVersion)") {
+                        updates.installUpdate()
+                    }
+                    .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                Text("Checking…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else if !updates.checkResult.isEmpty {
-                Text(updates.checkResult)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                // The upgrade button above only appears once a check has
-                // already FOUND something, and the agent only looks every 6
-                // hours — so without this there is no way to ask.
-                Button("Check for updates") { updates.checkNow() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Ask now whether a newer release is waiting, instead "
-                          + "of waiting for the 6-hourly check")
+                    .help("Fetch, rebuild and restart AI smartbar")
+                    .accessibilityLabel("Update to version \(updates.pendingVersion)")
+                } else if updates.isChecking {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Checking…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if !updates.checkResult.isEmpty {
+                    Text(updates.checkResult)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.top, 1)
         }
-        .padding(.top, 1)
+    }
+
+    private var showsFooter: Bool {
+        !updates.blockedReason.isEmpty
+            || updates.isUpdating
+            || !updates.pendingVersion.isEmpty
+            || updates.isChecking
+            || !updates.checkResult.isEmpty
     }
 
     @ViewBuilder
@@ -139,22 +136,13 @@ struct PopoverView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12.5, weight: .semibold))
-                    .frame(width: 22, height: 22)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)
             .help("Refresh now")
             .accessibilityLabel("Refresh now")
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(.borderless)
-            .help("Quit AI smartbar")
-            .accessibilityLabel("Quit AI smartbar")
+            AppOptionsMenu()
         }
     }
 
