@@ -57,3 +57,47 @@ def tier_label(rate_limit_tier=None, organization_type=None,
             return "Free"
     sub = (subscription_type or "").strip()
     return sub.title() if sub else ""
+
+
+# path -> ((mtime, size), (email, label) | None). Config backups are a
+# couple hundred KB each and polled every 60-180s on Linux; the cache
+# makes the steady state a stat() per file.
+_cache: dict = {}
+
+
+def _labelled(path: str):
+    """(email, label) from one config-backup/claude.json, None if unusable."""
+    try:
+        stat = os.stat(path)
+        key = (stat.st_mtime, stat.st_size)
+        hit = _cache.get(path)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        with open(path, encoding="utf-8") as handle:
+            oauth = (json.load(handle) or {}).get("oauthAccount") or {}
+        email = (oauth.get("emailAddress") or "").strip()
+        label = tier_label(oauth.get("organizationRateLimitTier"),
+                           oauth.get("organizationType"),
+                           oauth.get("subscriptionType"))
+        value = (email, label) if email and label else None
+        _cache[path] = (key, value)
+        return value
+    except (OSError, ValueError):
+        return None
+
+
+def plans_by_email(directory=None, claude_json=None) -> dict:
+    """email -> badge label for every account whose tier is readable."""
+    if not enabled():
+        return {}
+    directory = directory or backup_dir()
+    plans: dict = {}
+    pattern = os.path.join(directory, "configs", ".claude-config-*.json")
+    for path in sorted(glob.glob(pattern)):
+        pair = _labelled(path)
+        if pair:
+            plans[pair[0]] = pair[1]
+    pair = _labelled(claude_json or claude_json_path())
+    if pair:  # the live login is fresher than its backup copy
+        plans[pair[0]] = pair[1]
+    return plans
