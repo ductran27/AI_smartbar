@@ -38,6 +38,9 @@ STATE_TEXT = {
     "keychain_unavailable": "Keychain locked — credentials unreadable",
     "no_credentials": "No stored credentials",
     "api_key": "API-key account — no subscription usage",
+    # OpenAI provider only (core/codex.py): a remembered ChatGPT login that
+    # is no longer the live one. Its numbers are read-only leftovers.
+    "signed_out": "Signed out — usage from its last session",
 }
 
 # Slots whose STORED credential is dead. Switching to one would restore a
@@ -112,6 +115,9 @@ class Account:
     # core/plan.apply_plans from local label files; "" means unknown and
     # renders NO badge, same convention as devices == 0.
     plan: str = ""
+    # "claude" (cswap slots) or "openai" (core/codex.py). Cards branch on
+    # it — an OpenAI account has no switch button and no device badge.
+    provider: str = "claude"
 
 
 @dataclass
@@ -119,6 +125,12 @@ class Snapshot:
     accounts: list = field(default_factory=list)
     fetched_at: str = ""
     schema_warning: str = ""
+    # OpenAI/ChatGPT accounts ride a SEPARATE list, never merged into
+    # `accounts`: the same address can be both a Claude and a ChatGPT
+    # account, and a merged list would let plan/presence stamping bleed
+    # across providers and a second active=True upend active_account,
+    # registration, best_switch and the icon. UIs compose the tabs.
+    openai: list = field(default_factory=list)
 
     @property
     def active_account(self):
