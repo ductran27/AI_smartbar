@@ -262,6 +262,66 @@ class TestHitTesting(unittest.TestCase):
                 self.assertLess(hit.y, t.PAD + t.HEADER_H)
 
 
+def openai_account(number=1, email="gpt@example.com", active=True,
+                   metrics=None, ok=True, status="ok"):
+    acct = account(number=number, email=email, active=active,
+                   metrics=metrics, ok=ok, status=status)
+    acct.provider = "openai"
+    return acct
+
+
+class TestProviderTabs(unittest.TestCase):
+    def snap_both(self):
+        s = snap(account(active=True))
+        s.openai = [openai_account()]
+        return s
+
+    def test_claude_only_layout_is_byte_identical_to_before(self):
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        self.assertNotIn("OpenAI", labels(built))
+
+    def test_tab_row_appears_only_with_both_providers(self):
+        both = layout.build(self.snap_both(), now=NOW)
+        names = {h.name for h in both.hits}
+        self.assertIn("tab:claude", names)
+        self.assertIn("tab:openai", names)
+        plain = layout.build(snap(account(active=True)), now=NOW)
+        self.assertAlmostEqual(both.height - plain.height,
+                               t.TAB_H + t.SECTION_GAP)
+
+    def test_default_selection_is_claude(self):
+        built = layout.build(self.snap_both(), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertNotIn("gpt@example.com", labels(built))
+
+    def test_openai_tab_lists_openai_cards_with_no_switch_targets(self):
+        built = layout.build(self.snap_both(), provider="openai", now=NOW)
+        self.assertIn("gpt@example.com", labels(built))
+        self.assertNotIn("a@example.com", labels(built))
+        self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
+        self.assertIn("ACTIVE", labels(built))   # the live login's chip
+
+    def test_openai_only_machine_needs_no_tabs_and_no_claude_banner(self):
+        s = snap()   # no Claude accounts at all
+        s.openai = [openai_account(),
+                    openai_account(number=2, email="old@example.com",
+                                   active=False, ok=False,
+                                   status="signed_out", metrics=[])]
+        built = layout.build(s, now=NOW)   # auto-resolves to the OpenAI tab
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        self.assertNotIn(layout.NO_ACCOUNTS, labels(built))
+        self.assertTrue(any("Signed out" in text for text in labels(built)))
+
+    def test_openai_plan_badge_rides_on_the_address(self):
+        card = openai_account()
+        card.plan = "Pro Lite"
+        s = snap()
+        s.openai = [card]
+        built = layout.build(s, provider="openai", now=NOW)
+        self.assertIn("gpt@example.com · Pro Lite", labels(built))
+
+
 class TestHeaderAndFooter(unittest.TestCase):
     def test_updated_label_is_local_short_time(self):
         text = layout.updated_label("2026-07-24T18:00:00Z", NOW)
