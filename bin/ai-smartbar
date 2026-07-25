@@ -128,6 +128,10 @@ def main() -> int:
     parser.add_argument("--presence-leave", action="store_true",
                         help="withdraw this device so the others stop "
                              "counting it right away")
+    parser.add_argument("--plans", action="store_true",
+                        help="print each account's plan badge as JSON "
+                             "(the macOS app's data source; output is "
+                             "always JSON, --json is accepted for symmetry)")
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
@@ -175,6 +179,11 @@ def main() -> int:
         from smartbar.presence_runner import run_once as presence_once
         return presence_once(leave=args.presence_leave,
                              report=args.presence_status)
+    if args.plans:
+        import json as _json
+        from smartbar.core import plan
+        print(_json.dumps({"plans": plan.plans_by_email()}))
+        return 0
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     else:
