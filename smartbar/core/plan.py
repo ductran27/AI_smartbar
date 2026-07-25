@@ -101,3 +101,11 @@ def plans_by_email(directory=None, claude_json=None) -> dict:
     if pair:  # the live login is fresher than its backup copy
         plans[pair[0]] = pair[1]
     return plans
+
+
+def apply_plans(snapshot, plans) -> None:
+    """Stamp accounts with their plan badge, for model.account_label."""
+    if snapshot is None:
+        return
+    for account in snapshot.accounts:
+        account.plan = str((plans or {}).get(account.email, "") or "")

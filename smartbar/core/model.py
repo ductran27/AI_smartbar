@@ -108,6 +108,10 @@ class Account:
     # stamped by core/presence.apply_counts, 0 when nobody is on it or the
     # other devices could not be seen. cswap never reports it.
     devices: int = 0
+    # Subscription plan badge ("20x", "5x", "Pro", "Free") — stamped by
+    # core/plan.apply_plans from local label files; "" means unknown and
+    # renders NO badge, same convention as devices == 0.
+    plan: str = ""
 
 
 @dataclass
@@ -268,20 +272,26 @@ def metrics_text(account) -> str:
 
 
 def account_label(account) -> str:
-    """The address, plus how many devices are on it: "a@b.com (2)".
+    """The address, plan badge, and device count: "a@b.com · 20x (2)".
 
-    Every UI names an account through here so the badge appears in all of
-    them at once (mirrored by PresenceCounts.label in Swift). A count of 0
-    prints nothing: an absent badge reads as "nobody is on it", whereas
-    "(0)" on four idle cards is noise that also lies whenever the other
-    devices simply could not be reached — see core/presence.py.
+    Every UI names an account through here so the badges appear in all of
+    them at once (mirrored by the Swift card header — pinned by
+    TestPlanParity). A count of 0 prints nothing: an absent badge reads as
+    "nobody is on it", whereas "(0)" on four idle cards is noise that also
+    lies whenever the other devices simply could not be reached — see
+    core/presence.py. An empty plan likewise prints nothing (unknown tier,
+    managed API-key account, or SMARTBAR_PLANS=off — see core/plan.py).
 
     Appending rather than prefixing is deliberate: both the cairo painter
-    and SwiftUI truncate a long address in the MIDDLE, so the count
-    survives even on a card too narrow to show the address itself.
+    and SwiftUI truncate a long address in the MIDDLE, so the badges
+    survive even on a card too narrow to show the address itself.
     """
+    label = account.email
+    badge = getattr(account, "plan", "") or ""
+    if badge:
+        label = f"{label} · {badge}"
     count = getattr(account, "devices", 0) or 0
-    return f"{account.email} ({count})" if count > 0 else account.email
+    return f"{label} ({count})" if count > 0 else label
 
 
 def title_line(account) -> str:
