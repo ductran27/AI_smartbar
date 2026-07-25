@@ -126,5 +126,30 @@ class TestApplyPlans(unittest.TestCase):
         plan.apply_plans(None, {"a@x.com": "20x"})  # must not raise
 
 
+import subprocess
+import sys
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+class TestPlansCli(unittest.TestCase):
+    def test_plans_json_prints_labels_from_the_seamed_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            _write_config(tmp_path, 1, "a@x.com", "default_claude_max_20x")
+            live = tmp_path / "claude.json"
+            live.write_text("{}")
+            env = dict(os.environ,
+                       SMARTBAR_CSWAP_BACKUP_DIR=str(tmp_path),
+                       SMARTBAR_CLAUDE_JSON=str(live))
+            proc = subprocess.run(
+                [sys.executable, str(REPO / "bin" / "ai-smartbar"),
+                 "--plans", "--json"],
+                capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout),
+                             {"plans": {"a@x.com": "20x"}})
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
