@@ -61,7 +61,9 @@ injecting into PRIMER/COMBINED (those strings are sync-pinned with Swift).
 - `SMARTBAR_PLANS=off` — hides badges AND skips all reads (config.env-settable,
   same contract as `SMARTBAR_PRESENCE`). Default on.
 - Backup dir override for tests: `plans_by_email(dir)` parameter +
-  `SMARTBAR_CSWAP_BACKUP_DIR` env (default `~/.claude-swap-backup`).
+  `SMARTBAR_CSWAP_BACKUP_DIR` env (default `~/.claude-swap-backup`), and
+  `SMARTBAR_CLAUDE_JSON` for the live-overlay file (default `~/.claude.json`)
+  so the CLI test never reads real state.
 
 ## Errors & edge cases
 
