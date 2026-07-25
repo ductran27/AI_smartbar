@@ -67,6 +67,11 @@ The panel — identical on macOS and Linux:
   devices have that account active right now — and are therefore spending
   the same 5-hour and weekly budget. No badge means nobody else is on it.
   See [Device presence](#device-presence-the-n-next-to-an-address).
+- **Plan badge per account.** `ios8build@gmail.com · 20x` — which
+  subscription each account is on (`20x` / `5x` / `Pro` / `Free`), read
+  from claude-swap's local per-slot config backups; no network, no
+  credential fields touched. Unknown plans show no badge. Disable with
+  `SMARTBAR_PLANS=off`.
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
   re-arms when the window resets.
@@ -181,6 +186,7 @@ from scratch, and applying an update *is* re-running them.
 | `SMARTBAR_PRESENCE_INTERVAL` | `300` | Seconds between presence heartbeats (floor 60) |
 | `SMARTBAR_PRESENCE_TTL` | 3 × interval | How long a silent device still counts (floor 2 × interval) |
 | `SMARTBAR_PRESENCE_LABEL` | hostname | Name this device shows in `--presence-status` |
+| `SMARTBAR_PLANS` | on | `off` hides the plan badges (`· 20x`) and skips the local tier reads |
 
 ## Settings that survive an update
 
