@@ -272,5 +272,27 @@ class TestAccounts(_CodexHome):
         self.assertEqual(acct["updatedAt"], "2026-07-25T10:00:00Z")
 
 
+import subprocess
+import sys
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+class TestOpenAICli(_CodexHome):
+    def test_openai_json_prints_the_display_ready_payload(self):
+        _write_auth(self.home, "a@x.com", "prolite")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        proc = subprocess.run(
+            [sys.executable, str(REPO / "bin" / "ai-smartbar"),
+             "--openai", "--json"],
+            capture_output=True, text=True, env=dict(os.environ), timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        body = json.loads(proc.stdout)
+        self.assertEqual(body["accounts"][0]["email"], "a@x.com")
+        self.assertEqual(body["accounts"][0]["plan"], "Pro Lite")
+        self.assertEqual(body["accounts"][0]["metrics"][0]["pct"], 42.0)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
