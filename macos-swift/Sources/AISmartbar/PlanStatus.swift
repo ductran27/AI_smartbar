@@ -1,8 +1,8 @@
 // Plan badges: email -> "20x" / "5x" / "Pro" / "Free", computed by Python
 // (`ai-smartbar --plans --json`). ONE SHARED ANSWER, NOT A SWIFT PORT:
 // Swift renders the labels verbatim and maps nothing — the tier strings
-// and the SMARTBAR_PLANS kill switch live entirely in core/plan.py (the
-// helper prints {} when disabled, which blanks every badge here too).
+// and the kill switch live entirely in core/plan.py (a disabled helper
+// prints {}, which blanks every badge here too).
 import Foundation
 
 @MainActor
