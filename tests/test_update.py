@@ -295,6 +295,10 @@ class TestPendingVersion(unittest.TestCase):
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SWIFT_UPDATE = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
                             "UpdateStatus.swift")
+SWIFT_OPTIONS = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                             "AppOptionsMenu.swift")
+SWIFT_POPOVER = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                             "PopoverView.swift")
 TRAY = os.path.join(REPO, "smartbar", "linux", "tray.py")
 
 
@@ -338,6 +342,57 @@ class TestBothUIsShareOneAnswer(unittest.TestCase):
         # The specific mistake this design exists to prevent.
         swift = self.source(SWIFT_UPDATE)
         self.assertNotIn("terminationStatus", swift)
+
+
+class TestMacOptionsMenu(unittest.TestCase):
+    """Secondary app commands stay in one native, accessible More menu."""
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path) as handle:
+            return handle.read()
+
+    def test_header_replaces_the_power_button_with_the_more_menu(self):
+        popover = self.source(SWIFT_POPOVER)
+        self.assertIn("AppOptionsMenu()", popover)
+        self.assertNotIn('Image(systemName: "power")', popover)
+
+    def test_secondary_actions_are_grouped_in_the_menu(self):
+        options = self.source(SWIFT_OPTIONS)
+        for label in ("Check for Updates", "About AI smartbar",
+                      "updates.currentVersion", "Quit AI smartbar"):
+            self.assertIn(label, options)
+        self.assertIn("Divider()", options)
+
+    def test_version_moved_from_the_footer_to_about(self):
+        options = self.source(SWIFT_OPTIONS)
+        popover = self.source(SWIFT_POPOVER)
+        self.assertIn(
+            'Label("About AI smartbar · v\\(updates.currentVersion)"',
+            options)
+        self.assertNotIn('Text("v\\(updates.currentVersion)")', popover)
+
+    def test_about_panel_credits_the_author_with_a_profile_link(self):
+        options = self.source(SWIFT_OPTIONS)
+        self.assertIn("Created by Duc Tran", options)
+        self.assertIn("https://github.com/ductran27/", options)
+        self.assertIn(".credits: credits", options)
+
+    def test_the_icon_only_menu_has_a_name_and_hides_its_indicator(self):
+        options = self.source(SWIFT_OPTIONS)
+        self.assertIn('Label("More options", systemImage: "ellipsis.circle")',
+                      options)
+        self.assertIn(".frame(width: 44, height: 44)", options)
+        self.assertIn(".menuIndicator(.hidden)", options)
+        self.assertIn('.accessibilityLabel("More options")', options)
+
+    def test_popover_has_a_compact_top_inset_and_balanced_outer_margins(self):
+        popover = self.source(SWIFT_POPOVER)
+        self.assertIn(".padding(.horizontal, 11)", popover)
+        self.assertIn(".padding(.bottom, 11)", popover)
+        self.assertIn(".padding(.top, 5)", popover)
+        self.assertNotIn(".padding(11)", popover)
 
 
 class TestScheduledInterval(unittest.TestCase):
