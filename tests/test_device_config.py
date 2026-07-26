@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -202,8 +203,15 @@ class TestTheCliContract(unittest.TestCase):
         os.path.abspath(__file__))), "bin", "ai-smartbar")
 
     def run_it(self, fmt, config_dir):
+        # LAUNCHER is an extension-less "#!/usr/bin/env python3" script: POSIX
+        # exec dispatches on the shebang, Windows has no such mechanism, so
+        # subprocess.run([LAUNCHER, ...]) fails there with WinError 193 ("%1
+        # is not a valid Win32 application"). Going through sys.executable
+        # sidesteps shebang dispatch on every platform (the precedent is
+        # tests/e2e-update.sh:39's `python3 ./bin/ai-smartbar`) and still
+        # exercises exactly the CLI contract this test asserts against.
         return subprocess.run(
-            [self.LAUNCHER, "--print-config", fmt],
+            [sys.executable, self.LAUNCHER, "--print-config", fmt],
             capture_output=True, text=True,
             env=dict(os.environ, SMARTBAR_CONFIG_DIR=config_dir))
 

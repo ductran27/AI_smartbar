@@ -17,7 +17,6 @@ README used to ask for.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import logging
 import os
@@ -29,10 +28,9 @@ import tempfile
 import time
 
 from smartbar import update_git
-from smartbar.core import update
+from smartbar.core import paths, portable, update
 
-CACHE_DIR = (os.environ.get("SMARTBAR_CACHE_DIR")
-             or os.path.expanduser("~/.cache/ai-smartbar"))
+CACHE_DIR = paths.cache_dir()
 STATE_FILE = os.path.join(CACHE_DIR, "update-state.json")
 LOCK_FILE = os.path.join(CACHE_DIR, "update.lock")
 LOG_FILE = os.path.join(CACHE_DIR, "update.log")
@@ -91,6 +89,18 @@ def notify(title: str, body: str) -> None:
                       .format(body.replace('"', '\\"'), title.replace('"', '\\"')))
             subprocess.run(["/usr/bin/osascript", "-e", script],
                            timeout=10, check=False)
+        elif sys.platform == "win32":
+            # No dependency-free CLI equivalent of osascript/notify-send
+            # exists on Windows: a real toast needs a COM/WinRT call or a
+            # bundled GUI helper, both out of scope for the headless half of
+            # the port. Falling through to notify-send would exec a binary
+            # that is not there, and the FileNotFoundError that raises is an
+            # OSError the handler below logs as "notification failed" —
+            # indistinguishable from a notifier that genuinely broke. Saying
+            # it plainly keeps update.log honest until Windows gets a real
+            # notifier.
+            log.info("update notification (no Windows notifier yet): %s: %s",
+                     title, body)
         else:
             subprocess.run(["notify-send", "-u", "normal", title, body],
                            timeout=10, check=False)
@@ -294,10 +304,12 @@ def run_once(*, reset: bool = False, force: bool = False,
     if not update.enabled():
         log.info("updates disabled (SMARTBAR_UPDATE=off)")
         return 0
-    lock = open(LOCK_FILE, "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    # Bound for the rest of this function's lifetime on purpose: closing the
+    # handle — or dropping the last reference to it — releases the lock, so
+    # it cannot be a throwaway expression. The original `lock = open(...)`
+    # local kept the flock alive exactly the same way.
+    lock_handle = portable.lock(LOCK_FILE)
+    if lock_handle is None:
         log.info("another update run is in progress; skipping")
         return 0
 

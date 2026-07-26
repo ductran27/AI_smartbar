@@ -11,10 +11,9 @@ from __future__ import annotations
 import os
 
 from smartbar import __version__
-from smartbar.core import model, popover_layout
+from smartbar.core import model, paths, popover_layout
 
-CACHE_DIR = (os.environ.get("SMARTBAR_CACHE_DIR")
-             or os.path.expanduser("~/.cache/ai-smartbar"))
+CACHE_DIR = paths.cache_dir()
 DEFAULT_PATH = os.path.join(CACHE_DIR, "popover-preview.png")
 
 

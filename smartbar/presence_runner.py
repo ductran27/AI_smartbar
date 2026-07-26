@@ -13,7 +13,6 @@ one ls-remote and one push, and no usage-API traffic whatsoever.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -24,12 +23,10 @@ import time
 from datetime import datetime, timezone
 
 from smartbar import presence_git
-from smartbar.core import presence
+from smartbar.core import paths, portable, presence
 
-CACHE_DIR = (os.environ.get("SMARTBAR_CACHE_DIR")
-             or os.path.expanduser("~/.cache/ai-smartbar"))
-CONFIG_DIR = (os.environ.get("SMARTBAR_CONFIG_DIR")
-              or os.path.expanduser("~/.config/ai-smartbar"))
+CACHE_DIR = paths.cache_dir()
+CONFIG_DIR = paths.config_dir()
 STATE_FILE = os.path.join(CACHE_DIR, "presence-state.json")
 LOCK_FILE = os.path.join(CACHE_DIR, "presence.lock")
 LOG_FILE = os.path.join(CACHE_DIR, "presence.log")
@@ -158,13 +155,13 @@ def _setup_log() -> None:
 
 
 def _lock():
-    """The flock, or None when another beat already holds it."""
-    try:
-        handle = open(LOCK_FILE, "w")
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return handle
-    except OSError:
-        return None
+    """The open handle, or None when another beat already holds it.
+
+    Delegates the flock/msvcrt.locking split to core.portable.lock() so this
+    module never touches `fcntl` — which does not exist on Windows — at all,
+    module scope or otherwise.
+    """
+    return portable.lock(LOCK_FILE)
 
 
 def _leave(state: dict) -> int:

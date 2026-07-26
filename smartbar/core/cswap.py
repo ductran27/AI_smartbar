@@ -6,7 +6,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
+from . import portable
 from .model import Account, Metric, Snapshot
 
 TIMEOUT = 30
@@ -70,26 +72,48 @@ def _binary() -> str:
     override = os.environ.get("SMARTBAR_CSWAP")
     if override:
         return override
+    # shutil.which already honours PATHEXT on Windows, so a bare "cswap" on
+    # PATH resolves to cswap.exe (or .bat/.cmd) with no change needed here.
     found = shutil.which("cswap")
     if found:
         return found
     fallback = os.path.expanduser("~/.local/bin/cswap")
     if os.path.exists(fallback):
         return fallback
+    fallback_exe = os.path.expanduser("~/.local/bin/cswap.exe")
+    if os.path.exists(fallback_exe):
+        return fallback_exe
     raise CswapError("cswap binary not found (install claude-swap)")
 
 
 def venv_python() -> str | None:
     """Interpreter that can import claude_swap, or None.
 
-    pipx installs cswap as a launcher whose exec line names the venv python
-    (`'exec' '/…/pipx/venvs/claude-swap/bin/python' …`); parse it out.
-    SMARTBAR_CSWAP_PYTHON overrides. None (compiled binary, mock script,
-    moved venv) simply disables the primer — never an error.
+    On POSIX, pipx installs cswap as a shell launcher whose exec line names
+    the venv python (`'exec' '/…/pipx/venvs/claude-swap/bin/python' …`), so
+    that path is parsed straight out of the launcher's own source text.
+
+    On Windows there is nothing to parse: pipx (and uv) install `cswap.exe`,
+    a compiled PE launcher stub whose first bytes are a binary header rather
+    than shell script text, so the exec-line regex can never match it. This
+    probes the well-known venv layouts pipx and uv each use for a
+    `claude-swap` tool install instead, returning whichever
+    `Scripts\\python.exe` exists first.
+
+    SMARTBAR_CSWAP_PYTHON overrides on every platform. None (compiled binary
+    with a different layout, mock script, moved venv) simply disables the
+    primer — never an error.
     """
     override = os.environ.get("SMARTBAR_CSWAP_PYTHON")
     if override:
         return override
+    if sys.platform == "win32":
+        for candidate in ("~/.local/pipx/venvs/claude-swap/Scripts/python.exe",
+                          "~/.local/share/uv/tools/claude-swap/Scripts/python.exe"):
+            path = os.path.expanduser(candidate)
+            if os.path.exists(path):
+                return path
+        return None
     try:
         with open(_binary(), "rb") as handle:
             head = handle.read(512).decode("utf-8", errors="ignore")
@@ -108,7 +132,8 @@ def prime_fresh() -> bool:
         return False
     try:
         proc = subprocess.run([python, "-c", PRIMER_CODE], capture_output=True,
-                              text=True, timeout=PRIMER_TIMEOUT)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=PRIMER_TIMEOUT, **portable.no_window())
     except (subprocess.TimeoutExpired, OSError):
         return False
     return proc.returncode == 0
@@ -124,7 +149,8 @@ def fetch_combined() -> str | None:
         return None
     try:
         proc = subprocess.run([python, "-c", COMBINED_CODE], capture_output=True,
-                              text=True, timeout=COMBINED_TIMEOUT)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=COMBINED_TIMEOUT, **portable.no_window())
     except (subprocess.TimeoutExpired, OSError):
         return None
     if proc.returncode == 97:
@@ -137,8 +163,13 @@ def fetch_combined() -> str | None:
 
 def _run(args):
     try:
+        # encoding= is not redundant with text=True: text=True alone decodes
+        # using the locale codec, which is cp1252 on a stock Windows, and a
+        # non-ASCII account email would then raise UnicodeDecodeError —
+        # which neither except clause below catches.
         proc = subprocess.run([_binary(), *args], capture_output=True,
-                              text=True, timeout=TIMEOUT)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=TIMEOUT, **portable.no_window())
     except subprocess.TimeoutExpired as exc:
         raise CswapError(f"cswap {' '.join(args)} timed out after {TIMEOUT}s") from exc
     except OSError as exc:

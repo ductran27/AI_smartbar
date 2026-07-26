@@ -23,13 +23,13 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
-from smartbar.core import cswap, model, popover_layout, presence
+from smartbar.core import cswap, model, paths, popover_layout, portable, presence
 from smartbar.core import update as update_core
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
 from smartbar.linux.tray_icon import render_pills
 
-CACHE_DIR = os.path.expanduser("~/.cache/ai-smartbar")
+CACHE_DIR = paths.cache_dir()
 ICON_DIR = os.path.join(CACHE_DIR, "icons")
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
@@ -288,8 +288,9 @@ class Tray:
         """Apply the waiting release. Detached on purpose: the updater
         restarts this very tray, so it must not be our child."""
         try:
-            subprocess.Popen([LAUNCHER, "--update"], start_new_session=True,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            portable.spawn_detached([LAUNCHER, "--update"],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
         except OSError:
             log.exception("could not start the updater")
 
@@ -322,7 +323,8 @@ class Tray:
         try:
             done = subprocess.run([LAUNCHER, "--check-update", "--json"],
                                   capture_output=True, text=True,
-                                  timeout=CHECK_TIMEOUT)
+                                  timeout=CHECK_TIMEOUT,
+                                  **portable.no_window())
             answer = json.loads(done.stdout)
         except Exception:
             log.exception("update check could not run")

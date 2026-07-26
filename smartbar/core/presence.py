@@ -126,6 +126,8 @@ def platform_tag() -> str:
         return "mac"
     if raw.startswith("linux"):
         return "linux"
+    if raw == "win32":
+        return "win"
     return sanitize_label(raw)
 
 
