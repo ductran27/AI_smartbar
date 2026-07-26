@@ -6,6 +6,7 @@ machine this is developed on has no GTK and no tray: without them, a crash
 in an unusual branch (no data, an error string, a hovered button) would only
 surface on the user's Linux box. Install pycairo to run them here.
 """
+import io
 import os
 import tempfile
 import unittest
@@ -19,14 +20,14 @@ from smartbar.core import popover_layout as layout
 
 
 def _demo():
-    from smartbar.linux.popover_preview import demo_snapshot
+    from smartbar.paint.popover_preview import demo_snapshot
     return demo_snapshot()
 
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
 class TestPopoverPainter(unittest.TestCase):
     def render(self, built):
-        from smartbar.linux import popover_draw
+        from smartbar.paint import popover_draw
         with tempfile.TemporaryDirectory() as work:
             path = os.path.join(work, "popover.png")
             popover_draw.render_png(built, path, scale=1.0)
@@ -65,7 +66,7 @@ class TestPopoverPainter(unittest.TestCase):
 @unittest.skipIf(cairo is None, "pycairo not installed")
 class TestTrayBadge(unittest.TestCase):
     def render(self, states, pending=False):
-        from smartbar.linux.tray_icon import render_pills
+        from smartbar.paint.tray_icon import render_pills
         with tempfile.TemporaryDirectory() as work:
             path = os.path.join(work, "icon.png")
             render_pills(states, path, update_pending=pending)
@@ -81,6 +82,62 @@ class TestTrayBadge(unittest.TestCase):
 
     def test_update_badge_widens_the_icon(self):
         self.render([(0.3, "green")], pending=True)
+
+
+@unittest.skipIf(cairo is None, "pycairo not installed")
+class TestTrayBadgeScaling(unittest.TestCase):
+    """`scale` and the file-like target, both added for the Windows tray.
+
+    AppIndicator takes a PNG by filename and scales it to the panel height
+    itself, so this always drew one fixed 96px-tall bitmap. pystray takes a
+    PIL.Image at the size it will actually display, and does not resample
+    for you — so the badge has to be rasterised at the target height, from
+    a buffer rather than a temp file.
+    """
+
+    def size(self, states, **kwargs):
+        from smartbar.paint.tray_icon import render_pills
+        buffer = io.BytesIO()
+        render_pills(states, buffer, **kwargs)
+        buffer.seek(0)
+        surface = cairo.ImageSurface.create_from_png(buffer)
+        return surface.get_width(), surface.get_height()
+
+    def test_a_file_object_works_in_place_of_a_path(self):
+        from smartbar.paint.tray_icon import render_pills
+        buffer = io.BytesIO()
+        self.assertIs(render_pills([(0.5, "green")], buffer), buffer)
+        self.assertGreater(buffer.tell(), 0)
+
+    def test_a_file_object_and_a_path_produce_the_same_bytes(self):
+        from smartbar.paint.tray_icon import render_pills
+        states = [(0.42, "green"), (0.87, "critical")]
+        buffer = io.BytesIO()
+        render_pills(states, buffer)
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "icon.png")
+            render_pills(states, path)
+            with open(path, "rb") as handle:
+                self.assertEqual(handle.read(), buffer.getvalue())
+
+    def test_the_default_scale_is_the_historical_96px_bitmap(self):
+        # Pinned: every existing Linux device renders at this size, and the
+        # whole point of defaulting scale=1.0 is that they keep doing so.
+        self.assertEqual(self.size([(0.5, "green"), (0.5, "green")])[1], 96)
+
+    def test_scale_gives_the_caller_the_height_it_asked_for(self):
+        for height in (16, 20, 24, 32):
+            width, got = self.size([(0.5, "green")], scale=height / 96)
+            self.assertEqual(got, height)
+            self.assertGreater(width, 0)
+
+    def test_nothing_collapses_to_zero_at_the_smallest_tray_size(self):
+        # px() floors at 1 on purpose: at 16px a naive round() would give a
+        # zero-width pill, which cairo draws as nothing at all rather than
+        # failing — an empty tray icon nobody could debug from a screenshot.
+        width, height = self.size([], scale=16 / 96, update_pending=True)
+        self.assertEqual(height, 16)
+        self.assertGreater(width, height)   # the badge widens the frame
 
 
 if __name__ == "__main__":

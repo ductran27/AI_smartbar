@@ -56,7 +56,7 @@ def _pending() -> tuple:
 
 
 def render(path: str = "", *, scale: float = 2.0, demo: bool = False) -> str:
-    from smartbar.linux import popover_draw
+    from smartbar.paint import popover_draw
 
     error = ""
     if demo:

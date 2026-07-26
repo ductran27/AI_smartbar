@@ -27,7 +27,7 @@ from smartbar.core import cswap, model, paths, popover_layout, portable, presenc
 from smartbar.core import update as update_core
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
-from smartbar.linux.tray_icon import render_pills
+from smartbar.paint.tray_icon import render_pills
 
 CACHE_DIR = paths.cache_dir()
 ICON_DIR = os.path.join(CACHE_DIR, "icons")

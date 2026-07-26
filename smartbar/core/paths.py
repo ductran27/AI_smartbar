@@ -2,7 +2,7 @@
 
 Five modules each grew their own copy of the same two expressions —
 `presence_runner.py`, `warmup_runner.py`, `update_runner.py`,
-`linux/tray.py` and `linux/popover_preview.py` — and one of them
+`linux/tray.py` and `paint/popover_preview.py` — and one of them
 (`linux/tray.py`) quietly dropped the `SMARTBAR_CACHE_DIR` override while
 copying it, which is exactly the kind of drift that happens when a path
 expression is pasted five times instead of named once. Phase 1 of the

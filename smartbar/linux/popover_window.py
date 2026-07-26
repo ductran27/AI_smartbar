@@ -20,7 +20,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk   # noqa: E402
 
 from smartbar.core import popover_layout   # noqa: E402
-from smartbar.linux import popover_draw    # noqa: E402
+from smartbar.paint import popover_draw    # noqa: E402
 
 TICK_SECONDS = 30    # countdowns are minute-resolution; this keeps them live
 PIN_MARGIN = 12      # gap from the work-area corner a pinned panel sits in

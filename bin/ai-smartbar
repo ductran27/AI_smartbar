@@ -164,7 +164,7 @@ def main() -> int:
         from smartbar.warmup_runner import run_once
         return run_once()
     if args.preview_popover is not None:
-        from smartbar.linux.popover_preview import render
+        from smartbar.paint.popover_preview import render
         print(render(args.preview_popover, demo=args.demo))
         return 0
     if args.update or args.check_update:
