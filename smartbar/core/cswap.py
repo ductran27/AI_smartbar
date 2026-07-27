@@ -193,15 +193,17 @@ def fetch_combined() -> str | None:
     return proc.stdout
 
 
-def _run(args):
+def _run(args, feed=None):
+    # encoding= is not redundant with text=True: text=True alone decodes
+    # using the locale codec, which is cp1252 on a stock Windows, and a
+    # non-ASCII account email would then raise UnicodeDecodeError — which
+    # neither except clause below catches.
+    kwargs = dict(capture_output=True, text=True, encoding="utf-8",
+                  errors="replace", timeout=TIMEOUT, **portable.no_window())
+    if feed is not None:
+        kwargs["input"] = feed   # answers an interactive [y/N] prompt
     try:
-        # encoding= is not redundant with text=True: text=True alone decodes
-        # using the locale codec, which is cp1252 on a stock Windows, and a
-        # non-ASCII account email would then raise UnicodeDecodeError —
-        # which neither except clause below catches.
-        proc = subprocess.run([_binary(), *args], capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=TIMEOUT, **portable.no_window())
+        proc = subprocess.run([_binary(), *args], **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise CswapError(f"cswap {' '.join(args)} timed out after {TIMEOUT}s") from exc
     except OSError as exc:
@@ -276,6 +278,27 @@ def fetch(fresh: bool = False) -> Snapshot:
 
 def switch(number: int) -> None:
     _run(["switch", str(number)])
+
+
+def remove_account(number: int) -> None:
+    """Delete a managed slot — its stored credential backup included.
+
+    The ACTIVE slot is refused: it is the live login, so auto-registration
+    would re-add it within a minute and the removal could only ever look
+    like a silent failure. cswap's [y/N] prompt (its CLI has no --yes
+    flag) is answered on stdin, and the slot NUMBER is sent rather than
+    the email, which can hit an interactive ambiguity prompt when one
+    address fills two slots. cswap's own refusals — e.g. a live
+    `cswap run` session holding the slot — surface as CswapError.
+    """
+    snap = fetch()
+    target = next((a for a in snap.accounts if a.number == number), None)
+    if target is None:
+        raise CswapError(f"no account #{number} to remove")
+    if target.active:
+        raise CswapError("the active account cannot be removed — make "
+                         "another account active first")
+    _run(["remove", str(number)], feed="y\n")
 
 
 def add() -> None:

@@ -53,6 +53,15 @@ The panel — identical on macOS, Linux and Windows:
   already-running sessions keep theirs (claude-swap semantics). Accounts
   whose stored credential is dead are labeled and can't be switched to
   (see [Credential lifecycle](#credential-lifecycle-re-capture--healing)).
+- **Remove an account.** Hover a card and a small ✕ appears; click it
+  and the card's header asks `Remove <email>?  [Remove] [Keep]` in
+  place — no dialog, nothing reflows. Claude removal runs
+  `cswap remove` (the slot's stored credential backup is deleted;
+  signing in as that account re-registers it), OpenAI removal just
+  forgets the remembered card. The ACTIVE account is never removable:
+  auto-registration would re-add the live login within a minute, so
+  offering it would be a lie. Same affordance on the painted
+  Linux/Windows panel.
 - **Credential re-capture & healing.** Anthropic rotates OAuth refresh
   tokens, which silently kills stored account backups over time ("my
   first account is gone"). The bar now re-captures the live login's
@@ -351,7 +360,9 @@ exists to read:
 - **Signed-out accounts are remembered** (labels + last numbers only, in
   `~/.cache/ai-smartbar/openai-accounts.json`) and shown as read-only
   cards — "Signed out — usage from its last session" — with rows whose
-  windows have since reset dropped rather than displayed stale.
+  windows have since reset dropped rather than displayed stale. Hover a
+  remembered card and click its ✕ to forget it (nothing under `~/.codex`
+  is touched; signing in with Codex brings it back).
 
 The menu-bar pills stay Claude-only; the tab is the OpenAI surface.
 `SMARTBAR_OPENAI=off` removes all of it.

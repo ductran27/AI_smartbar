@@ -570,6 +570,108 @@ class TestActionDispatchInvokesTheRightHandler(GuiStubbedTestCase):
         tray._start_fetch.assert_not_called()
         tray._on_update.assert_not_called()
 
+    def test_remove_hit_arms_the_confirm_state_and_removes_nothing(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray_with_mocked_actions(mod)
+        tray.confirm = ""
+        tray._on_remove = mock.Mock()
+        tray._on_popover_action("remove:claude:2")
+        self.assertEqual(tray.confirm, "claude:2")
+        tray._on_remove.assert_not_called()
+        tray._start_fetch.assert_not_called()
+
+    def test_cancel_remove_clears_the_confirm_state(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray_with_mocked_actions(mod)
+        tray.confirm = "claude:2"
+        tray._on_remove = mock.Mock()
+        tray._on_popover_action("cancel-remove")
+        self.assertEqual(tray.confirm, "")
+        tray._on_remove.assert_not_called()
+
+    def test_confirm_remove_routes_the_token_to_on_remove(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray_with_mocked_actions(mod)
+        tray.confirm = "openai:a@x.com"
+        tray._on_remove = mock.Mock()
+        tray._on_popover_action("confirm-remove:openai:a@x.com")
+        tray._on_remove.assert_called_once_with("openai:a@x.com")
+
+    def test_card_hover_region_click_does_nothing(self):
+        # card:* is the hover container the ✕ affordance rides on; a click
+        # on the card body must not action anything.
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray_with_mocked_actions(mod)
+        tray.confirm = ""
+        tray._on_remove = mock.Mock()
+        tray._on_popover_action("card:claude:2")
+        self.assertEqual(tray.confirm, "")
+        for handler in (tray._quit, tray._start_fetch, tray._on_update,
+                        tray._on_switch, tray._on_remove):
+            handler.assert_not_called()
+
+
+class _InlineThread:
+    """threading.Thread stand-in that runs the target synchronously on
+    start() — lets the remove flow be asserted without real threads."""
+
+    def __init__(self, target=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+class TestRemoveFlow(GuiStubbedTestCase):
+    """_on_remove drops the card optimistically, calls the ONE core
+    removal function for the right provider, and refetches — the truth
+    that resurrects the card if the removal failed."""
+
+    def _tray(self, mod):
+        from smartbar.core import model as core_model
+        tray = mod.Tray.__new__(mod.Tray)
+        tray.popover = None
+        tray.confirm = "stale"
+        tray._start_fetch = mock.Mock()
+        tray.snapshot = core_model.Snapshot(accounts=[
+            core_model.Account(number=1, email="a@x.com", active=True),
+            core_model.Account(number=2, email="b@x.com")])
+        tray.snapshot.openai = [
+            core_model.Account(number=1, email="live@x.com", active=True),
+            core_model.Account(number=2, email="old@x.com")]
+        return tray
+
+    def test_claude_removal_goes_through_cswap_by_slot_number(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.cswap, "remove_account") as removed:
+            tray._on_remove("claude:2")
+        removed.assert_called_once_with(2)
+        self.assertEqual([a.number for a in tray.snapshot.accounts], [1])
+        self.assertEqual(tray.confirm, "")
+        tray._start_fetch.assert_called_once_with()
+
+    def test_openai_removal_goes_through_codex_by_email(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.codex, "remove_account") as removed:
+            tray._on_remove("openai:old@x.com")
+        removed.assert_called_once_with("old@x.com")
+        self.assertEqual([a.email for a in tray.snapshot.openai],
+                         ["live@x.com"])
+        tray._start_fetch.assert_called_once_with()
+
+    def test_a_core_failure_is_logged_not_raised_and_still_refetches(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.cswap, "remove_account",
+                               side_effect=mod.cswap.CswapError("in use")):
+            tray._on_remove("claude:2")   # must not raise
+        tray._start_fetch.assert_called_once_with()
+
 
 class TestThreadToUiMarshalling(GuiStubbedTestCase):
     """The pystray worker thread never touches tk widgets directly -- every

@@ -196,7 +196,10 @@ class TestDataless(unittest.TestCase):
         blocked = [h for h in built.hits if h.name == "switch:1"]
         self.assertEqual(len(blocked), 1)
         self.assertFalse(blocked[0].enabled)
-        self.assertIsNone(built.hit(blocked[0].x + 2, blocked[0].y + 2))
+        # The disabled button never resolves; the click falls through to
+        # the card's non-action hover region instead of any control.
+        self.assertEqual(built.hit(blocked[0].x + 2, blocked[0].y + 2).name,
+                         "card:claude:1")
 
     def test_dataless_dot_is_hollow(self):
         built = layout.build(snap(account(metrics=[])), now=NOW)
@@ -226,7 +229,10 @@ class TestHitTesting(unittest.TestCase):
 
     def test_named_targets_exist(self):
         names = {h.name for h in self.built().hits}
-        self.assertEqual(names, {"refresh", "quit", "switch:2"})
+        # card:* regions are hover trackers (they make the remove ✕ appear
+        # in the painted UIs), not buttons — clicks on them do nothing.
+        self.assertEqual(names, {"refresh", "quit", "switch:2",
+                                 "card:claude:2", "card:claude:3"})
 
     def test_update_target_appears_only_when_one_is_pending(self):
         self.assertNotIn("update", {h.name for h in self.built().hits})
@@ -246,7 +252,11 @@ class TestHitTesting(unittest.TestCase):
         self.assertIsNone(built.hit(t.PAD + 2, built.height - 2))
 
     def test_targets_do_not_overlap(self):
-        hits = self.built(pending_version="9.9.9").hits
+        # card:* regions deliberately CONTAIN their card's buttons (they are
+        # hover containers, resolved by topmost-wins), so only the real
+        # controls are held to the no-overlap rule.
+        hits = [h for h in self.built(pending_version="9.9.9").hits
+                if not h.name.startswith("card:")]
         for i, first in enumerate(hits):
             for second in hits[i + 1:]:
                 apart = (first.x + first.w <= second.x
@@ -323,6 +333,121 @@ class TestProviderTabs(unittest.TestCase):
         s.openai = [card]
         built = layout.build(s, provider="openai", now=NOW)
         self.assertIn("gpt@example.com · Pro Lite", labels(built))
+
+
+class TestRemoveAffordance(unittest.TestCase):
+    """The hover ✕ and the in-card confirm — the remove flow's geometry.
+
+    The rules pinned here: the ✕ exists only while the pointer is on a
+    non-active card; confirming swaps ONLY the header row (same height, the
+    bars stay); the active account is never removable, even if a stale
+    confirm token names it. Mirrors AccountCardView's hover/confirm states.
+    """
+
+    def openai_snap(self):
+        s = snap()
+        s.openai = [openai_account(),
+                    openai_account(number=2, email="old@x.com", active=False,
+                                   ok=False, status="signed_out", metrics=[])]
+        return s
+
+    def test_no_remove_target_without_hover(self):
+        built = layout.build(snap(account(number=2)), now=NOW)
+        self.assertFalse(any(h.name.startswith("remove:")
+                             for h in built.hits))
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "close"
+                             for s in built.shapes))
+
+    def test_every_card_carries_a_hover_region(self):
+        built = layout.build(snap(account(number=2),
+                                  account(number=3, active=True)), now=NOW)
+        names = {h.name for h in built.hits}
+        self.assertIn("card:claude:2", names)
+        self.assertIn("card:claude:3", names)
+
+    def test_hovering_a_card_reveals_its_remove_target(self):
+        built = layout.build(snap(account(number=2)),
+                             hover="card:claude:2", now=NOW)
+        self.assertIn("remove:claude:2", {h.name for h in built.hits})
+        self.assertTrue(any(isinstance(s, t.Glyph) and s.kind == "close"
+                            for s in built.shapes))
+
+    def test_hovering_the_switch_button_keeps_the_cross_visible(self):
+        # The pointer is still on the card while it crosses the button.
+        built = layout.build(snap(account(number=2)), hover="switch:2",
+                             now=NOW)
+        self.assertIn("remove:claude:2", {h.name for h in built.hits})
+
+    def test_the_active_card_is_never_removable(self):
+        built = layout.build(snap(account(active=True)),
+                             hover="card:claude:1", now=NOW)
+        self.assertFalse(any(h.name.startswith("remove:")
+                             for h in built.hits))
+
+    def test_the_cross_shrinks_the_address_budget_not_the_controls(self):
+        hovered = layout.build(snap(account(number=2)),
+                               hover="card:claude:2", now=NOW)
+        cross = next(h for h in hovered.hits if h.name == "remove:claude:2")
+        switch = next(h for h in hovered.hits if h.name == "switch:2")
+        address = next(s for s in hovered.shapes
+                       if isinstance(s, t.Label) and "@" in s.text)
+        self.assertLessEqual(address.x + address.max_width, cross.x)
+        self.assertLessEqual(cross.x + cross.w, switch.x)
+
+    def test_confirm_swaps_the_header_and_keeps_the_height(self):
+        plain = layout.build(snap(account(number=2)), now=NOW)
+        confirm = layout.build(snap(account(number=2)), confirm="claude:2",
+                               now=NOW)
+        self.assertEqual(confirm.height, plain.height)
+        self.assertIn("Remove a@example.com?", labels(confirm))
+        names = {h.name for h in confirm.hits}
+        self.assertIn("confirm-remove:claude:2", names)
+        self.assertIn("cancel-remove", names)
+        self.assertNotIn("switch:2", names)
+        self.assertNotIn("Make Active", labels(confirm))
+        # the metric bars survive the question
+        self.assertEqual(len(bars(confirm)), len(bars(plain)))
+
+    def test_confirm_remove_button_is_destructive_red(self):
+        confirm = layout.build(snap(account(number=2)), confirm="claude:2",
+                               now=NOW)
+        remove_hit = next(h for h in confirm.hits
+                          if h.name == "confirm-remove:claude:2")
+        fills = [b.fill for b in boxes(confirm)
+                 if abs(b.x - remove_hit.x) < 0.01
+                 and abs(b.y - remove_hit.y) < 0.01]
+        self.assertIn(t.DANGER, fills)
+
+    def test_a_stale_confirm_for_the_active_card_is_ignored(self):
+        built = layout.build(snap(account(active=True)), confirm="claude:1",
+                             now=NOW)
+        self.assertIn("ACTIVE", labels(built))
+        self.assertFalse(any(h.name.startswith("confirm-remove")
+                             for h in built.hits))
+
+    def test_openai_cards_are_identified_by_email(self):
+        built = layout.build(self.openai_snap(),
+                             hover="card:openai:old@x.com", now=NOW)
+        self.assertIn("remove:openai:old@x.com", {h.name for h in built.hits})
+
+    def test_the_live_codex_login_is_never_removable(self):
+        built = layout.build(self.openai_snap(),
+                             hover="card:openai:gpt@example.com", now=NOW)
+        self.assertFalse(any(h.name.startswith("remove:")
+                             for h in built.hits))
+
+    def test_openai_confirm_names_the_right_card(self):
+        built = layout.build(self.openai_snap(), confirm="openai:old@x.com",
+                             now=NOW)
+        self.assertIn("Remove old@x.com?", labels(built))
+        self.assertIn("confirm-remove:openai:old@x.com",
+                      {h.name for h in built.hits})
+
+    def test_buttons_win_hit_testing_over_their_card_region(self):
+        built = layout.build(snap(account(number=2)), now=NOW)
+        switch = next(h for h in built.hits if h.name == "switch:2")
+        self.assertEqual(built.hit(switch.x + switch.w / 2,
+                                   switch.y + switch.h / 2).name, "switch:2")
 
 
 class TestHeaderAndFooter(unittest.TestCase):

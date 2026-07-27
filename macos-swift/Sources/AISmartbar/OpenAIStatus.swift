@@ -9,6 +9,7 @@ import Foundation
 @MainActor
 final class OpenAIStatus: ObservableObject {
     @Published private(set) var accounts: [Account] = []
+    @Published var removeError: String?  // sticky until the next attempt
 
     /// These numbers move only while Codex is actually being used, so a
     /// couple of minutes of lag is invisible; the popover also refreshes
@@ -16,6 +17,7 @@ final class OpenAIStatus: ObservableObject {
     static let refreshInterval: TimeInterval = 120
 
     private var timer: Timer?
+    private var generation = 0  // stamps fetches; a removal supersedes them
 
     init() {
         refresh()
@@ -26,11 +28,34 @@ final class OpenAIStatus: ObservableObject {
     }
 
     func refresh() {
+        generation += 1
+        let current = generation
         Task.detached(priority: .utility) {
             let fetched = Self.fetchAccounts()
             await MainActor.run { [weak self] in
-                guard let self, let fetched else { return }
+                guard let self, let fetched,
+                      current == self.generation else { return }
                 if fetched != self.accounts { self.accounts = fetched }
+            }
+        }
+    }
+
+    /// Remove a remembered (signed-out) ChatGPT card. Optimistic: the card
+    /// disappears now; the refresh afterwards is the truth. The guard
+    /// mirrors core's — the live login would just be re-registered by the
+    /// next sync, so it is never removable.
+    func remove(_ email: String) {
+        guard let target = accounts.first(where: { $0.email == email }),
+              !target.active else { return }
+        removeError = nil
+        accounts.removeAll { $0.email == email }
+        generation += 1  // any in-flight pre-removal list is now stale
+        Task.detached(priority: .userInitiated) {
+            let failure = AccountRemoval.remove(provider: "openai",
+                                                identifier: email)
+            await MainActor.run { [weak self] in
+                if let failure { self?.removeError = "Remove failed: \(failure)" }
+                self?.refresh()
             }
         }
     }

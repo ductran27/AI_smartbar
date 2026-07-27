@@ -13,6 +13,7 @@ final class UsageStore: ObservableObject {
     @Published var isRefreshing = false
     @Published var icon: NSImage = MenuBarIcon.image(for: [])
     @Published var switchError: String?  // sticky until the next switch attempt
+    @Published var removeError: String?  // sticky until the next remove attempt
 
     /// Per-account device counts. Owned here rather than beside the store
     /// because it needs every snapshot, including the ones taken while the
@@ -180,6 +181,28 @@ final class UsageStore: ObservableObject {
                     self?.switchError = "Switch failed: \(failure)"
                 }
                 self?.isRefreshing = false
+                self?.refresh(force: true)
+            }
+        }
+    }
+
+    /// Remove a non-active Claude slot (confirmed in the card). Optimistic:
+    /// the card disappears now; the forced refresh afterwards is the truth
+    /// and resurrects it if the removal failed. The guard mirrors core's —
+    /// the active slot is the live login, auto-registration would just
+    /// re-add it.
+    func removeAccount(_ number: Int) {
+        guard let target = snapshot?.accounts.first(where: { $0.number == number }),
+              !target.active else { return }
+        removeError = nil
+        snapshot?.accounts.removeAll { $0.number == number }
+        fetchGeneration += 1  // any in-flight pre-removal fetch is now stale
+        isRefreshing = false
+        Task.detached(priority: .userInitiated) {
+            let failure = AccountRemoval.remove(provider: "claude",
+                                                identifier: String(number))
+            await MainActor.run { [weak self] in
+                if let failure { self?.removeError = "Remove failed: \(failure)" }
                 self?.refresh(force: true)
             }
         }

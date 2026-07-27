@@ -82,6 +82,68 @@ class TestParse(unittest.TestCase):
             cswap.parse_snapshot("not json {")
 
 
+def _snap(*accounts):
+    from smartbar.core.model import Snapshot
+    return Snapshot(accounts=list(accounts))
+
+
+def _account(number, active=False, email="a@x.com"):
+    from smartbar.core.model import Account
+    return Account(number=number, email=email, active=active)
+
+
+class TestRemoveAccount(unittest.TestCase):
+    """remove_account never touches real slots: fetch and _run are mocked."""
+
+    def test_pipes_the_confirmation_and_sends_the_slot_number(self):
+        # cswap's CLI has no --yes flag, so the [y/N] prompt is answered on
+        # stdin; the NUMBER (never the email) avoids its interactive
+        # ambiguity prompt when one address fills two slots.
+        with mock.patch.object(cswap, "fetch",
+                               return_value=_snap(_account(2))), \
+             mock.patch.object(cswap, "_run") as run:
+            cswap.remove_account(2)
+        run.assert_called_once_with(["remove", "2"], feed="y\n")
+
+    def test_refuses_the_active_slot_before_running_anything(self):
+        with mock.patch.object(cswap, "fetch",
+                               return_value=_snap(_account(1, active=True))), \
+             mock.patch.object(cswap, "_run") as run:
+            with self.assertRaises(cswap.CswapError):
+                cswap.remove_account(1)
+        run.assert_not_called()
+
+    def test_unknown_slot_raises_without_running_anything(self):
+        with mock.patch.object(cswap, "fetch", return_value=_snap()), \
+             mock.patch.object(cswap, "_run") as run:
+            with self.assertRaises(cswap.CswapError):
+                cswap.remove_account(9)
+        run.assert_not_called()
+
+    def test_a_cswap_failure_propagates(self):
+        # e.g. cswap's own live-session refusal — surfaced, not swallowed.
+        with mock.patch.object(cswap, "fetch",
+                               return_value=_snap(_account(2))), \
+             mock.patch.object(cswap, "_run",
+                               side_effect=cswap.CswapError("live session")):
+            with self.assertRaises(cswap.CswapError):
+                cswap.remove_account(2)
+
+    def test_run_feeds_stdin_when_asked(self):
+        with mock.patch.object(cswap.subprocess, "run") as sub, \
+             mock.patch.object(cswap, "_binary", return_value="/x/cswap"):
+            sub.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            cswap._run(["remove", "2"], feed="y\n")
+        self.assertEqual(sub.call_args.kwargs.get("input"), "y\n")
+
+    def test_run_without_feed_stays_exactly_as_before(self):
+        with mock.patch.object(cswap.subprocess, "run") as sub, \
+             mock.patch.object(cswap, "_binary", return_value="/x/cswap"):
+            sub.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            cswap._run(["list", "--json"])
+        self.assertNotIn("input", sub.call_args.kwargs)
+
+
 class TestBinary(unittest.TestCase):
     def test_env_override_wins(self):
         os.environ["SMARTBAR_CSWAP"] = "/nonexistent/cswap"
