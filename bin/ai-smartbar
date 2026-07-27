@@ -178,18 +178,7 @@ def main() -> int:
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     elif sys.platform == "win32":
-        # Phase 1 is the headless/portable layer only: no Windows UI exists
-        # yet, and the wrong failure here is falling through to `linux.tray`,
-        # which does `import gi` at module scope and dies with
-        # `ImportError: No module named 'gi'` -- a message that sends a
-        # Windows user chasing a GTK install that could never have worked.
-        # A clear, actionable SystemExit beats that every time.
-        raise SystemExit(
-            "ai-smartbar: the Windows tray/menu-bar UI is not implemented "
-            "yet (arrives in Phase 3).\n"
-            "Everything else works headlessly today -- try:\n"
-            "  ai-smartbar --once              (print current usage)\n"
-            "  ai-smartbar --preview-popover   (render the panel to a PNG)")
+        from smartbar.windows.tray import main as ui_main
     else:
         from smartbar.linux.tray import main as ui_main
     ui_main()
