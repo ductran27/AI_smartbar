@@ -81,7 +81,8 @@ import tkinter as tk
 from PIL import Image
 
 from smartbar import __version__, presence_client
-from smartbar.core import cswap, model, paths, popover_layout, portable, presence
+from smartbar.core import codex, cswap, model, paths, plan
+from smartbar.core import popover_layout, portable, presence
 from smartbar.core import update as update_core
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
@@ -192,6 +193,7 @@ class Tray:
         self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
         self.alerts = AlertManager()
         self.snapshot = None
+        self.provider = ""   # panel tab; "" auto-resolves in the layout
         self.failures = 0
         self.generation = 0  # stamps fetches so superseded results are dropped
         self._generation_lock = threading.Lock()  # guards the += below (MINOR 7)
@@ -243,7 +245,7 @@ class Tray:
             fetched_at=self.snapshot.fetched_at if self.snapshot else "",
             stale=bool(self.failures and self.snapshot),
             error=self.last_error if self.snapshot is None else "",
-            hover=hover)
+            hover=hover, provider=self.provider)
 
     def _to_main(self, callback, *args):
         """Marshal `callback(*args)` onto the tk main thread. thread -> UI handoff.
@@ -300,6 +302,8 @@ class Tray:
             self._start_fetch()
         elif name == "update":
             self._on_update()
+        elif name.startswith("tab:"):
+            self.provider = name.split(":", 1)[1]
         elif name.startswith("switch:"):
             self._on_switch(int(name.split(":", 1)[1]))
         if self.popover is not None:
@@ -698,9 +702,14 @@ class Tray:
         self.failures = 0
         self.last_error = ""
         self.snapshot = snap
-        # Stamp the device counts before anything renders: the menu rows and
-        # the panel both name accounts through model.account_label.
+        # Stamp the device counts and plan badges before anything renders:
+        # the menu rows and the panel both name accounts through
+        # model.account_label.
         presence.apply_counts(snap, presence_client.counts())
+        plan.apply_plans(snap, plan.plans_by_email())
+        # ChatGPT accounts ride the snapshot's separate list (cheap local
+        # reads, mtime-cached); the panel's OpenAI tab renders them.
+        snap.openai = codex.accounts()
         if not self.presence_started:
             # First real snapshot: announce this device now rather than
             # after a whole interval, and do it with accounts already in

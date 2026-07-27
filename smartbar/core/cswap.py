@@ -68,18 +68,50 @@ class CswapError(Exception):
     """Any failure talking to or parsing output from cswap."""
 
 
+#: Windows CreateProcess cannot launch a .bat/.cmd directly (they carry no
+#: PE header), so the OS silently reruns it as `cmd.exe /c <full argv>` even
+#: for this module's shell=False subprocess.run() calls — cmd.exe then
+#: re-parses that whole line, giving &, |, ^, <, >, % and quotes a meaning
+#: POSIX never gave them (the "BatBadBut" class of bug, still open as of
+#: CPython 3.13: list2cmdline() only implements MSVCRT-style backslash/quote
+#: escaping, nothing cmd.exe-aware). Refusing the extension is the whole
+#: mitigation — see device_config.py's _BAD_VALUE_WIN comment for why the
+#: hazard has to be caught here rather than at config-parsing time.
+#:
+#: Deliberately NOT applied to SMARTBAR_CLAUDE, the other setting that becomes
+#: argv[0]: npm installs Claude Code AS claude.cmd on Windows, so warmup_runner
+#: hunts for exactly that extension (see its win32 discovery arm). Refusing it
+#: there would reject the normal install rather than a suspicious one. The
+#: asymmetry is the point -- for cswap a .bat is unusual (pipx and uv both emit
+#: .exe shims), and cswap is the one whose argv carries an account email back
+#: out of `list --json`, so it is the one where a re-parse has something to bite.
+_SHELL_REPARSED_EXTS = (".bat", ".cmd")
+
+
+def _reject_shell_reparse(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if sys.platform == "win32" and ext in _SHELL_REPARSED_EXTS:
+        raise CswapError(
+            f"cswap resolved to a batch file ({path}); refusing to run it "
+            "because Windows reruns .bat/.cmd through cmd.exe, which "
+            "re-parses the whole argv. Point SMARTBAR_CSWAP at cswap.exe "
+            "(or a non-batch launcher) instead."
+        )
+    return path
+
+
 def _binary() -> str:
     override = os.environ.get("SMARTBAR_CSWAP")
     if override:
-        return override
+        return _reject_shell_reparse(override)
     # shutil.which already honours PATHEXT on Windows, so a bare "cswap" on
     # PATH resolves to cswap.exe (or .bat/.cmd) with no change needed here.
     found = shutil.which("cswap")
     if found:
-        return found
+        return _reject_shell_reparse(found)
     fallback = os.path.expanduser("~/.local/bin/cswap")
     if os.path.exists(fallback):
-        return fallback
+        return _reject_shell_reparse(fallback)
     fallback_exe = os.path.expanduser("~/.local/bin/cswap.exe")
     if os.path.exists(fallback_exe):
         return fallback_exe

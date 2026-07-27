@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import logging
 import os
 import sys
 import tempfile
@@ -145,9 +146,15 @@ class TestLockIndirection(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-
-    def tearDown(self):
-        self.tmp.cleanup()
+        # Registered here, not in a tearDown, on purpose: unittest always
+        # runs tearDown() before doCleanups(), so a plain
+        # `def tearDown(self): self.tmp.cleanup()` would delete the
+        # directory before any addCleanup() a test method registers later
+        # (the lock handle below, the log handler below) gets a chance to
+        # run and release its handle. Routing the directory cleanup through
+        # addCleanup too puts it in the same LIFO queue, so whatever a test
+        # registers after this always closes first.
+        self.addCleanup(self.tmp.cleanup)
 
     def test_presence_runner_lock_is_exclusive_through_the_shim(self):
         with _reloaded("smartbar.presence_runner",
@@ -161,11 +168,23 @@ class TestLockIndirection(unittest.TestCase):
     def test_update_runner_skips_without_touching_git_when_lock_is_held(self):
         with _reloaded("smartbar.update_runner",
                        env={"SMARTBAR_CACHE_DIR": self.tmp.name}) as mod:
+            # run_once() calls logging.basicConfig(filename=LOG_FILE, ...)
+            # before it ever checks the lock, which — the first time it
+            # actually takes effect in this process — attaches a
+            # FileHandler holding LOG_FILE (inside self.tmp.name) open for
+            # the lifetime of the process. Close and detach whatever it
+            # added so the handle does not outlive self.tmp.
+            root_logger = logging.getLogger()
+            handlers_before = list(root_logger.handlers)
             never = AssertionError("should not reach git")
             with mock.patch.object(mod.portable, "lock",
                                    return_value=None) as fake_lock, \
                  mock.patch.object(mod.update_git, "fetch", side_effect=never):
                 self.assertEqual(mod.run_once(), 0)
+            for handler in root_logger.handlers:
+                if handler not in handlers_before:
+                    self.addCleanup(handler.close)
+                    self.addCleanup(root_logger.removeHandler, handler)
             fake_lock.assert_called_once_with(mod.LOCK_FILE)
 
 
@@ -230,11 +249,24 @@ class TestUpdateNotifyOnWindows(unittest.TestCase):
         else:
             os.environ["SMARTBAR_UPDATE_NOTIFY"] = self.saved_notify
 
-    def test_win32_never_execs_notify_send(self):
+    def test_win32_execs_powershell_and_never_notify_send(self):
+        # shutil.which is patched, not left real: faking sys.platform mutates
+        # the one process-wide sys module, so the STDLIB's which() also takes
+        # its win32 branch and dies on a NoneType _winapi when this runs on a
+        # Mac. Unpatched, that crash gets swallowed by _win32_notify's broad
+        # except and the test would pass having exercised nothing.
         update_runner.sys.platform = "win32"
-        with mock.patch.object(update_runner.subprocess, "run") as fake_run:
+        with mock.patch.object(update_runner.shutil, "which",
+                               return_value="C:\\pwsh.exe"), \
+             mock.patch.object(update_runner.subprocess, "run") as fake_run:
             update_runner.notify("title", "body")
-        fake_run.assert_not_called()
+        fake_run.assert_called_once()
+        argv = fake_run.call_args[0][0]
+        self.assertEqual(argv[0], "C:\\pwsh.exe")
+        self.assertNotIn("notify-send", argv)
+        # Untrusted text rides as its own argv slots, never spliced into the
+        # script text where PowerShell would parse it as code.
+        self.assertEqual(argv[-2:], ["title", "body"])
 
     def test_notify_off_still_short_circuits_on_win32(self):
         update_runner.sys.platform = "win32"
@@ -322,7 +354,16 @@ class TestRunInstallerForPowerShell(unittest.TestCase):
         self.saved_repo_root = update_runner.update_git.REPO_ROOT
         update_runner.update_git.REPO_ROOT = self.tmp.name
         os.makedirs(os.path.join(self.tmp.name, "install"))
-        self.script = os.path.join(self.tmp.name, "install", "windows.ps1")
+        # Built the same way run_installer() builds `script` --
+        # os.path.join(REPO_ROOT, INSTALLERS["windows"]) -- rather than
+        # os.path.join(self.tmp.name, "install", "windows.ps1"): the two
+        # only render identically on POSIX. INSTALLERS["windows"] is the
+        # forward-slash literal "install/windows.ps1", so on win32
+        # os.path.join introduces a backslash only between REPO_ROOT and
+        # that literal, leaving its internal "/" alone -- a rendering the
+        # three-argument POSIX-only join can never reproduce.
+        self.script = os.path.join(
+            self.tmp.name, update_runner.update.INSTALLERS["windows"])
         with open(self.script, "w") as handle:
             handle.write("# no chmod +x -- exec bit is not the point here\n")
 

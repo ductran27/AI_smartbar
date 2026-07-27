@@ -14,6 +14,7 @@ POSIX-only tool. Falling through raises FileNotFoundError, an OSError
 subclass that the blanket handler swallows, which is exactly how every
 warmup failure notification on Windows vanished without a trace.
 """
+import ntpath
 import os
 import tempfile
 import unittest
@@ -53,6 +54,24 @@ class TestPingArgv(Env):
 
 
 class TestEnvWithClaudeOnPath(Env):
+    """Pinned to a POSIX platform so these tests exercise
+    env_with_claude_on_path's POSIX branch specifically.
+
+    Without this, a CI runner that is genuinely Windows (sys.platform ==
+    "win32" for real, not mocked) would silently take the win32 branch
+    instead -- the POSIX fixtures below ("/some/where", "/opt/homebrew/bin",
+    ...) would then be fed through the wrong half of the function entirely,
+    not just normalised oddly.
+    """
+    def setUp(self):
+        super().setUp()
+        self.saved_platform = warmup_runner.sys.platform
+        warmup_runner.sys.platform = "darwin"
+
+    def tearDown(self):
+        warmup_runner.sys.platform = self.saved_platform
+        super().tearDown()
+
     def test_prepends_claude_dir_and_common_bins(self):
         os.environ["PATH"] = "/usr/bin:/bin"  # launchd's bare default
         env = warmup_runner.env_with_claude_on_path("/some/where/claude")
@@ -83,11 +102,13 @@ class WindowsPlatform(unittest.TestCase):
     Monkeypatches the module's own `sys.platform` attribute rather than the
     real interpreter platform, and restores it in tearDown. The `os.path.*`
     calls inside the code under test still bind whatever path module the
-    ACTUAL host OS provides (posixpath here, since this suite only ever runs
-    on macOS/Linux), so every fake path a test builds goes through
-    os.path.join/os.sep instead of hardcoded backslashes — which keeps
-    os.path.dirname/abspath sane on the real host while still exercising the
-    win32 branch.
+    ACTUAL host OS provides -- posixpath on macOS/Linux hosts, but real
+    ntpath (with its native drive-letter resolution) if this suite is ever
+    run natively on Windows. That's fine for the tests in this class: they
+    build fake paths through os.path.join/os.sep so dirname/abspath stay
+    sane either way. TestEnvWithClaudeOnPathWindows below needs the
+    stronger guarantee of *always* getting ntpath, so it patches
+    `warmup_runner.os.path` explicitly instead of relying on the host.
     """
 
     def setUp(self):
@@ -157,17 +178,44 @@ class TestClaudeBinaryOnWindows(WindowsPlatform):
 
 
 class TestEnvWithClaudeOnPathWindows(WindowsPlatform):
+    """Also pins `warmup_runner.os.path` to the real `ntpath` module.
+
+    env_with_claude_on_path() runs the incoming claude path through
+    os.path.dirname(os.path.abspath(...)). On real Windows, abspath()
+    resolves a drive-less rooted path (root but no drive letter) against
+    the CURRENT DRIVE, because that's what Windows' GetFullPathNameW does
+    with such a path. A fake APPDATA without a drive letter is not what
+    real Windows ever hands a process -- %APPDATA% is always
+    drive-qualified there -- so using a drive-qualified fixture here is
+    the realistic choice, and it keeps abspath() a no-op instead of
+    guessing. Pinning os.path to ntpath (rather than trusting the host)
+    makes that hold on macOS/Linux dev machines too, not only on native
+    Windows CI.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.os_path_patcher = mock.patch.object(warmup_runner.os, "path", ntpath)
+        self.os_path_patcher.start()
+        self.addCleanup(self.os_path_patcher.stop)
+        # Real Windows joins PATH entries with ";", not ":" -- and a bare
+        # ":" would collide with the drive-letter colon in "C:\Users\...".
+        self.os_pathsep_patcher = mock.patch.object(warmup_runner.os, "pathsep", ";")
+        self.os_pathsep_patcher.start()
+        self.addCleanup(self.os_pathsep_patcher.stop)
+
     def test_prepends_the_windows_install_dirs_not_the_posix_ones(self):
-        appdata = os.path.join(os.sep, "Users", "duc", "AppData", "Roaming")
-        localappdata = os.path.join(os.sep, "Users", "duc", "AppData", "Local")
+        appdata = r"C:\Users\duc\AppData\Roaming"
+        localappdata = r"C:\Users\duc\AppData\Local"
         os.environ["APPDATA"] = appdata
         os.environ["LOCALAPPDATA"] = localappdata
-        os.environ["PATH"] = os.path.join(os.sep, "Windows", "System32")
-        claude = os.path.join(appdata, "npm", "claude.cmd")
+        os.environ["PATH"] = r"C:\Windows\System32"
+        claude = warmup_runner.os.path.join(appdata, "npm", "claude.cmd")
         env = warmup_runner.env_with_claude_on_path(claude)
         parts = env["PATH"].split(os.pathsep)
-        self.assertEqual(parts[0], os.path.join(appdata, "npm"))
-        self.assertIn(os.path.join(localappdata, "Programs", "claude"), parts)
+        self.assertEqual(parts[0], warmup_runner.os.path.join(appdata, "npm"))
+        self.assertIn(warmup_runner.os.path.join(localappdata, "Programs", "claude"),
+                      parts)
         # The POSIX-only install dirs must not leak in from the other branch.
         self.assertNotIn(os.path.expanduser("~/.local/bin"), parts)
         self.assertNotIn("/opt/homebrew/bin", parts)

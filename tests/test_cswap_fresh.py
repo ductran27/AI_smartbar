@@ -41,12 +41,25 @@ class TestVenvPython(Env):
     def test_parses_pipx_launcher_exec_line(self):
         # sys.executable stands in for the venv python: the parsed path must
         # exist, and a real interpreter always does.
+        #
+        # This parses a POSIX shell launcher, which is POSIX-only by
+        # nature: venv_python()'s win32 branch never even looks at the
+        # launcher text (Windows installs a compiled PE stub, nothing to
+        # regex out of it), so this must fake a non-win32 platform to
+        # deterministically hit the branch under test -- otherwise it only
+        # passes when the suite happens to run on a POSIX host, and fails
+        # for real on Windows CI where sys.platform is genuinely "win32".
         launcher = write_script(self.tmp.name, "cswap",
                                 "#!/bin/sh\n"
                                 f"'''exec' '{sys.executable}' \"$0\" \"$@\"\n"
                                 "' '''\n")
         os.environ["SMARTBAR_CSWAP"] = launcher
-        self.assertEqual(cswap.venv_python(), sys.executable)
+        saved_platform = cswap.sys.platform
+        cswap.sys.platform = "linux"
+        try:
+            self.assertEqual(cswap.venv_python(), sys.executable)
+        finally:
+            cswap.sys.platform = saved_platform
 
     def test_no_python_line_is_none(self):
         plain = write_script(self.tmp.name, "cswap", "#!/bin/sh\nexit 0\n")
@@ -66,9 +79,16 @@ class TestVenvPythonWindows(Env):
     """Windows has no launcher text to parse — cswap.exe is a PE stub — so
     venv_python() probes the well-known pipx/uv tool-venv layouts instead.
 
-    These fake HOME so the "~/.local/..." candidates resolve inside a
-    throwaway tempdir rather than the real user profile, and fake
-    sys.platform the way tests/test_presence.py:74-104 already does.
+    These fake HOME *and* USERPROFILE so the "~/.local/..." candidates
+    resolve inside a throwaway tempdir rather than the real user profile,
+    and fake sys.platform the way tests/test_presence.py:74-104 already
+    does. Both env vars matter: os.path.expanduser() is bound to whatever
+    path module the REAL host OS provides, not the faked sys.platform --
+    posixpath (reads HOME) when this suite runs on macOS/Linux, ntpath
+    (reads USERPROFILE, never HOME) when it actually runs on Windows CI.
+    Faking only HOME made these pass here for the wrong reason: on real
+    Windows expanduser() would silently ignore it and resolve against the
+    CI box's real profile instead of the planted tempdir.
     """
 
     def setUp(self):
@@ -76,7 +96,9 @@ class TestVenvPythonWindows(Env):
         self.saved_platform = cswap.sys.platform
         cswap.sys.platform = "win32"
         self.saved_home = os.environ.get("HOME")
+        self.saved_userprofile = os.environ.get("USERPROFILE")
         os.environ["HOME"] = self.tmp.name
+        os.environ["USERPROFILE"] = self.tmp.name
 
     def tearDown(self):
         cswap.sys.platform = self.saved_platform
@@ -84,6 +106,10 @@ class TestVenvPythonWindows(Env):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = self.saved_home
+        if self.saved_userprofile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = self.saved_userprofile
         super().tearDown()
 
     def plant(self, *parts):
@@ -97,12 +123,19 @@ class TestVenvPythonWindows(Env):
 
     def test_finds_a_planted_pipx_venv_python(self):
         planted = self.plant(".local", "pipx", "venvs", "claude-swap", "Scripts")
-        self.assertEqual(cswap.venv_python(), planted)
+        # normpath, not a raw equality: on real Windows, expanduser()
+        # splices a backslash-separated USERPROFILE onto venv_python()'s
+        # hardcoded forward-slash literal, so the genuine return value is a
+        # mixed-separator string that still names this exact file but never
+        # string-matches `planted` (built purely through os.path.join).
+        self.assertEqual(os.path.normpath(cswap.venv_python()),
+                         os.path.normpath(planted))
 
     def test_finds_a_planted_uv_venv_python_when_pipx_is_absent(self):
         planted = self.plant(".local", "share", "uv", "tools", "claude-swap",
                              "Scripts")
-        self.assertEqual(cswap.venv_python(), planted)
+        self.assertEqual(os.path.normpath(cswap.venv_python()),
+                         os.path.normpath(planted))
 
     def test_none_when_nothing_is_planted(self):
         self.assertIsNone(cswap.venv_python())
@@ -193,13 +226,28 @@ class TestPrimer(Env):
             self.assertTrue(cswap.prime_fresh())
 
     def test_fetch_fresh_survives_missing_primer(self):
-        with open(FIXTURE) as handle:
-            payload = handle.read().replace("'", "'\\''")
-        mock_cswap = write_script(self.tmp.name, "cswap",
-                                  "#!/bin/sh\n"
-                                  f"echo '{payload}'\n")
-        os.environ["SMARTBAR_CSWAP"] = mock_cswap
-        snap = cswap.fetch(fresh=True)   # combined+primer skipped: no venv python
+        with open(FIXTURE, encoding="utf-8") as handle:
+            payload = handle.read()
+        # No SMARTBAR_CSWAP/SMARTBAR_CSWAP_PYTHON planted, so combined and
+        # the primer are both skipped for lack of a venv python and fetch()
+        # falls through to the binary list path. _run() is mocked directly
+        # rather than exec'ing a planted shell-script stand-in for cswap:
+        # a bare text file with a "#!/bin/sh" shebang has no meaning to
+        # Windows' CreateProcess (no .exe, no PATHEXT match), so a real
+        # subprocess call would fail there with "not a valid Win32
+        # application" even though the point of this test is fetch()'s
+        # fallback branching, not _run()'s OS-level exec mechanics -- that
+        # part is covered on its own by TestSubprocessDecoding.
+        # venv_python is pinned rather than left to the ambient machine.
+        # The comment above promises "no venv python", but nothing enforced
+        # it: on a box with claude-swap pipx-installed, venv_python() finds a
+        # real interpreter, fetch() takes the primer path, and this fails for
+        # a reason unrelated to what it tests. CI only passed because a fresh
+        # runner has no cswap on it.
+        with mock.patch.object(cswap, "venv_python", return_value=None), \
+                mock.patch.object(cswap, "_run", return_value=payload) as run:
+            snap = cswap.fetch(fresh=True)
+        run.assert_called_once_with(["list", "--json"])
         self.assertTrue(snap.accounts)
 
 
@@ -237,15 +285,18 @@ class TestCombined(Env):
 
     def test_fetch_fresh_falls_back_to_binary_on_combined_failure(self):
         with open(FIXTURE) as handle:
-            payload = handle.read().replace("'", "'\\''")
-        mock_cswap = write_script(self.tmp.name, "cswap",
-                                  "#!/bin/sh\n"
-                                  f"echo '{payload}'\n")
-        os.environ["SMARTBAR_CSWAP"] = mock_cswap
+            payload = handle.read()
         os.environ["SMARTBAR_CSWAP_PYTHON"] = sys.executable
+        # Same reasoning as test_fetch_fresh_survives_missing_primer above:
+        # only the fallback _run() call is mocked. fetch_combined() still
+        # really execs `sys.executable -c COMBINED_CODE` -- a genuine,
+        # cross-platform-launchable interpreter, unlike a planted shebang
+        # script standing in for the cswap binary.
         with mock.patch.object(cswap, "COMBINED_CODE", "import sys; sys.exit(97)"), \
-                mock.patch.object(cswap, "PRIMER_CODE", "import sys; sys.exit(0)"):
+                mock.patch.object(cswap, "PRIMER_CODE", "import sys; sys.exit(0)"), \
+                mock.patch.object(cswap, "_run", return_value=payload) as run:
             snap = cswap.fetch(fresh=True)
+        run.assert_called_once_with(["list", "--json"])
         self.assertTrue(snap.accounts)
 
 

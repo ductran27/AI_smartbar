@@ -56,7 +56,7 @@ log = logging.getLogger("ai-smartbar-update")
 
 def load_state() -> dict:
     try:
-        with open(STATE_FILE) as handle:
+        with open(STATE_FILE, encoding="utf-8") as handle:
             state = json.load(handle)
         if isinstance(state, dict):
             state.setdefault("failures", {})
@@ -69,7 +69,7 @@ def load_state() -> dict:
 def save_state(state: dict) -> None:
     fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, prefix=".update-state-")
     try:
-        with os.fdopen(fd, "w") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=1)
         os.replace(tmp, STATE_FILE)
     except OSError:
@@ -78,6 +78,79 @@ def save_state(state: dict) -> None:
             os.unlink(tmp)
         except OSError:
             pass
+
+
+def _win32_notify(title: str, body: str) -> None:
+    """Best-effort Windows balloon notification for the headless update pass.
+
+    UNVERIFIED on real Windows: nothing in this checkout can spawn or
+    inspect an actual win32 process, so this has only been exercised by
+    mocking subprocess.run (see tests/test_notify_windows.py). Treat it as
+    a first pass that still needs a real Windows run to confirm the balloon
+    actually renders.
+
+    Design constraints:
+
+    * No new dependency. `windows-toasts` (or any other WinRT wrapper) is
+      not installable in this repo's update model -- a self-update that
+      first needs `pip install` to tell the user it ran is backwards -- so
+      this shells out to PowerShell, which every Windows box already ships,
+      the same zero-dependency move macOS's osascript and Linux's
+      notify-send make a few lines away. System.Windows.Forms.NotifyIcon
+      needs no AppUserModelID/Start-Menu-shortcut registration, unlike
+      Windows.UI.Notifications.ToastNotificationManager, which routinely
+      refuses to fire from a bare unregistered host process.
+    * `title`/`body` are UNTRUSTED -- `body` in particular can carry an
+      account label pulled from cswap's config, i.e. attacker-influenced
+      data if that config is ever compromised. Neither is ever spliced into
+      the PowerShell command *text*. They are appended as their own argv
+      elements after `-Command`, which PowerShell binds positionally to
+      `$args[0]`/`$args[1]` inside the script -- the same "argument, not
+      characters-in-a-string" contract every other subprocess.run() argv
+      slot already gets. There is no quoting/escaping step for a crafted
+      title or body to break out of, because the two are never joined into
+      one string PowerShell has to parse as code.
+    * portable.no_window() suppresses the console flash a GUI-less update
+      pass should never produce.
+    * pwsh (7+) is preferred, falling back to the always-present
+      powershell.exe (5.1); if neither is on PATH this logs and returns --
+      same as a missing notify-send today -- rather than raising.
+    * The whole body (including the shutil.which probe, not just the
+      subprocess call) is one broad try/except. shutil.which() itself can
+      raise on this codebase's own test harness -- tests fake win32 by
+      setting `update_runner.sys.platform = "win32"`, but `sys` is a single
+      process-wide module object, so that assignment is visible to every
+      other importer of `sys` too, including the stdlib's own shutil,
+      which then takes its win32 branch on a real macOS/Linux interpreter
+      that has no `_winapi` module and throws AttributeError. That is a
+      test-harness artifact, not something real Windows would ever do (its
+      _winapi always exists there) -- but "notification failure must never
+      break an update pass" has to hold under that artifact too, not just
+      under the failures anticipated when this was written, so the catch
+      here is intentionally Exception rather than a narrower tuple.
+    """
+    try:
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            log.info("no PowerShell found; skipping Windows notification")
+            return
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "Add-Type -AssemblyName System.Drawing; "
+            "$n = New-Object System.Windows.Forms.NotifyIcon; "
+            "$n.Icon = [System.Drawing.SystemIcons]::Information; "
+            "$n.Visible = $true; "
+            "$n.ShowBalloonTip(10000, $args[0], $args[1], "
+            "[System.Windows.Forms.ToolTipIcon]::Info); "
+            "Start-Sleep -Milliseconds 5500; "
+            "$n.Dispose()"
+        )
+        subprocess.run([shell, "-NoProfile", "-NonInteractive",
+                        "-ExecutionPolicy", "Bypass", "-Command", script,
+                        title, body],
+                       timeout=15, check=False, **portable.no_window())
+    except Exception:
+        log.exception("Windows notification failed")
 
 
 def notify(title: str, body: str) -> None:
@@ -90,17 +163,7 @@ def notify(title: str, body: str) -> None:
             subprocess.run(["/usr/bin/osascript", "-e", script],
                            timeout=10, check=False)
         elif sys.platform == "win32":
-            # No dependency-free CLI equivalent of osascript/notify-send
-            # exists on Windows: a real toast needs a COM/WinRT call or a
-            # bundled GUI helper, both out of scope for the headless half of
-            # the port. Falling through to notify-send would exec a binary
-            # that is not there, and the FileNotFoundError that raises is an
-            # OSError the handler below logs as "notification failed" —
-            # indistinguishable from a notifier that genuinely broke. Saying
-            # it plainly keeps update.log honest until Windows gets a real
-            # notifier.
-            log.info("update notification (no Windows notifier yet): %s: %s",
-                     title, body)
+            _win32_notify(title, body)
         else:
             subprocess.run(["notify-send", "-u", "normal", title, body],
                            timeout=10, check=False)
@@ -110,9 +173,9 @@ def notify(title: str, body: str) -> None:
 
 def _read_text(path: str) -> str:
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ""
 
 

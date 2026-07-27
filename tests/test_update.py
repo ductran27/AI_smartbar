@@ -379,7 +379,7 @@ class TestBothUIsShareOneAnswer(unittest.TestCase):
     def source(self, path):
         if not os.path.exists(path):
             self.skipTest(f"{path} not in this checkout")
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.read()
 
     def test_both_call_the_shared_entry_point(self):
@@ -414,7 +414,7 @@ class TestMacOptionsMenu(unittest.TestCase):
     def source(self, path):
         if not os.path.exists(path):
             self.skipTest(f"{path} not in this checkout")
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             return handle.read()
 
     def test_header_replaces_the_power_button_with_the_more_menu(self):
