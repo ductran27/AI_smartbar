@@ -323,5 +323,26 @@ class TestPaletteParity(unittest.TestCase):
             self.assertNotEqual(model.DOT["full"], model.DOT[other], other)
 
 
+class TestProviderModel(unittest.TestCase):
+    def test_provider_defaults_keep_every_existing_constructor_working(self):
+        self.assertEqual(account().provider, "claude")
+        self.assertEqual(model.Snapshot().openai, [])
+
+    def test_signed_out_accounts_explain_themselves(self):
+        acct = account(ok=False, status="signed_out", metrics=[])
+        self.assertEqual(model.state_text(acct),
+                         "Signed out — usage from its last session")
+
+    def test_openai_list_never_leaks_into_claude_semantics(self):
+        snap = model.Snapshot()
+        chatgpt = account(active=True)
+        chatgpt.provider = "openai"
+        snap.openai.append(chatgpt)
+        # An active ChatGPT login must not satisfy Claude's active-account
+        # logic (registration, recapture, alerts all key off it).
+        self.assertIsNone(snap.active_account)
+        self.assertTrue(model.needs_registration(snap))
+
+
 if __name__ == "__main__":
     unittest.main()

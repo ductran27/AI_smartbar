@@ -12,7 +12,7 @@ from smartbar import __version__  # noqa: E402
 
 def once() -> int:
     from smartbar import presence_client
-    from smartbar.core import cswap, model, presence
+    from smartbar.core import codex, cswap, model, presence
     try:
         snap = cswap.fetch()
     except cswap.CswapError as exc:
@@ -25,6 +25,7 @@ def once() -> int:
     # the same data — which is exactly the thing people run --once to check.
     # Read-only: no beat, so a diagnostic never announces this device.
     presence.apply_counts(snap, presence_client.counts())
+    snap.openai = codex.accounts()
     account = snap.active_account
     m = model.worst(account)
     icon = "?" if m is None else f"{model.icon_text(account)} ({model.color(m.pct)})"
@@ -32,6 +33,10 @@ def once() -> int:
     print(f"title: {model.title_line(account)}")
     for acct in snap.accounts:
         print(model.menu_row(acct))
+    if snap.openai:
+        print("openai:")
+        for acct in snap.openai:
+            print(model.menu_row(acct))
     return 0
 
 
@@ -168,6 +173,14 @@ def main() -> int:
     parser.add_argument("--presence-leave", action="store_true",
                         help="withdraw this device so the others stop "
                              "counting it right away")
+    parser.add_argument("--plans", action="store_true",
+                        help="print each account's plan badge as JSON "
+                             "(the macOS app's data source; output is "
+                             "always JSON, --json is accepted for symmetry)")
+    parser.add_argument("--openai", action="store_true",
+                        help="print the OpenAI/ChatGPT accounts as JSON "
+                             "(the macOS app's data source; output is "
+                             "always JSON, --json is accepted for symmetry)")
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
@@ -231,6 +244,16 @@ def main() -> int:
         from smartbar.presence_runner import run_once as presence_once
         return presence_once(leave=args.presence_leave,
                              report=args.presence_status)
+    if args.plans:
+        import json as _json
+        from smartbar.core import plan
+        print(_json.dumps({"plans": plan.plans_by_email()}))
+        return 0
+    if args.openai:
+        import json as _json
+        from smartbar.core import codex
+        print(_json.dumps(codex.payload()))
+        return 0
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     elif sys.platform == "win32":

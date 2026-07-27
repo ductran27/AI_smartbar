@@ -40,7 +40,18 @@ VALUE_W = 104.0            # MetricBarRow value column
 BAR_H = 6.0
 BAR_GAP = 9.0              # HStack(spacing: 9)
 BUTTON_H = 18.0
+TAB_H = 20.0               # provider tab row (Claude | OpenAI), when shown
+TAB_GAP = 6.0              # gap between the two tab pills
+TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
+                           # under it than the SECTION_GAP between sections
 CHIP_H = 15.0
+
+# Tab pills read as faded / not-faded rather than colored: the selected
+# provider is full strength, the other recedes (user-picked over an accent
+# fill). Mirrored by PopoverView.tabButton.
+TAB_BG_SELECTED = (1.0, 1.0, 1.0, 0.16)
+TAB_BG_HOVER = (1.0, 1.0, 1.0, 0.12)
+TAB_BG = (1.0, 1.0, 1.0, 0.06)
 BUTTON_PAD_H = 8.0
 FOOTER_H = 20.0
 ICON_BUTTON_W = 22.0

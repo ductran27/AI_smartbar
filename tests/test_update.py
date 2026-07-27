@@ -447,7 +447,10 @@ class TestMacOptionsMenu(unittest.TestCase):
         options = self.source(SWIFT_OPTIONS)
         self.assertIn('Label("More options", systemImage: "ellipsis.circle")',
                       options)
-        self.assertIn(".frame(width: 44, height: 44)", options)
+        # 28pt (was 44): user-requested — the 44pt frames padded the whole
+        # header row out, leaving dead space between the title and the
+        # provider tabs. Still a comfortable macOS pointer target.
+        self.assertIn(".frame(width: 28, height: 28)", options)
         self.assertIn(".menuIndicator(.hidden)", options)
         self.assertIn('.accessibilityLabel("More options")', options)
 

@@ -182,7 +182,8 @@ final class PresenceStatus: ObservableObject {
     /// ~/Applications and has no idea where the repo is, so: what the
     /// installer baked into the LaunchAgent, else what the updater
     /// recorded, else the conventional location.
-    nonisolated private static func repoRoot() -> String? {
+    // Shared with PlanStatus, which spawns the same launcher.
+    nonisolated static func repoRoot() -> String? {
         let env = ProcessInfo.processInfo.environment
         if let baked = env["SMARTBAR_REPO_ROOT"], !baked.isEmpty { return baked }
         let cache = env["SMARTBAR_CACHE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
