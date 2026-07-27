@@ -16,6 +16,7 @@ warmup failure notification on Windows vanished without a trace.
 """
 import ntpath
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -53,6 +54,8 @@ class TestPingArgv(Env):
         self.assertNotIn("--model", argv)
 
 
+@unittest.skipIf(sys.platform == "win32",
+                 "exercises the POSIX branch, which needs POSIX os.path")
 class TestEnvWithClaudeOnPath(Env):
     """Pinned to a POSIX platform so these tests exercise
     env_with_claude_on_path's POSIX branch specifically.
@@ -62,6 +65,16 @@ class TestEnvWithClaudeOnPath(Env):
     instead -- the POSIX fixtures below ("/some/where", "/opt/homebrew/bin",
     ...) would then be fed through the wrong half of the function entirely,
     not just normalised oddly.
+
+    Pinning sys.platform is necessary but NOT sufficient on a genuinely
+    Windows host, hence the skip. os.path is bound to ntpath at import time
+    and no monkeypatch of sys.platform rebinds it, so
+    os.path.abspath("/some/where/claude") yields "D:\\some\\where\\claude"
+    and os.pathsep is ";", meaning a ":"-joined PATH fixture never splits.
+    The branch under test is dead code on Windows -- sys.platform is really
+    "win32" there, so the win32 arm always wins -- and it stays fully
+    covered by the ubuntu and macOS legs of the matrix. Its Windows
+    counterpart has its own class below.
     """
     def setUp(self):
         super().setUp()

@@ -242,7 +242,7 @@ class TestAccounts(_CodexHome):
         _write_rollout(self.home, "rollout-a.jsonl", [
             ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
         codex.accounts()
-        raw = (self.cache / "openai-accounts.json").read_text().lower()
+        raw = (self.cache / "openai-accounts.json").read_text(encoding="utf-8").lower()
         for needle in ("token", "refresh_", "access_", "sk-", "key"):
             self.assertNotIn(needle, raw, needle)
 
@@ -250,9 +250,9 @@ class TestAccounts(_CodexHome):
         _write_auth(self.home, "a@x.com", "pro")
         codex.accounts()
         path = self.cache / "openai-accounts.json"
-        stamp = (path.stat().st_mtime_ns, path.read_text())
+        stamp = (path.stat().st_mtime_ns, path.read_text(encoding="utf-8"))
         codex.accounts()
-        self.assertEqual((path.stat().st_mtime_ns, path.read_text()), stamp)
+        self.assertEqual((path.stat().st_mtime_ns, path.read_text(encoding="utf-8")), stamp)
 
     def test_payload_is_display_ready(self):
         _write_auth(self.home, "a@x.com", "prolite")
@@ -303,10 +303,10 @@ class TestOpenAIParity(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.status = (SWIFT_DIR / "OpenAIStatus.swift").read_text()
-        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text()
+        cls.status = (SWIFT_DIR / "OpenAIStatus.swift").read_text(encoding="utf-8")
+        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text(encoding="utf-8")
         cls.all_swift = "".join(
-            p.read_text() for p in sorted(SWIFT_DIR.glob("*.swift")))
+            p.read_text(encoding="utf-8") for p in sorted(SWIFT_DIR.glob("*.swift")))
 
     def test_swift_maps_nothing(self):
         # Plan strings, claim names, window arithmetic and the data sources
@@ -326,7 +326,7 @@ class TestOpenAIParity(unittest.TestCase):
 
     def test_both_python_uis_stamp_openai_accounts(self):
         for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
-            self.assertIn("codex.accounts", (REPO / path).read_text(), path)
+            self.assertIn("codex.accounts", (REPO / path).read_text(encoding="utf-8"), path)
 
 
 if __name__ == "__main__":  # pragma: no cover

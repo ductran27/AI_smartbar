@@ -69,8 +69,14 @@ class TestLockIsExclusive(unittest.TestCase):
         handle = portable.lock(self.path)
         self.addCleanup(lambda: handle and handle.close())
         self.assertIsNotNone(handle)
-        with open(self.path) as f:
-            self.assertEqual(f.read(), "state-from-a-previous-run")
+        # Read back through the lock handle, not a second open(). msvcrt
+        # takes a genuine byte-range lock, so on Windows an independent
+        # reader gets PermissionError while the lock is held; POSIX flock is
+        # advisory and allows it, which is the only reason a second open()
+        # ever looked correct here. lock() opens "a+" and its docstring
+        # already tells callers to seek(0) for a fresh view.
+        handle.seek(0)
+        self.assertEqual(handle.read(), "state-from-a-previous-run")
 
 
 class TestNoWindow(unittest.TestCase):
