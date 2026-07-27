@@ -28,6 +28,16 @@ command -v cswap >/dev/null || { echo "Install claude-swap first (pipx install c
 mkdir -p "$SUPPORT"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip rumps
+
+# A LaunchAgent gets no login shell and inherits nothing, and the plist below
+# is rewritten from scratch on every update, so ~/.config/ai-smartbar/config.env
+# is the only durable home for a device's SMARTBAR_* settings — folded in here,
+# and therefore re-applied by every update, since applying an update IS
+# re-running this script. This installer was the one shape that never did it:
+# a user could edit config.env, re-run it, and get a silent no-op. Never fatal:
+# a device with an unreadable config still gets a working agent.
+CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,6 +49,10 @@ cat > "$PLIST" <<EOF
     <string>$VENV/bin/python3</string>
     <string>$REPO/bin/ai-smartbar</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>${CONFIG_PLIST}
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/ai-smartbar.log</string>
 </dict>

@@ -684,8 +684,8 @@ tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 386 tests, no external deps
-                                           # (8 painter tests need pycairo)
+python3 -m unittest discover -s tests -v   # whole suite, no external deps
+                                           # (the painter tests skip without pycairo)
 ./tests/e2e-warmup.sh                      # warmup loop against stateful mocks
 ./tests/e2e-autoadd.sh                     # auto-registration against the built app
 ./tests/e2e-update.sh                      # self-update against a throwaway origin

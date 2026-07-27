@@ -97,6 +97,13 @@ X-GNOME-Autostart-enabled=true
 EOF
 
 install_updater() {
+  # Every failure below MUST be an explicit `return 1`. `set -e` is suspended
+  # for this whole function body, because the caller invokes it as the left
+  # operand of `||` and bash disables errexit inside any command used as a
+  # condition — recursively. So a bare `systemctl enable` that fails would not
+  # abort the function; it would carry on to the success echo, and the outer
+  # WARNING would never fire because the function still returned 0. That is
+  # the exact inverse of what the wrapper is for.
   # Prove a non-interactive fetch works before promising updates; skipped when
   # the updater is re-running this script (it just fetched, and a network blip
   # must not turn a good update into a rollback).
@@ -134,13 +141,15 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
-    systemctl --user daemon-reload
-    systemctl --user enable --now ai-smartbar-update.timer
+    systemctl --user daemon-reload || return 1
+    systemctl --user enable --now ai-smartbar-update.timer || return 1
     echo "Update timer enabled (channel=$CHANNEL, every ${INTERVAL_SEC}s)."
   elif command -v crontab >/dev/null; then
+    # `crontab -l` legitimately fails when there is no crontab yet, so its
+    # own failure stays tolerated — but the write must not.
     { crontab -l 2>/dev/null | grep -v "ai-smartbar --update"
       echo "$INTERVAL_CRON SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
-    } | crontab -
+    } | crontab - || return 1
     echo "Update cron entry installed (channel=$CHANNEL, '$INTERVAL_CRON')."
   else
     echo "WARNING: neither systemd --user nor crontab available — no auto-update." >&2
