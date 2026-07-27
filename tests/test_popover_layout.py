@@ -77,6 +77,57 @@ class TestPinOrigin(unittest.TestCase):
         self.assertIsNone(layout.pin_origin([(0, 0, 0, 0)], (330, 181), 12))
 
 
+class TestRestoreOrigin(unittest.TestCase):
+    """Whether a user-dragged spot is still honoured. Geometry only.
+
+    The contract: a remembered origin survives exactly while enough of the
+    panel's top edge — the grab area — lands inside some current work area;
+    everything else falls back to the default corner (pin_origin).
+    """
+    AREA = (0, 27, 1920, 1053)
+    SIZE = (330, 181)
+
+    def test_a_spot_inside_the_workarea_is_kept(self):
+        self.assertEqual(layout.restore_origin((600, 400), [self.AREA],
+                                               self.SIZE), (600, 400))
+
+    def test_nothing_saved_returns_none(self):
+        self.assertIsNone(layout.restore_origin(None, [self.AREA], self.SIZE))
+
+    def test_a_spot_on_a_monitor_that_is_gone_returns_none(self):
+        # Saved on a second monitor at x=1920.. that is no longer plugged in.
+        self.assertIsNone(layout.restore_origin((2200, 400), [self.AREA],
+                                                self.SIZE))
+
+    def test_a_spot_with_its_grab_edge_below_the_screen_returns_none(self):
+        # Top edge 10px above the bottom: technically on-screen, unusable.
+        y = 27 + 1053 - 10
+        self.assertIsNone(layout.restore_origin((600, y), [self.AREA],
+                                                self.SIZE))
+
+    def test_a_spot_mostly_off_the_right_edge_returns_none(self):
+        # Only 40px of the panel's 330 remain on-screen: not enough to grab.
+        self.assertIsNone(layout.restore_origin((1920 - 40, 400), [self.AREA],
+                                                self.SIZE))
+
+    def test_a_spot_on_a_second_monitor_is_kept(self):
+        second = (1920, 0, 2560, 1440)
+        self.assertEqual(layout.restore_origin((3000, 700),
+                                               [self.AREA, second],
+                                               self.SIZE), (3000, 700))
+
+    def test_floats_are_returned_as_ints(self):
+        self.assertEqual(layout.restore_origin((600.7, 400.2), [self.AREA],
+                                               self.SIZE), (600, 400))
+
+    def test_garbage_returns_none_rather_than_raising(self):
+        self.assertIsNone(layout.restore_origin(("x", "y"), [self.AREA],
+                                                self.SIZE))
+        self.assertIsNone(layout.restore_origin((600,), [self.AREA],
+                                                self.SIZE))
+        self.assertIsNone(layout.restore_origin((600, 400), [], self.SIZE))
+
+
 class TestStructure(unittest.TestCase):
     def test_width_is_the_shared_design_width(self):
         built = layout.build(snap(account()), now=NOW)

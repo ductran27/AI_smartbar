@@ -7,6 +7,21 @@ dbusmenu and can carry nothing but labels, icons and checkmarks — never the
 cards and filled bars. If the window cannot be created the menu falls back to
 the old text rows so the tray still works.
 """
+import os
+
+# Prefer X11 (XWayland, on a Wayland desktop) over the native Wayland
+# backend. Wayland gives a client no say in where its window opens — GNOME
+# just centers the panel — no way to move an undecorated window, and no way
+# to read where a drag ended, so neither the default corner nor the
+# remembered position (see popover_window) can exist there. Under XWayland
+# all three work. The environment variable, not gdk_set_allowed_backends:
+# from Python that call comes too late (the display manager is already up
+# once gi.repository.Gdk is importable — verified: it is silently ignored),
+# while GDK reads GDK_BACKEND with the same ordered-fallback semantics, so
+# a session with no X server still falls through to Wayland and keeps
+# compositor placement. setdefault: an explicit GDK_BACKEND always wins.
+os.environ.setdefault("GDK_BACKEND", "x11,wayland")
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -14,7 +29,6 @@ gi.require_version("AyatanaAppIndicator3", "0.1")
 
 import json
 import logging
-import os
 import subprocess
 import threading
 import time
