@@ -55,7 +55,33 @@ def counts() -> dict:
         return {}
 
 
+#: Beats already launched, kept only so they can be reaped. See _reap.
+_outstanding = []
+
+
+def _reap() -> None:
+    """Clear finished beats out of the process table.
+
+    portable.spawn_detached's POSIX arm passes start_new_session=True, which
+    gives the child its own session but does NOT reparent it: while this UI
+    is alive the beat is still its child, and nothing here ever waited on
+    one. Beats fire on a timer for the entire life of the tray, so a
+    multi-day session accumulated one zombie per beat.
+
+    Polling the previous beats on the way into a new one is enough — it
+    bounds the list at roughly one live entry, needs no thread, and needs no
+    SIGCHLD handler. signal.SIGCHLD set to SIG_IGN would reap automatically
+    but it is process-wide: waitpid would then fail with ECHILD and every
+    subprocess.run() in the tray (cswap on every poll) would lose its return
+    code. Not worth it to tidy up one child per interval.
+    """
+    for proc in list(_outstanding):
+        if proc.poll() is not None:
+            _outstanding.remove(proc)
+
+
 def _spawn(args, payload: str) -> None:
+    _reap()
     try:
         # portable.spawn_detached picks start_new_session=True on POSIX (the
         # byte-identical behaviour this had before) or the DETACHED_PROCESS /
@@ -68,6 +94,7 @@ def _spawn(args, payload: str) -> None:
     except OSError:
         log.exception("could not start %s", " ".join(args))
         return
+    _outstanding.append(proc)
     try:
         proc.stdin.write(payload.encode("utf-8"))
         proc.stdin.close()

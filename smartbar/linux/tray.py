@@ -282,21 +282,14 @@ class Tray:
         """The release the updater found waiting, or "" — never raises.
 
         Also records why an update is being held back (dirty checkout,
-        unpushed commits) so the panel footer can say so. A broken or absent
-        state file must not be able to take the tray down.
+        unpushed commits) so the panel footer can say so.
         """
-        try:
-            # update_runner stays a lazy import (fcntl and friends); core.update
-            # is stdlib-only and comes in at module scope.
-            from smartbar import update_runner
-            state = update_runner.load_state()
-            self.update_blocked = (state.get("reason", "")
-                                   if state.get("action") == "blocked" else "")
-            return update_core.pending_version(state)
-        except Exception:
-            log.exception("could not read the update state")
-            self.update_blocked = ""
-            return ""
+        # update_runner stays a LAZY import: it pulls in the lock shims and
+        # the git layer, and a tray must not pay for those at import time.
+        # The reading itself is shared — see update_runner.pending_for_ui.
+        from smartbar import update_runner
+        pending, self.update_blocked = update_runner.pending_for_ui()
+        return pending
 
     def _on_update(self, _item):
         """Apply the waiting release. Detached on purpose: the updater
