@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unittest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Repo floor is 3.9 (see README.md "Layout" section and
+      # smartbar/core/popover_layout.py). We pin one version above that
+      # floor rather than a floor-to-ceiling matrix: the suite is plain
+      # stdlib unittest with no version-conditional code paths, so testing
+      # N Pythons buys nothing but CI minutes. 3.12 was checked by hand
+      # against PyPI's pycairo wheel list (cp39-cp313 all present for
+      # win_amd64) so it is not the constraint -- see the note below on
+      # why pycairo isn't installed here at all.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Deliberately NOT installing pycairo or gi/GTK here.
+      #
+      # gi (PyGObject/GTK) is a Linux-only toolkit; smartbar/paint/ exists
+      # specifically so the render logic never imports it, and the tests
+      # skip when it's absent -- installing it on any runner, let alone
+      # windows-latest/macos-latest, would defeat that seam.
+      #
+      # pycairo was measured, not assumed. Run locally on 2026-07-26:
+      #   python -m unittest discover -s tests   -> Ran 396 tests, OK (skipped=13)
+      #   pip install pycairo; same command      -> Ran 396 tests, OK (skipped=0)
+      # So pycairo is worth 13 extra real assertions instead of skips --
+      # but only on this dev Mac, which already had Homebrew's cairo
+      # (headers + pkg-config) installed. Checked against PyPI directly:
+      # pycairo ships prebuilt wheels ONLY for win_amd64 (cp39 through
+      # cp313, i.e. no cp312 ceiling in practice today, though that could
+      # change release to release -- worth rechecking before ever adding a
+      # Windows-only install here). For Linux and macOS there are no
+      # wheels at all, only an sdist, so `pip install pycairo` on a bare
+      # ubuntu-latest/macos-latest runner would try to compile against a
+      # system cairo it does not ship with and fail the job for a reason
+      # that has nothing to do with this repo's code. Accepting the 13
+      # skips keeps the job identical and green on all three OSes without
+      # a per-OS system-package install step.
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v

@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 
 from smartbar.core import update
@@ -38,8 +39,18 @@ class GitError(RuntimeError):
 def env() -> dict:
     """Subprocess env with a usable PATH and no interactive git prompts."""
     result = dict(os.environ)
-    prepend = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin",
-               "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    # The bare-PATH trap this list works around is a launchd/cron thing: both
+    # hand a POSIX agent a minimal PATH that skips wherever the user's shell
+    # would have found git. Scheduled Tasks and Windows services inherit the
+    # full user/system PATH instead, and Git for Windows' installer already
+    # appends itself to it — so these entries would be inert at best there,
+    # and at worst shadow a real (if oddly named) directory on whatever drive
+    # the process happens to be running from.
+    if sys.platform == "win32":
+        prepend = []
+    else:
+        prepend = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin",
+                   "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
     parts = []
     for part in prepend + result.get("PATH", "").split(os.pathsep):
         if part and part not in parts:
@@ -51,7 +62,22 @@ def env() -> dict:
 
 
 def git_binary() -> str:
-    return shutil.which("git", path=env()["PATH"]) or "/usr/bin/git"
+    """The git executable to run, resolved fresh on every call.
+
+    "/usr/bin/git" is a sound last-resort default on POSIX: it is where the
+    system git actually lives on every mac and most Linux distros even when
+    PATH is broken. Windows has no equivalent fixed path — git.exe moves with
+    the installer (per-user vs per-machine, Program Files vs Program Files
+    (x86), scoop, winget) — so a literal fallback there would almost always
+    be wrong. Raising hands callers one clear GitError to catch instead of a
+    FileNotFoundError from deep inside subprocess.
+    """
+    found = shutil.which("git", path=env()["PATH"])
+    if found:
+        return found
+    if sys.platform == "win32":
+        raise GitError("git executable not found on PATH")
+    return "/usr/bin/git"
 
 
 def git(*args, check: bool = True, timeout: int = GIT_TIMEOUT) -> str:
@@ -60,7 +86,9 @@ def git(*args, check: bool = True, timeout: int = GIT_TIMEOUT) -> str:
         proc = subprocess.run([git_binary(), "-C", REPO_ROOT, *args],
                               capture_output=True, text=True,
                               timeout=timeout, env=env())
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    # git_binary() is called inside the try above and now raises GitError on
+    # win32, so it joins the pair that `check=False` is meant to swallow.
+    except (OSError, subprocess.TimeoutExpired, GitError) as exc:
         if check:
             raise GitError(f"git {' '.join(args)}: {exc}") from exc
         return ""

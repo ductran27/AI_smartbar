@@ -15,7 +15,7 @@ import logging
 import subprocess
 
 from smartbar import update_git
-from smartbar.core import presence
+from smartbar.core import portable, presence
 
 # Deliberately far below update_git's 180s: a beat is spawned by the UI on
 # a timer, and one wedged on a dead network must not still be running when
@@ -32,8 +32,12 @@ def _run(args, timeout=TIMEOUT):
         return subprocess.run(
             [update_git.git_binary(), "-C", update_git.REPO_ROOT, *args],
             capture_output=True, text=True, timeout=timeout,
-            env=update_git.env())
-    except (OSError, subprocess.TimeoutExpired) as exc:
+            env=update_git.env(), **portable.no_window())
+    # update_git.GitError joins these on win32: git_binary() raises it there
+    # instead of returning a bogus /usr/bin/git when git is nowhere on PATH,
+    # and this module's contract ("nothing here raises") covers that exactly
+    # like any other reason a beat could not run.
+    except (OSError, subprocess.TimeoutExpired, update_git.GitError) as exc:
         log.info("git %s: %s", " ".join(args[:2]), exc)
         return None
 

@@ -190,6 +190,11 @@ class TestPillStates(Env):
         a = account(metrics=[metric("5h", 72.0), metric("7d", 21.0)])
         self.assertEqual(model.pill_states(a), [(0.72, "yellow")])
 
+    def test_enterprise_spend_is_an_account_wide_pill(self):
+        a = account(metrics=[metric("spend", 14.0, label="Spend", short="$")])
+        self.assertEqual(model.pill_states(a), [(0.14, "green")])
+        self.assertEqual(model.icon_text(a), "$14")
+
     def test_two_scoped_models_three_pills(self):
         a = account(metrics=[metric("5h", 10.0),
                              metric("scoped:Fable", 40.0, short="F", label="Fable"),

@@ -89,11 +89,19 @@ class TestPlatformInTheLabel(unittest.TestCase):
             self.assertEqual(presence.platform_tag(), want)
 
     def test_an_unknown_platform_still_yields_a_usable_label(self):
-        for raw in ("freebsd14", "win32"):
+        for raw in ("freebsd14",):
             presence.sys.platform = raw
             tag = presence.platform_tag()
             self.assertTrue(tag)
             self.assertEqual(presence.sanitize_label(tag), tag)
+
+    def test_win32_gets_its_own_short_tag_like_mac_and_linux(self):
+        # win32 used to fall through to sanitize_label(raw) above, which
+        # produced "win32" — functional, but the odd one out next to
+        # "mac"/"linux". This is that fallthrough assertion, moved out and
+        # updated now that platform_tag() has a dedicated win32 arm.
+        presence.sys.platform = "win32"
+        self.assertEqual(presence.platform_tag(), "win")
 
     def test_the_runner_puts_the_platform_in_front_of_the_hostname(self):
         from smartbar import presence_runner
@@ -615,6 +623,63 @@ class TestMacAndLinuxAgree(unittest.TestCase):
         # Self.ttl, or the helper above would be correct and unused.
         self.assertIn("let window = Self.ttl", self.swift)
         self.assertNotIn("Self.interval * 3", self.swift)
+
+
+class TestWindowsDeviceRef(unittest.TestCase):
+    """The win32 device ref, proven against git itself.
+
+    platform_tag()'s docstring warns that the one mistake that would matter
+    is letting the platform become a new REF COMPONENT instead of staying
+    inside the cosmetic label: an older mac/linux device's decoder rejects a
+    shape it does not recognise, and would quietly stop counting every
+    Windows device that beats. TestPlatformInTheLabel proves the "win" tag
+    and the prefix in isolation; this proves the part that actually matters
+    end to end, the way test_a_prefixed_label_is_still_a_ref_git_accepts
+    does for mac/linux/freebsd — build a real ref for a win32 device and
+    hand it to `git check-ref-format` and this module's own decoder, rather
+    than to a hand-rolled regex that could be wrong the same way the code is.
+    """
+
+    def setUp(self):
+        self.saved_platform = presence.sys.platform
+        self.saved_label = os.environ.get("SMARTBAR_PRESENCE_LABEL")
+        os.environ.pop("SMARTBAR_PRESENCE_LABEL", None)
+
+    def tearDown(self):
+        presence.sys.platform = self.saved_platform
+        if self.saved_label is None:
+            os.environ.pop("SMARTBAR_PRESENCE_LABEL", None)
+        else:
+            os.environ["SMARTBAR_PRESENCE_LABEL"] = self.saved_label
+
+    def test_the_runner_prefixes_win_the_same_way_as_mac_and_linux(self):
+        from smartbar import presence_runner
+        presence.sys.platform = "win32"
+        with mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="DESKTOP-ABC123.localdomain"):
+            self.assertEqual(presence_runner.device_label(), "win-desktop-abc123")
+
+    @unittest.skipIf(shutil.which("git") is None, "git not installed")
+    def test_a_win_label_produces_a_ref_every_existing_reader_accepts(self):
+        from smartbar import presence_runner
+        presence.sys.platform = "win32"
+        with mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="DESKTOP-ABC123.localdomain"):
+            label = presence_runner.device_label()
+        ref = presence.encode_ref(presence.new_device_id(), label, 1753380000,
+                                  presence.account_key("a@b.com"))
+        self.assertEqual(
+            subprocess.run(["git", "check-ref-format", ref]).returncode, 0,
+            f"git rejected {ref!r} (win32 device label {label!r})")
+        decoded = presence.decode_ref(ref)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded.label, label)
+        # The same ref SHAPE as a mac/linux device: the platform lives in the
+        # label component only, never as a component of its own, so the count
+        # of "/"-separated parts must not move.
+        mac_ref = presence.encode_ref("abc123", "mac-box", 1753380000,
+                                      presence.account_key("a@b.com"))
+        self.assertEqual(ref.count("/"), mac_ref.count("/"))
 
 
 if __name__ == "__main__":

@@ -69,6 +69,11 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+# The Swift linker ad-hoc signs the bare executable. Once it is wrapped in
+# an app bundle with Info.plist, sign the bundle so `codesign --verify` and
+# Finder launches see a consistent local application.
+codesign --force --deep --sign - "$APP_DIR"
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

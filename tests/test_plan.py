@@ -161,10 +161,10 @@ class TestPlanParity(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text()
-        cls.status = (SWIFT_DIR / "PlanStatus.swift").read_text()
+        cls.card = (SWIFT_DIR / "AccountCardView.swift").read_text(encoding="utf-8")
+        cls.status = (SWIFT_DIR / "PlanStatus.swift").read_text(encoding="utf-8")
         cls.all_swift = "".join(
-            p.read_text() for p in sorted(SWIFT_DIR.glob("*.swift")))
+            p.read_text(encoding="utf-8") for p in sorted(SWIFT_DIR.glob("*.swift")))
 
     def test_badge_composition_matches_python(self):
         # Swift renders exactly " · <plan>" between email and device count,
@@ -185,7 +185,7 @@ class TestPlanParity(unittest.TestCase):
 
     def test_both_python_uis_stamp_plans(self):
         for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
-            self.assertIn("apply_plans", (REPO / path).read_text(), path)
+            self.assertIn("apply_plans", (REPO / path).read_text(encoding="utf-8"), path)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -26,6 +26,7 @@ struct CswapAccountRaw: Decodable {
 struct CswapUsageRaw: Decodable {
     var fiveHour: CswapWindowRaw?
     var sevenDay: CswapWindowRaw?
+    var spend: CswapWindowRaw?
     var scoped: [CswapScopedRaw]?
 }
 
@@ -111,9 +112,9 @@ enum AccountState {
 }
 
 struct Metric: Identifiable, Equatable {
-    var key: String        // "5h", "7d", or "scoped:<Name>"
-    var label: String      // "5h", "7d", "Fable"
-    var short: String      // "5h", "7d", "F"
+    var key: String        // "5h", "7d", "spend", or "scoped:<Name>"
+    var label: String      // "5h", "7d", "Spend", "Fable"
+    var short: String      // "5h", "7d", "$", "F"
     var pct: Double        // % used, as reported by cswap (the /usage scale)
     var resetsAt: String
     var countdown: String  // preformatted by cswap, e.g. "4h 3m"
@@ -254,6 +255,12 @@ struct Snapshot: Equatable {
                                           pct: window.pct ?? 0,
                                           resetsAt: window.resetsAt ?? "",
                                           countdown: window.countdown ?? ""))
+                }
+                if let window = usage.spend {
+                    metrics.append(Metric(key: "spend", label: "Spend", short: "$",
+                                          pct: window.pct ?? 0,
+                                          resetsAt: "",
+                                          countdown: ""))
                 }
                 for scoped in usage.scoped ?? [] {
                     let name = (scoped.name?.isEmpty == false) ? scoped.name! : "?"
