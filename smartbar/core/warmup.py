@@ -57,14 +57,23 @@ def window_idle(account, now) -> bool:
 
 
 def in_quiet_hours(spec: str, now) -> bool:
-    """spec "23-05" (wraps midnight) or "13-15"; empty/garbage = never."""
+    """spec "23-05" (wraps midnight) or "13-15"; empty/garbage = never.
+
+    The hour is read off the LOCAL clock, not the UTC one. Callers hand this
+    a UTC-aware `now` (warmup_runner uses datetime.now(timezone.utc)), so
+    reading now.hour directly meant "23-05" silenced 23:00-05:00 UTC -- on a
+    UTC+7 device that is 06:00-12:00 in the morning the user is actually at
+    the keyboard, and warmups fired at 3am instead. _day_key() below already
+    localises for exactly this reason; this is the same rule, applied to the
+    setting a user is far more likely to notice getting wrong.
+    """
     if not spec:
         return False
     try:
         start, end = (int(part) for part in spec.split("-", 1))
     except ValueError:
         return False
-    hour = now.hour
+    hour = now.astimezone().hour
     if start <= end:
         return start <= hour < end
     return hour >= start or hour < end
