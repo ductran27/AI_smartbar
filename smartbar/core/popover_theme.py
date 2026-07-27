@@ -45,6 +45,8 @@ TAB_GAP = 6.0              # gap between the two tab pills
 TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
 CHIP_H = 15.0
+REMOVE_HIT = 18.0          # square hit target for the per-card remove ✕
+REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
 
 # Tab pills read as faded / not-faded rather than colored: the selected
 # provider is full strength, the other recedes (user-picked over an accent
@@ -81,6 +83,10 @@ BUTTON_BORDER = (1.0, 1.0, 1.0, 0.18)
 BUTTON_DISABLED = (1.0, 1.0, 1.0, 0.05)
 ACCENT = (0.0, 0.48, 1.0, 1.0)          # .borderedProminent
 ACCENT_HOVER = (0.15, 0.56, 1.0, 1.0)
+# Destructive confirm ("Remove") — the status ramp's critical red, so both
+# renderers and the Swift tint (Status.critical) agree on one red.
+DANGER = (0.80, 0.184, 0.184, 1.0)
+DANGER_HOVER = (0.88, 0.25, 0.25, 1.0)
 WARNING = (1.0, 0.62, 0.20, 1.0)
 
 
@@ -152,8 +158,8 @@ class Glyph:
     """A symbol the renderer draws from paths.
 
     SF Symbols have no cross-platform equivalent and a font that happens to
-    carry "⟳" cannot be assumed, so the two icon buttons are drawn rather
-    than typeset. `kind` is "refresh" or "power".
+    carry "⟳" cannot be assumed, so the icon buttons are drawn rather
+    than typeset. `kind` is "refresh", "power" or "close".
     """
     kind: str
     cx: float
@@ -164,8 +170,17 @@ class Glyph:
 
 @dataclass
 class Hit:
-    """A clickable region, named for the action it triggers."""
+    """A clickable region, named for the action it triggers.
+
+    "card:<provider>:<id>" is the one non-action name: it covers a whole
+    account card so the painted UIs can track "the pointer is on this
+    card" (what makes the remove ✕ appear). Clicks on it do nothing, and
+    the card's real buttons are appended after it so they win hit-testing.
+    """
     name: str                # "refresh" | "quit" | "update" | "switch:<n>"
+                             # | "tab:<p>" | "card:<p>:<id>"
+                             # | "remove:<p>:<id>" | "confirm-remove:<p>:<id>"
+                             # | "cancel-remove"
     x: float
     y: float
     w: float

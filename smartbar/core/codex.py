@@ -235,6 +235,48 @@ def _load_registry() -> dict:
         return {}
 
 
+def _save_registry(reg: dict) -> None:
+    """Atomic registry write (tmp + os.replace).
+
+    A concurrent reader — every UI polls this file — must never see a
+    half-written registry, and a crash mid-write must never shred the list
+    of remembered accounts. Raises OSError; callers decide whether that is
+    fatal (a removal) or ignorable (a routine sync on a read-only cache).
+    """
+    path = _registry_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(reg, sort_keys=True))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def remove_account(email: str) -> None:
+    """Forget a remembered ChatGPT account — registry entry only.
+
+    Nothing under the codex home is ever touched, so the address reappears
+    the moment it signs in with Codex again. The LIVE login is refused
+    rather than removed: _sync would re-register it on the next poll, so
+    removing it could only ever look like a silent failure.
+    """
+    reg = _load_registry()
+    accounts = reg.get("accounts") or {}
+    if email not in accounts:
+        raise ValueError(f"no remembered OpenAI account {email!r}")
+    if (reg.get("active") or "") == email:
+        raise ValueError("this is the live Codex login — sign out in "
+                         "Codex first, then remove the card it leaves")
+    del accounts[email]
+    _save_registry(reg)
+
+
 def _sync(now) -> dict:
     """Fold the live login + fresh rate limits into the registry.
 
@@ -277,9 +319,7 @@ def _sync(now) -> dict:
     after = json.dumps(reg, sort_keys=True)
     if after != before:
         try:
-            os.makedirs(os.path.dirname(_registry_path()), exist_ok=True)
-            with open(_registry_path(), "w", encoding="utf-8") as handle:
-                handle.write(after)
+            _save_registry(reg)
         except OSError:
             pass                # a read-only cache must not break the tab
     return reg

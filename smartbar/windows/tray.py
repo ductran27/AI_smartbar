@@ -194,6 +194,7 @@ class Tray:
         self.alerts = AlertManager()
         self.snapshot = None
         self.provider = ""   # panel tab; "" auto-resolves in the layout
+        self.confirm = ""    # card awaiting remove confirmation, or ""
         self.failures = 0
         self.generation = 0  # stamps fetches so superseded results are dropped
         self._generation_lock = threading.Lock()  # guards the += below (MINOR 7)
@@ -245,7 +246,7 @@ class Tray:
             fetched_at=self.snapshot.fetched_at if self.snapshot else "",
             stale=bool(self.failures and self.snapshot),
             error=self.last_error if self.snapshot is None else "",
-            hover=hover, provider=self.provider)
+            hover=hover, provider=self.provider, confirm=self.confirm)
 
     def _to_main(self, callback, *args):
         """Marshal `callback(*args)` onto the tk main thread. thread -> UI handoff.
@@ -304,6 +305,16 @@ class Tray:
             self._on_update()
         elif name.startswith("tab:"):
             self.provider = name.split(":", 1)[1]
+            self.confirm = ""
+        elif name.startswith("confirm-remove:"):
+            self._on_remove(name.split(":", 1)[1])
+        elif name == "cancel-remove":
+            self.confirm = ""
+        elif name.startswith("remove:"):
+            # First click of the two-step removal: arm the in-card confirm.
+            self.confirm = name.split(":", 1)[1]
+        elif name.startswith("card:"):
+            pass   # hover container — a click on the card body does nothing
         elif name.startswith("switch:"):
             self._on_switch(int(name.split(":", 1)[1]))
         if self.popover is not None:
@@ -318,6 +329,7 @@ class Tray:
         """
         if self.popover is None:
             return
+        self.confirm = ""   # a fresh open never starts mid-question
         self._to_main(self.popover.show_panel)  # thread -> UI handoff
         # Opening the panel is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic). Safe to
@@ -450,6 +462,32 @@ class Tray:
                 cswap.switch(number)
             except cswap.CswapError:
                 log.exception("switch failed")
+            self._start_fetch()
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_remove(self, token):
+        """Confirmed removal ("<provider>:<id>"): drop the card now, remove
+        in the background through the ONE core function per provider, then
+        refetch — the truth that resurrects the card if the removal failed."""
+        provider, _, ident = token.partition(":")
+        self.confirm = ""
+        if self.snapshot is not None:
+            if provider == "claude":
+                self.snapshot.accounts = [
+                    a for a in self.snapshot.accounts
+                    if str(a.number) != ident]
+            else:
+                self.snapshot.openai = [
+                    a for a in self.snapshot.openai if a.email != ident]
+
+        def run():
+            try:
+                if provider == "claude":
+                    cswap.remove_account(int(ident))
+                else:
+                    codex.remove_account(ident)
+            except (cswap.CswapError, ValueError, OSError):
+                log.exception("remove failed")
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
 

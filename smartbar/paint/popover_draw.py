@@ -135,6 +135,13 @@ def _draw_glyph(ctx, glyph) -> None:
         ctx.line_to(tipx - head * 0.1, glyph.cy + head * 0.75)
         ctx.close_path()
         ctx.fill()
+    elif glyph.kind == "close":  # the per-card remove ✕
+        arm = radius * 0.9
+        ctx.move_to(glyph.cx - arm, glyph.cy - arm)
+        ctx.line_to(glyph.cx + arm, glyph.cy + arm)
+        ctx.move_to(glyph.cx + arm, glyph.cy - arm)
+        ctx.line_to(glyph.cx - arm, glyph.cy + arm)
+        ctx.stroke()
     else:  # "power": ring open at the top, plus the stem
         ctx.arc(glyph.cx, glyph.cy, radius, -TAU / 4 + 0.62,
                 -TAU / 4 - 0.62 + TAU)

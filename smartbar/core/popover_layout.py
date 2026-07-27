@@ -77,13 +77,17 @@ def card_height(account) -> float:
 
 
 def _button(shapes, hits, name, right, cy, text, *, enabled=True,
-            accent=False, hover=""):
+            accent=False, danger=False, hover=""):
     """Right-aligned pill button; returns its left edge."""
-    width = t.text_width(text, t.SIZE_CAPTION, bold=accent) + t.BUTTON_PAD_H * 2
+    bold = accent or danger
+    width = t.text_width(text, t.SIZE_CAPTION, bold=bold) + t.BUTTON_PAD_H * 2
     x = right - width
     top = cy - t.BUTTON_H / 2
     if accent:
         fill = t.ACCENT_HOVER if hover == name else t.ACCENT
+        border = None
+    elif danger:
+        fill = t.DANGER_HOVER if hover == name else t.DANGER
         border = None
     elif not enabled:
         fill, border = t.BUTTON_DISABLED, None
@@ -93,16 +97,28 @@ def _button(shapes, hits, name, right, cy, text, *, enabled=True,
     shapes.append(t.Box(x, top, width, t.BUTTON_H, radius=t.BUTTON_H / 2,
                         fill=fill, stroke=border))
     shapes.append(t.Label(x + width / 2, cy, text, size=t.SIZE_CAPTION,
-                          bold=accent, anchor="center",
+                          bold=bold, anchor="center",
                           color=t.TEXT if enabled else t.TEXT_TERTIARY))
     hits.append(t.Hit(name, x, top, width, t.BUTTON_H, enabled=enabled))
     return x
 
 
-def _card(shapes, hits, account, top, now, hover):
-    """One account card: dot, email, ACTIVE chip or Make Active, metric rows."""
+def _card(shapes, hits, account, top, now, hover, confirm=""):
+    """One account card: dot, email, ACTIVE chip or Make Active, metric rows.
+
+    Hovering a non-active card reveals a small ✕ (hit "remove:<p>:<id>");
+    `confirm` naming this card swaps ONLY the header row for
+    "Remove <email>?  [Remove][Keep]" — same height, the bars stay put
+    (mirror of AccountCardView's hover/confirm states).
+    """
     height = card_height(account)
     left, right = t.PAD, t.WIDTH - t.PAD
+    provider = getattr(account, "provider", "claude") or "claude"
+    ident = account.number if provider == "claude" else account.email
+    pid = f"{provider}:{ident}"
+    # The whole card is a non-action hover region (see t.Hit) — appended
+    # FIRST so every real button inside it wins hit-testing.
+    hits.append(t.Hit(f"card:{pid}", left, top, right - left, height))
     shapes.append(t.Box(
         left, top, right - left, height, radius=t.CARD_RADIUS, fill=t.CARD_BG,
         stroke=t.CARD_BORDER_ACTIVE if account.active else t.CARD_BORDER,
@@ -110,6 +126,22 @@ def _card(shapes, hits, account, top, now, hover):
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
     head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
+
+    if confirm == pid and not account.active:
+        # The active guard repeats here on purpose: a stale confirm token
+        # can name a card that turned active under it (data refresh), and
+        # that card must render — and stay — unremovable.
+        keep_l = _button(shapes, hits, "cancel-remove", inner_r, head_cy,
+                         "Keep", hover=hover)
+        remove_l = _button(shapes, hits, f"confirm-remove:{pid}",
+                           keep_l - 6, head_cy, "Remove", hover=hover,
+                           danger=True)
+        shapes.append(t.Label(inner_l, head_cy, f"Remove {account.email}?",
+                              size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
+                              max_width=remove_l - 8 - inner_l))
+        _card_body(shapes, account, top, now, inner_l, inner_r)
+        return height
+
     dot_color = t.status_rgba(model.dot_color(account))
     shapes.append(t.Dot(inner_l + t.DOT_R, head_cy, t.DOT_R, dot_color,
                         hollow=model.dot_style(account) == "hollow"))
@@ -124,7 +156,7 @@ def _card(shapes, hits, account, top, now, hover):
                               size=t.SIZE_CHIP, bold=True, anchor="center",
                               color=(1, 1, 1, 1)))
         control_l = chip_x
-    elif getattr(account, "provider", "claude") != "claude":
+    elif provider != "claude":
         # No switcher exists for a ChatGPT login: a remembered account is a
         # read-only card, so the header keeps the full width instead.
         control_l = inner_r
@@ -135,11 +167,34 @@ def _card(shapes, hits, account, top, now, hover):
                             head_cy, "Make Active", hover=hover,
                             enabled=not model.switch_blocked(account))
 
+    label_r = control_l - 8
+    # The ✕ exists only while the pointer is on this card (any of its hover
+    # names) and never on the active card — the live login would just be
+    # re-registered, so offering to remove it would be a lie.
+    on_card = hover in (f"card:{pid}", f"remove:{pid}",
+                        f"switch:{account.number}")
+    if on_card and not account.active:
+        cx = control_l - 8 - t.REMOVE_HIT / 2
+        shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
+                              t.TEXT if hover == f"remove:{pid}"
+                              else t.TEXT_TERTIARY))
+        hits.append(t.Hit(f"remove:{pid}", cx - t.REMOVE_HIT / 2,
+                          head_cy - t.REMOVE_HIT / 2,
+                          t.REMOVE_HIT, t.REMOVE_HIT))
+        label_r = cx - t.REMOVE_HIT / 2 - 6
+
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
                           model.account_label(account),
                           size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
-                          max_width=control_l - 8 - (inner_l + t.DOT_R * 2 + 7)))
+                          max_width=label_r - (inner_l + t.DOT_R * 2 + 7)))
 
+    _card_body(shapes, account, top, now, inner_l, inner_r)
+    return height
+
+
+def _card_body(shapes, account, top, now, inner_l, inner_r):
+    """Metric rows, or the explanatory line on a data-less card — shared by
+    the normal and the remove-confirm header (the body never reflows)."""
     body_top = top + t.CARD_PAD_V + t.CARD_HEADER_H + t.CARD_INNER_GAP
     if not account.metrics:
         blocked = model.switch_blocked(account)
@@ -150,7 +205,7 @@ def _card(shapes, hits, account, top, now, hover):
                               size=t.SIZE_CAPTION,
                               color=t.WARNING if blocked else t.TEXT_SECONDARY,
                               max_width=inner_r - inner_l, max_lines=lines))
-        return height
+        return
 
     bar_l = inner_l + t.LABEL_W + t.BAR_GAP
     bar_w = inner_r - t.VALUE_W - t.BAR_GAP - bar_l
@@ -174,18 +229,22 @@ def _card(shapes, hits, account, top, now, hover):
                               mono=True, anchor="right",
                               color=t.TEXT_SPENT if metric.pct >= 100
                               else (1, 1, 1, 0.8)))
-    return height
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
-          provider="") -> t.Layout:
+          provider="", confirm="") -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
     `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
     to Claude when it has accounts, else OpenAI. The tab row itself exists
     only when BOTH providers have accounts — a single-provider machine gets
     exactly the layout it always had.
+
+    `confirm` names the card whose removal awaits confirmation
+    ("<provider>:<id>", the suffix of its "remove:" hit); that card's
+    header becomes the Remove/Keep question. A token naming a card that
+    is not rendered — or that turned active — is simply ignored.
     """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
@@ -260,7 +319,8 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                               max_width=right - t.PAD))
         cursor += t.STATE_ROW_H + t.CARD_GAP
     for account in cards:
-        cursor += _card(shapes, hits, account, cursor, now, hover) + t.CARD_GAP
+        cursor += _card(shapes, hits, account, cursor, now, hover,
+                        confirm) + t.CARD_GAP
     if cards:
         cursor -= t.CARD_GAP
 

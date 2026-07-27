@@ -23,8 +23,11 @@ struct PopoverView: View {
                     providerTabs
                 }
             }
-            if let switchError = store.switchError {
-                Label(switchError, systemImage: "exclamationmark.triangle")
+            // One error line for every card action — switching or removing,
+            // whichever failed most recently.
+            if let actionError = store.switchError ?? store.removeError
+                    ?? openai.removeError {
+                Label(actionError, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)

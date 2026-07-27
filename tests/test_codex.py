@@ -254,6 +254,42 @@ class TestAccounts(_CodexHome):
         codex.accounts()
         self.assertEqual((path.stat().st_mtime_ns, path.read_text(encoding="utf-8")), stamp)
 
+    def test_remove_forgets_a_remembered_account(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()                       # a@x.com is the live login
+        _write_auth(self.home, "b@x.com", "plus")
+        codex.accounts()                       # a@x.com is now remembered
+        codex.remove_account("a@x.com")
+        self.assertEqual([a.email for a in codex.accounts()], ["b@x.com"])
+        raw = (self.cache / "openai-accounts.json").read_text(encoding="utf-8")
+        self.assertNotIn("a@x.com", raw)
+
+    def test_remove_refuses_the_live_login(self):
+        # _sync would re-register the live login on the next poll, so
+        # removing it could only ever look like a silent failure.
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        with self.assertRaises(ValueError):
+            codex.remove_account("a@x.com")
+        self.assertEqual([a.email for a in codex.accounts()], ["a@x.com"])
+
+    def test_remove_unknown_email_raises(self):
+        with self.assertRaises(ValueError):
+            codex.remove_account("ghost@x.com")
+
+    def test_remove_saves_atomically_leaving_no_temp_file(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        _write_auth(self.home, "b@x.com", "plus")
+        codex.accounts()
+        codex.remove_account("a@x.com")
+        leftovers = [p.name for p in self.cache.iterdir()
+                     if p.name != "openai-accounts.json"]
+        self.assertEqual(leftovers, [])
+        # and the surviving file is valid JSON with the removal applied
+        reg = json.loads((self.cache / "openai-accounts.json").read_text())
+        self.assertEqual(sorted(reg["accounts"]), ["b@x.com"])
+
     def test_payload_is_display_ready(self):
         _write_auth(self.home, "a@x.com", "prolite")
         _write_rollout(self.home, "rollout-a.jsonl", [
