@@ -49,15 +49,25 @@ class TestVenvPython(Env):
         # deterministically hit the branch under test -- otherwise it only
         # passes when the suite happens to run on a POSIX host, and fails
         # for real on Windows CI where sys.platform is genuinely "win32".
+        # A POSIX-shaped interpreter path, not sys.executable: on Windows
+        # that is C:\\...\\python.exe, which the launcher regex
+        # (r"'(/[^']*/bin/python[^']*)'") can never match, so this asserted
+        # None and failed for a reason that has nothing to do with parsing.
+        # The existence probe is stubbed for the same reason -- no Windows
+        # filesystem can produce /opt/pipx/... -- and only for that exact
+        # path, so a regex that matched something else would still fail.
+        venv = "/opt/pipx/venvs/claude-swap/bin/python3"
         launcher = write_script(self.tmp.name, "cswap",
                                 "#!/bin/sh\n"
-                                f"'''exec' '{sys.executable}' \"$0\" \"$@\"\n"
+                                f"'''exec' '{venv}' \"$0\" \"$@\"\n"
                                 "' '''\n")
         os.environ["SMARTBAR_CSWAP"] = launcher
         saved_platform = cswap.sys.platform
         cswap.sys.platform = "linux"
         try:
-            self.assertEqual(cswap.venv_python(), sys.executable)
+            with mock.patch.object(cswap.os.path, "exists",
+                                   side_effect=lambda p: p == venv):
+                self.assertEqual(cswap.venv_python(), venv)
         finally:
             cswap.sys.platform = saved_platform
 
