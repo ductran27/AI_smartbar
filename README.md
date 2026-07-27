@@ -8,7 +8,7 @@ account switching. A cross-platform companion for
 Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills, fill =
                                              % used, each its own color)
 
-The panel — identical on macOS and Linux:
+The panel — identical on macOS, Linux and Windows:
 
  AI smartbar  Updated 9:56 PM        ⟳ ⏻
  ┌──────────────────────────────────────┐
@@ -81,17 +81,20 @@ The panel — identical on macOS and Linux:
 - **Self-updating (on by default).** Every device checks for a new release
   at login and every 6 hours, then rebuilds, re-installs its agents and
   restarts itself. A **red dot appears on the bar icon** the moment one is
-  waiting, and **Update to vX.Y.Z** (popover on macOS, menu row on Linux)
-  applies it immediately. Rolls itself back if a release fails to build, and
-  never touches a checkout with uncommitted work — see
-  [Updating](#updating-and-releases).
-- **The same panel on Linux.** Cards, filling bars, the ACTIVE chip and the
-  upgrade button — not a stripped-down menu. Geometry and wording come from
-  one unit-tested layout in `smartbar/core/`, and the Linux side paints it
-  with cairo rather than GTK widgets, so it looks the same on XFCE, GNOME
-  and KDE instead of inheriting each distro's theme. `⟳ Open AI smartbar`
-  in the tray menu (or middle-click the icon) opens it — see
-  [Linux panel](#the-linux-panel).
+  waiting, and **Update to vX.Y.Z** (popover on macOS, menu row on
+  Linux and Windows) applies it immediately. Rolls itself back if a
+  release fails to build, and never touches a checkout with
+  uncommitted work — see [Updating](#updating-and-releases).
+- **The same panel on Linux and Windows.** Cards, filling bars, the ACTIVE
+  chip and the upgrade button — not a stripped-down menu. Geometry and
+  wording come from one unit-tested layout in `smartbar/core/`, and both
+  platforms paint it with the same GTK-free cairo module
+  (`smartbar/paint/`) instead of native widgets, so it looks the same
+  everywhere rather than inheriting a theme. `⟳ Open AI smartbar` in the
+  tray menu (or middle-click the icon) opens it on Linux; a left-click
+  opens it on Windows — see [Linux panel](#the-linux-panel) and
+  [`docs/windows-bring-up.md`](docs/windows-bring-up.md) (Windows is
+  unverified on real hardware — see [Status](#install) below).
 - **Hands off your credentials.** The bar reads `cswap list --json`,
   switches via `cswap switch`, registers/re-captures via `cswap add`,
   and warms via `cswap run` + the official claude CLI. It never touches
@@ -108,6 +111,10 @@ The panel — identical on macOS and Linux:
   XFCE/GNOME distros. X11 or Wayland with a StatusNotifier-capable tray.
 - macOS: Python 3; `install/macos.sh` creates a venv with
   [rumps](https://github.com/jaredks/rumps).
+- Windows: Python 3.9+ (pycairo ships `win_amd64` wheels for
+  cp39–cp313, so there is no version ceiling here) and Git for
+  Windows. `install/windows.ps1` creates a venv in the checkout and
+  installs `pystray`, `pillow` and `pycairo` into it.
 
 ## Install
 
@@ -123,6 +130,9 @@ cd ~/tools/AI_smartbar
 
 # macOS — Python/rumps fallback (older Macs, no Swift toolchain):
 ./install/macos.sh
+
+# Windows (installs a venv in the checkout, Startup shortcut + Scheduled Task):
+.\install\windows.ps1
 ```
 
 The checkout stays live — it is what the app runs from and what the updater
@@ -130,16 +140,18 @@ fast-forwards, so put it somewhere permanent.
 
 Both macOS installers share the `com.ductran.ai-smartbar` LaunchAgent
 label — installing one replaces the other at login (single instance).
-Uninstall with `./install/linux.sh --uninstall` /
-`./install/macos.sh --uninstall`.
+Uninstall with `./install/linux.sh --uninstall`,
+`./install/macos.sh --uninstall`, or `.\install\windows.ps1 -Uninstall`.
 
 Every installer also turns on [self-updating](#updating-and-releases).
 Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 `origin/main` instead of releases (what a development checkout wants).
+On Windows the same flags are PowerShell-style: `-NoAutoUpdate` and
+`-Channel main`.
 
-> **Private-repo devices:** the updater runs from launchd/systemd where
-> nobody can type a password, so each device needs a working
-> non-interactive credential *before* it can update itself:
+> **Private-repo devices:** the updater runs from launchd/systemd/Task
+> Scheduler where nobody can type a password, so each device needs a
+> working non-interactive credential *before* it can update itself:
 > `gh auth login && gh auth setup-git` (HTTPS, token → keychain) or an SSH
 > key with an `git@github.com:` remote. The installer probes this and
 > refuses loudly rather than letting updates fail silently forever.
@@ -147,7 +159,14 @@ Add `--no-auto-update` to opt a device out, or `--channel main` to follow
 > **Status:** the native macOS app is live-verified (2026-07-22: v3
 > %-used UI, re-login card + blocked switch, re-capture, warmup agent
 > with fixed PATH). The Linux tray is written to spec from the
-> unit-tested core but has not been re-run on a Linux box since v2.
+> unit-tested core but has not been re-run on a Linux box since v2. The
+> Windows tray is further behind than that: it has never been run on a
+> Windows machine at all. Every line of `smartbar/windows/` was written
+> to spec and unit-tested with the GUI stubbed (pystray, tkinter and
+> pycairo are faked in tests) — real DPI scaling, focus-out dismissal,
+> hover tracking and the Task Scheduler apply path are all unverified.
+> See [`docs/windows-bring-up.md`](docs/windows-bring-up.md) for the
+> manual checklist and the known-unresolved issues before relying on it.
 
 ## Configuration (environment variables)
 
@@ -297,6 +316,12 @@ The Linux UI is the same panel as the macOS popover, not a reduced menu.
 Open it with **⟳ Open AI smartbar** in the tray menu, or **middle-click**
 the tray icon. Hovering the icon shows the same numbers as a tooltip.
 
+Windows hosts the identical panel in a borderless tkinter window instead
+of GTK — see [`docs/windows-bring-up.md`](docs/windows-bring-up.md) for
+how it opens there and for what is still unverified. Everything below
+this point is Linux-specific plumbing (StatusNotifier, DBus, xfwm4) and
+does not apply to Windows.
+
 **Or keep it up permanently.** `SMARTBAR_PANEL=always` turns the panel into a
 desktop readout instead of a popover: shown at startup, never auto-hidden,
 anchored to the top-right of the work area, on every workspace, and never
@@ -365,7 +390,7 @@ to vX.Y.Z** menu row) runs the same pass immediately.
 something, so without one a device could sit up to 6 hours behind with no way to
 ask. **Check for Updates** asks the remote immediately — in the macOS
 popover's **More options** menu, and as a **⇅ Check for updates** row directly
-under *⟳ Refresh now* in the Linux tray menu.
+under *⟳ Refresh now* in the Linux and Windows tray menus.
 
 It only reports; applying stays the separate, deliberate **Update to vX.Y.Z**
 button. The answer appears in place, and also as a desktop notification —
@@ -571,6 +596,7 @@ ai-smartbar --once          # headless: prints icon state, title, account rows
 ai-smartbar --check-update  # is a newer release waiting?
 tail ~/.cache/ai-smartbar/tray.log        # Linux log
 tail ~/Library/Logs/ai-smartbar.log       # macOS log
+type %LOCALAPPDATA%\ai-smartbar\tray.log  # Windows log (PowerShell: Get-Content -Tail)
 tail ~/.cache/ai-smartbar/warmup.log      # warmup attempts + skip reasons
 tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ```
@@ -616,11 +642,16 @@ rollback → brake. It never touches the real repo, the real LaunchAgents or
 the real `$HOME`, which is what makes it the safety net for devices that
 cannot be tested by hand.
 
-Layout: `smartbar/core/` holds all logic, formatting and now the popover
+Layout: `smartbar/core/` holds all logic, formatting and the popover
 geometry (`popover_theme.py` + `popover_layout.py`, unit-tested, Python
-3.9+); `smartbar/linux/` paints it with cairo (`popover_draw.py`,
-`tray_icon.py` — both GTK-free and therefore renderable anywhere) and hosts
-it in GTK (`popover_window.py`, `tray.py`); the Swift app (`macos-swift/`)
-mirrors core 1:1. `smartbar/macos/menubar.py` is the legacy rumps fallback
-for Macs that cannot build the Swift app — it keeps the simple text menu and
-is not part of the panel work. Design docs live in `docs/superpowers/`.
+3.9+); `smartbar/paint/` paints it with cairo (`popover_draw.py`,
+`tray_icon.py` — both GTK-free and therefore renderable anywhere, which is
+what lets one painter serve Linux, Windows and the preview CLI without
+drifting). `smartbar/linux/` hosts that painter in GTK
+(`popover_window.py`, `tray.py`); `smartbar/windows/` hosts the same
+painter in tkinter and pystray (`popover_window.py`, `tray.py`,
+unverified on real hardware — see [Status](#install)); the Swift app
+(`macos-swift/`) mirrors core 1:1 natively instead of using the shared
+painter. `smartbar/macos/menubar.py` is the legacy rumps fallback for Macs
+that cannot build the Swift app — it keeps the simple text menu and is not
+part of the panel work. Design docs live in `docs/superpowers/`.

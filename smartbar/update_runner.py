@@ -116,6 +116,32 @@ def _read_text(path: str) -> str:
         return ""
 
 
+def _win_startup_shortcut() -> str:
+    """Path D7 installs the Startup `.lnk` at, without shelling out for it.
+
+    `[Environment]::GetFolderPath('Startup')` — what windows.ps1 itself uses
+    to write the shortcut — is documented by Microsoft to resolve to exactly
+    this path for the per-user Startup folder, so present_installers() can
+    stat it directly instead of spawning a PowerShell child just to answer
+    "is this device installed" on every single update pass.
+    """
+    appdata = os.environ.get("APPDATA", "")
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu",
+                        "Programs", "Startup", "AI smartbar.lnk")
+
+
+def _win_task_file() -> str:
+    """Path Task Scheduler stores the D7 "AI smartbar update" task at.
+
+    Every registered task, regardless of which account created it, gets an
+    XML definition under `%SystemRoot%\\System32\\Tasks` named after the
+    task. Statting that file is the same "cheap, side-effect-free" probe as
+    the Startup shortcut above, rather than a `schtasks /query` subprocess.
+    """
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(system_root, "System32", "Tasks", "AI smartbar update")
+
+
 def present_installers() -> dict:
     """Which install shapes exist here — probed, never assumed.
 
@@ -127,6 +153,12 @@ def present_installers() -> dict:
     if override:
         keys = [key.strip() for key in override.split(",") if key.strip()]
         return {key: True for key in keys if key in update.INSTALLERS}
+    if sys.platform == "win32":
+        # Either signal proves D7 ran here before; neither needs a child
+        # process, which the linux arm below also avoids for the same
+        # every-update-pass frequency reason.
+        return {"windows": (os.path.exists(_win_startup_shortcut())
+                            or os.path.exists(_win_task_file()))}
     if sys.platform != "darwin":
         return {"linux": (
             os.path.exists(os.path.join(HOME, ".config/autostart/ai-smartbar.desktop"))
@@ -194,6 +226,15 @@ def agent_status(label: str):
 
 def kickstart(label: str) -> None:
     """Restart a LaunchAgent job — brings a restored binary back up."""
+    if sys.platform == "win32":
+        # Defensive, not live: run_once() only calls this when `bundled` is
+        # true, and `bundled` can only be true when "macos_swift" is among
+        # targets, which never happens on win32. Guarding anyway means the
+        # win32 port keeps working even if that invariant ever changes,
+        # instead of crashing on os.getuid() — a function win32 CPython
+        # does not define at all.
+        log.warning("kickstart() has no launchctl equivalent on win32")
+        return
     subprocess.run(["/bin/launchctl", "kickstart", "-k",
                     f"gui/{os.getuid()}/{label}"],
                    capture_output=True, timeout=60, check=False)
@@ -203,13 +244,29 @@ def run_installer(key: str) -> str:
     """Re-run one installer. Returns "" on success, else the failure detail."""
     relative = update.INSTALLERS[key]
     script = os.path.join(update_git.REPO_ROOT, relative)
-    if not os.access(script, os.X_OK):
-        return f"{relative} is missing or not executable"
+    if script.endswith(".ps1"):
+        # os.access(script, os.X_OK) is meaningless here: a `.ps1` carries
+        # no executable bit on Windows, so an installer that is perfectly
+        # runnable would fail this check every time. Existence is the only
+        # thing worth asking; PowerShell itself decides whether it can run.
+        if not os.path.isfile(script):
+            return f"{relative} is missing"
+        # pwsh (PowerShell 7+) is preferred when present; the bundled
+        # `powershell.exe` (5.1) is what every stock Windows install has.
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            return "neither pwsh nor powershell was found on PATH"
+        argv = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", script]
+    else:
+        if not os.access(script, os.X_OK):
+            return f"{relative} is missing or not executable"
+        argv = [script]
     env = update_git.env()
     # Signals install/macos-update.sh not to unload the very job we run in.
     env["SMARTBAR_UPDATE_APPLY"] = "1"
     try:
-        proc = subprocess.run([script], cwd=update_git.REPO_ROOT, env=env,
+        proc = subprocess.run(argv, cwd=update_git.REPO_ROOT, env=env,
                               capture_output=True, text=True,
                               timeout=INSTALL_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -222,7 +279,23 @@ def run_installer(key: str) -> str:
 
 
 def verify(targets) -> str:
-    """"" when the updated device looks alive, else why it does not."""
+    """"" when the updated device looks alive, else why it does not.
+
+    The Windows half of this is a deliberate no-op, and that is the D6
+    judgement call: unlike the macos_swift arm below, which reads a PID
+    launchd already tracks for us via `agent_status`, nothing here has a PID
+    for the win32 tray to begin with — D7 starts it from a Scheduled Task or
+    a Startup shortcut, neither of which records one. The only stdlib-only
+    proxies available (matching `tasklist` by image name, which any other
+    `pythonw.exe` on the machine would also satisfy and prove nothing; or a
+    WMI command-line query, slow enough on a cold query and fragile enough
+    as a new subprocess surface that a transient failure there would look
+    identical to a genuinely broken update) are not reliable enough to hang
+    a rollback decision on. Reporting "dead" here when the tray is actually
+    fine would trigger run_once()'s rollback of a perfectly good update —
+    strictly worse than the alternative of occasionally missing a real
+    crash — so this arm only logs and leaves the return value healthy.
+    """
     launcher = os.path.join(update_git.REPO_ROOT, "bin", "ai-smartbar")
     try:
         proc = subprocess.run([sys.executable, launcher, "--version"],
@@ -249,6 +322,11 @@ def verify(targets) -> str:
         # No pid and no failure status: don't roll back a healthy update on
         # a launchctl reporting quirk — just say so in the log.
         log.warning("app agent reported no pid after restart")
+    if sys.platform == "win32" and "windows" in targets:
+        # See the docstring above: no reliable stdlib-only tray liveness
+        # check exists, so this is intentionally "trust --version and move
+        # on" rather than inventing one that could false-positive a rollback.
+        log.info("skipping tray liveness check on win32 (see verify() docstring)")
     return ""
 
 

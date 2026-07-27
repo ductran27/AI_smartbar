@@ -42,16 +42,46 @@ RESERVED = ("SMARTBAR_REPO_ROOT", "SMARTBAR_UPDATE_CHANNEL")
 #: them, instead of three escaping schemes that each have to be right.
 _BAD_VALUE = re.compile(r'[\x00-\x1f\x7f"\\`$%]')
 
+#: Windows has none of the three quoting contexts above: a setting there
+#: is delivered by `os.environ[key] = value` at process start (see
+#: bin/ai-smartbar's win32-only runtime loader), so there is no plist,
+#: unit file or crontab line downstream to escape for. Control characters
+#: stay banned regardless of platform because they cannot survive an
+#: environment block at all — everything else, notably backslash, is
+#: exactly what a real `SMARTBAR_CSWAP=C:\Users\...` value needs.
+#:
+#: What this charset does NOT promise: that every VALUE is inert once
+#: loaded. A few keys name an executable rather than carrying data —
+#: SMARTBAR_CSWAP and SMARTBAR_CLAUDE become subprocess argv[0] — and on
+#: Windows a target that PATHEXT resolves to a .bat/.cmd is re-parsed by
+#: cmd.exe, which treats %, &, |, ^, <, > and quotes specially even for a
+#: list-form (shell=False) call. Note that &, |, ^, < and > were never
+#: banned by the strict charset either: they are safe in all three POSIX
+#: contexts, so this hazard belongs to the CONSUMER, not to parsing, and
+#: is not something a wider or narrower charset here would fix. Flagged
+#: for whoever next owns cswap.py's `_binary()`.
+_BAD_VALUE_WIN = re.compile(r"[\x00-\x1f\x7f]")
+
 _XML = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
 
 
-def parse(text: str):
+def parse(text: str, *, windows: bool = False):
     """(settings, problems) — the accepted keys, and why anything was dropped.
 
     Problems are returned rather than raised: one bad line must not cost a
     device every other setting it had, and the installers surface the list
     so a typo is visible at install time instead of silently doing nothing.
+
+    `windows` selects which charset a value has to clear. It defaults to
+    False so every existing caller and test keeps behaving byte-for-byte:
+    this module is pure and platform-agnostic on purpose, so it is the
+    caller — not `sys.platform` read in here — that knows whether the
+    settings are headed for a plist/systemd/desktop file or straight into
+    `os.environ` on Windows.
     """
+    bad_value = _BAD_VALUE_WIN if windows else _BAD_VALUE
+    bad_value_desc = ("a control character" if windows else
+                      "quote, backslash, backtick, $, % or a control character")
     settings: dict = {}
     problems: list = []
     for number, original in enumerate((text or "").splitlines(), 1):
@@ -75,11 +105,10 @@ def parse(text: str):
         elif key in RESERVED:
             problems.append(
                 "line %d: %s is set by the installer itself" % (number, key))
-        elif _BAD_VALUE.search(value):
+        elif bad_value.search(value):
             problems.append(
                 "line %d: %s has a character that cannot be passed safely to "
-                "an agent (quote, backslash, backtick, $, %% or a control "
-                "character)" % (number, key))
+                "an agent (%s)" % (number, key, bad_value_desc))
         else:
             settings[key] = value
     return settings, problems
@@ -125,10 +154,25 @@ def render_exec_prefix(settings: dict) -> str:
                             for key in sorted(settings))
 
 
+def render_winenv(settings: dict) -> str:
+    """`KEY=VALUE` lines for `os.environ`, the Windows install-time summary.
+
+    Windows has no `env.exe`, no systemd unit and no plist to escape into —
+    the settings go straight into `os.environ` at process start (see
+    bin/ai-smartbar's win32-only runtime loader), so this renderer needs no
+    quoting at all. `install/windows.ps1` prints it after writing
+    config.env so an operator sees exactly which settings were accepted,
+    and `--print-config winenv` makes that the CLI-testable surface of the
+    widened Windows charset in `parse(..., windows=True)`.
+    """
+    return "".join("\n%s=%s" % (key, settings[key]) for key in sorted(settings))
+
+
 RENDERERS = {
     "plist": render_plist,
     "systemd": render_systemd,
     "exec": render_exec_prefix,
+    "winenv": render_winenv,
 }
 
 

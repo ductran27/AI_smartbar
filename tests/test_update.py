@@ -221,6 +221,70 @@ class TestApplyTargets(unittest.TestCase):
         for key in update.APPLY_ORDER:
             self.assertIn(key, update.INSTALLERS)
 
+    def test_windows_is_present_and_included_when_present(self):
+        self.assertEqual(update.apply_targets({"windows": True}), ["windows"])
+
+    def test_windows_sits_with_the_other_ui_shapes_not_the_side_agents(self):
+        # D5: Windows is a UI shape, so it goes after the other UI shapes
+        # and strictly before the side agents (warmup) and the updater's
+        # own agent (update_agent).
+        order = update.APPLY_ORDER
+        self.assertLess(order.index("linux"), order.index("windows"))
+        self.assertLess(order.index("windows"), order.index("warmup"))
+        self.assertLess(order.index("windows"), order.index("update_agent"))
+
+    def test_all_five_ui_and_agent_shapes_apply_in_the_documented_order(self):
+        targets = update.apply_targets({key: True for key in update.INSTALLERS})
+        self.assertEqual(targets, ["macos_swift", "macos_python", "linux",
+                                   "windows", "warmup", "update_agent"])
+
+
+class TestWindowsInstaller(unittest.TestCase):
+    """D5: the Windows install shape gets exactly the same treatment as the
+    three that already exist — a script path in INSTALLERS, and a slot in
+    APPLY_ORDER — so present_installers()/apply_targets() need no special
+    case for it anywhere else in this module.
+    """
+
+    def test_windows_maps_to_the_powershell_installer(self):
+        self.assertEqual(update.INSTALLERS["windows"], "install/windows.ps1")
+
+    def test_windows_is_a_key_in_apply_order(self):
+        self.assertIn("windows", update.APPLY_ORDER)
+
+
+class TestMinutesSpec(unittest.TestCase):
+    """minutes_spec() feeds a Task Scheduler repetition trigger, which has
+    no sub-minute resolution — the Windows analogue of cron_spec.
+    """
+
+    def test_rounds_to_the_nearest_minute_same_as_cron_spec(self):
+        self.assertEqual(update.minutes_spec(100), 2)   # 1.667 min -> 2
+        self.assertEqual(update.minutes_spec(89), 1)     # 1.483 min -> 1
+        self.assertEqual(update.minutes_spec(210), 4)    # 3.5 min -> 4
+
+    def test_a_whole_number_of_minutes_is_unchanged(self):
+        self.assertEqual(update.minutes_spec(300), 5)
+        self.assertEqual(update.minutes_spec(21600), 360)
+
+    def test_floored_at_one_minute(self):
+        self.assertEqual(update.minutes_spec(0), 1)
+        self.assertEqual(update.minutes_spec(1), 1)
+        self.assertEqual(update.minutes_spec(29), 1)
+
+    def test_matches_the_default_check_interval_the_installers_will_pass(self):
+        # check_interval() already floors at MIN_CHECK_INTERVAL (300s), so
+        # the 1-minute floor here is defensive, not the normal case — pin
+        # the value the installers actually see.
+        self.assertEqual(update.minutes_spec(update.MIN_CHECK_INTERVAL), 5)
+        self.assertEqual(update.minutes_spec(update.DEFAULT_CHECK_INTERVAL), 360)
+
+    def test_a_falsy_seconds_value_does_not_crash(self):
+        # cron_spec treats a falsy seconds the same way ("or 0"); pin the
+        # same tolerance here so a bad config.env value degrades to the
+        # 1-minute floor instead of raising out of an installer.
+        self.assertEqual(update.minutes_spec(0.0), 1)
+
 
 class TestUiState(unittest.TestCase):
     def test_pending_update_is_advertised(self):

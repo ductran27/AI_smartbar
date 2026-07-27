@@ -43,6 +43,10 @@ def print_config(fmt: str) -> int:
     can be passed safely to an agent are semantics, so they live in core with
     unit tests behind them.
 
+    `winenv` parses with the widened Windows charset (see device_config.parse):
+    that format's only consumer is os.environ on Windows, so it is the one
+    caller here that knows a real `C:\\Users\\...` value must survive.
+
     Never fatal. An installer that cannot read the config must still produce a
     working agent — losing a setting is a papercut, failing to install is not.
     """
@@ -56,7 +60,7 @@ def print_config(fmt: str) -> int:
             text = handle.read()
     except OSError:
         text = ""
-    settings, problems = device_config.parse(text)
+    settings, problems = device_config.parse(text, windows=(fmt == "winenv"))
     for problem in problems:
         print(f"warning: {path}: {problem}", file=sys.stderr)
     try:
@@ -83,23 +87,59 @@ def print_update_interval(fmt: str) -> int:
 
     Resolution lives in core.update.check_interval: this process's environment
     beats config.env beats the default. The installers ask rather than reading
-    the file themselves so the floor and the cron arithmetic exist once.
+    the file themselves so the floor and the cron/minutes arithmetic exist
+    once — cron for a Linux box's crontab, minutes for a Windows Task
+    Scheduler repetition trigger.
     """
     from smartbar.core import update
     seconds = update.check_interval(
         fallback=_device_config().get("SMARTBAR_UPDATE_INTERVAL", ""))
     if fmt == "cron":
         print(update.cron_spec(seconds))
+    elif fmt == "minutes":
+        print(update.minutes_spec(seconds))
     elif fmt == "seconds":
         print(int(seconds))
     else:
-        print(f"ERROR: unknown interval format {fmt!r} (want seconds or cron)",
-              file=sys.stderr)
+        print(f"ERROR: unknown interval format {fmt!r} (want seconds, cron "
+              "or minutes)", file=sys.stderr)
         return 2
     return 0
 
 
+def _load_windows_env() -> None:
+    """Fold config.env into os.environ before ANY dispatch. win32 only.
+
+    Every other platform bakes config.env into the agent that launches this
+    process (render_plist/render_systemd/render_exec_prefix), so by the time
+    Python starts the settings are already in os.environ. Windows has no
+    env.exe, cmd.exe does not honour a `VAR=value cmd` prefix, and a .lnk
+    cannot carry environment variables — so the Startup shortcut and the
+    Scheduled Task just launch the bare interpreter, and this process has to
+    load its own settings instead. An already-set os.environ key — an
+    explicit export, or one the Scheduled Task itself supplies — must win
+    over the file, hence setdefault rather than assignment. Silent on the
+    happy path: a missing config.env is the common case, and malformed lines
+    are already surfaced by --print-config. Deliberately not run on other
+    platforms — a hand-run bin/ai-smartbar there has never picked up
+    config.env, and changing that is outside this loader's job.
+    """
+    if sys.platform != "win32":
+        return
+    from smartbar.core import device_config
+    from smartbar.presence_runner import CONFIG_DIR
+    try:
+        with open(os.path.join(CONFIG_DIR, device_config.FILENAME)) as handle:
+            text = handle.read()
+    except OSError:
+        return
+    settings, _ = device_config.parse(text, windows=True)
+    for key, value in settings.items():
+        os.environ.setdefault(key, value)
+
+
 def main() -> int:
+    _load_windows_env()
     parser = argparse.ArgumentParser(prog="ai-smartbar",
                                      description="Claude usage limits in your bar")
     parser.add_argument("--once", action="store_true",
@@ -138,15 +178,31 @@ def main() -> int:
     parser.add_argument("--update-interval", nargs="?", const="seconds",
                         metavar="FORMAT",
                         help="print how often this device should check for "
-                             "updates: 'seconds' (default) or 'cron'. The "
-                             "installers use it to build their timers")
+                             "updates: 'seconds' (default), 'cron' or "
+                             "'minutes'. The installers use it to build "
+                             "their timers")
     parser.add_argument("--print-config", metavar="FORMAT",
                         help="render ~/.config/ai-smartbar/config.env for an "
-                             "agent file (plist|systemd|exec); the installers "
-                             "use this to re-apply settings on every update")
+                             "agent file (plist|systemd|exec|winenv); the "
+                             "installers use this to re-apply settings on "
+                             "every update")
+    parser.add_argument("--channel", metavar="NAME",
+                        choices=("release", "main"),
+                        help="with --update/--check-update: plan against this "
+                             "release channel instead of "
+                             "$SMARTBAR_UPDATE_CHANNEL. Windows' Scheduled "
+                             "Task passes it here because a task carries no "
+                             "environment block to hold it in")
     parser.add_argument("--version", action="version",
                         version=f"ai-smartbar {__version__}")
     args = parser.parse_args()
+    # An explicit flag outranks both the inherited environment and config.env
+    # (which may not set this key at all — it is RESERVED there precisely so
+    # the installers stay the single source of the channel). Assigning into
+    # os.environ rather than threading a parameter down keeps ONE resolution
+    # path, update.channel(), instead of a second one that could disagree.
+    if args.channel:
+        os.environ["SMARTBAR_UPDATE_CHANNEL"] = args.channel
     if args.print_config:
         return print_config(args.print_config)
     if args.update_interval:

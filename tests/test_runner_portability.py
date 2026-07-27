@@ -246,5 +246,233 @@ class TestUpdateNotifyOnWindows(unittest.TestCase):
         fake_info.assert_not_called()
 
 
+class TestPresentInstallersOnWindows(unittest.TestCase):
+    """D6: present_installers()'s win32 arm. Before this arm existed, the
+    only platform check in present_installers() was `if sys.platform !=
+    "darwin":`, which is true on win32 too -- so a Windows device would get
+    handed the LINUX shape and update_runner would keep re-running
+    install/linux.sh on every single update pass forever. Everything below
+    pins the new "windows" key by name and pins that the old "linux" key
+    never comes back once sys.platform is win32.
+    """
+
+    def setUp(self):
+        self.saved_platform = update_runner.sys.platform
+        self.saved_env = {name: os.environ.get(name) for name in
+                          ("SMARTBAR_UPDATE_TARGETS", "APPDATA", "SystemRoot")}
+        os.environ.pop("SMARTBAR_UPDATE_TARGETS", None)
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["APPDATA"] = os.path.join(self.tmp.name, "Roaming")
+        os.environ["SystemRoot"] = os.path.join(self.tmp.name, "Windows")
+        update_runner.sys.platform = "win32"
+
+    def tearDown(self):
+        update_runner.sys.platform = self.saved_platform
+        for name, value in self.saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        self.tmp.cleanup()
+
+    def test_neither_artifact_present_reports_windows_false(self):
+        self.assertEqual(update_runner.present_installers(),
+                         {"windows": False})
+
+    def test_the_startup_shortcut_alone_is_enough(self):
+        path = update_runner._win_startup_shortcut()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        self.assertEqual(update_runner.present_installers(),
+                         {"windows": True})
+
+    def test_the_scheduled_task_file_alone_is_enough(self):
+        path = update_runner._win_task_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        self.assertEqual(update_runner.present_installers(),
+                         {"windows": True})
+
+    def test_the_shape_is_never_the_linux_one(self):
+        # The regression this whole class exists to pin.
+        result = update_runner.present_installers()
+        self.assertEqual(set(result), {"windows"})
+        self.assertNotIn("linux", result)
+
+    def test_update_targets_override_still_wins_on_win32(self):
+        os.environ["SMARTBAR_UPDATE_TARGETS"] = "linux"
+        self.assertEqual(update_runner.present_installers(), {"linux": True})
+
+    def test_the_override_also_accepts_windows_explicitly(self):
+        os.environ["SMARTBAR_UPDATE_TARGETS"] = "windows"
+        self.assertEqual(update_runner.present_installers(),
+                         {"windows": True})
+
+
+class TestRunInstallerForPowerShell(unittest.TestCase):
+    """D6: run_installer()'s `.ps1` branch. `os.access(path, os.X_OK)` is
+    meaningless for a `.ps1` on Windows -- an existing, perfectly runnable
+    script has no exec bit and would fail it every time -- so this branch
+    checks os.path.isfile instead, and shells out through pwsh/powershell
+    since a `.ps1` cannot be argv[0] the way a POSIX script can.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved_repo_root = update_runner.update_git.REPO_ROOT
+        update_runner.update_git.REPO_ROOT = self.tmp.name
+        os.makedirs(os.path.join(self.tmp.name, "install"))
+        self.script = os.path.join(self.tmp.name, "install", "windows.ps1")
+        with open(self.script, "w") as handle:
+            handle.write("# no chmod +x -- exec bit is not the point here\n")
+
+    def tearDown(self):
+        update_runner.update_git.REPO_ROOT = self.saved_repo_root
+        self.tmp.cleanup()
+
+    def _ok_run(self):
+        return mock.patch.object(
+            update_runner.subprocess, "run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""))
+
+    def test_a_non_executable_ps1_still_runs(self):
+        # The exact regression: os.access(..., os.X_OK) would reject this
+        # file (no exec bit) even though PowerShell runs it fine.
+        with mock.patch.object(update_runner.shutil, "which",
+                               return_value="/usr/bin/pwsh"), self._ok_run():
+            failure = update_runner.run_installer("windows")
+        self.assertEqual(failure, "")
+
+    def test_a_missing_ps1_fails_cleanly_without_raising(self):
+        os.remove(self.script)
+        failure = update_runner.run_installer("windows")
+        self.assertIn("missing", failure)
+
+    def test_argv_is_the_powershell_invocation_and_apply_env_is_set(self):
+        with mock.patch.object(update_runner.shutil, "which",
+                               return_value="/usr/bin/pwsh") as fake_run, \
+             self._ok_run() as fake_subprocess_run:
+            update_runner.run_installer("windows")
+        argv = fake_subprocess_run.call_args.args[0]
+        kwargs = fake_subprocess_run.call_args.kwargs
+        self.assertEqual(argv, ["/usr/bin/pwsh", "-NoProfile",
+                                "-ExecutionPolicy", "Bypass", "-File",
+                                self.script])
+        self.assertEqual(kwargs["env"]["SMARTBAR_UPDATE_APPLY"], "1")
+
+    def test_pwsh_is_preferred_over_powershell_when_both_exist(self):
+        def fake_which(name):
+            return {"pwsh": "/usr/bin/pwsh",
+                    "powershell": "/usr/bin/powershell"}.get(name)
+        with mock.patch.object(update_runner.shutil, "which",
+                               side_effect=fake_which), self._ok_run() as fake:
+            update_runner.run_installer("windows")
+        self.assertEqual(fake.call_args.args[0][0], "/usr/bin/pwsh")
+
+    def test_falls_back_to_powershell_when_pwsh_is_absent(self):
+        def fake_which(name):
+            return {"powershell": "/usr/bin/powershell"}.get(name)
+        with mock.patch.object(update_runner.shutil, "which",
+                               side_effect=fake_which), self._ok_run() as fake:
+            update_runner.run_installer("windows")
+        self.assertEqual(fake.call_args.args[0][0], "/usr/bin/powershell")
+
+    def test_neither_shell_present_fails_without_raising(self):
+        with mock.patch.object(update_runner.shutil, "which",
+                               return_value=None):
+            failure = update_runner.run_installer("windows")
+        self.assertIn("pwsh", failure)
+        self.assertIn("powershell", failure)
+
+    def test_does_not_consult_os_access_for_a_ps1_script(self):
+        with mock.patch.object(update_runner.os, "access") as fake_access, \
+             mock.patch.object(update_runner.shutil, "which",
+                               return_value="/usr/bin/pwsh"), self._ok_run():
+            update_runner.run_installer("windows")
+        fake_access.assert_not_called()
+
+
+class TestVerifyOnWindows(unittest.TestCase):
+    """D6: verify()'s Windows arm is a deliberate no-op beyond the portable
+    --version check -- see verify()'s own docstring for why no reliable
+    stdlib-only tray-liveness check exists, and why silently trusting a
+    healthy launcher beats inventing a check that could false-positive a
+    rollback of a perfectly good update.
+    """
+
+    def setUp(self):
+        self.saved_platform = update_runner.sys.platform
+
+    def tearDown(self):
+        update_runner.sys.platform = self.saved_platform
+
+    def _ok_version_check(self):
+        return mock.patch.object(
+            update_runner.subprocess, "run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""))
+
+    def test_a_healthy_launcher_is_not_rolled_back_for_lack_of_a_tray_check(self):
+        update_runner.sys.platform = "win32"
+        with self._ok_version_check():
+            self.assertEqual(update_runner.verify(["windows"]), "")
+
+    def test_it_logs_rather_than_silently_doing_nothing(self):
+        update_runner.sys.platform = "win32"
+        with self._ok_version_check(), \
+             mock.patch.object(update_runner.log, "info") as fake_info:
+            update_runner.verify(["windows"])
+        fake_info.assert_called_once()
+
+    def test_a_broken_launcher_still_fails_verify_on_windows(self):
+        # The portable half (--version) must still catch a genuinely broken
+        # update even though the tray-specific half is a no-op.
+        update_runner.sys.platform = "win32"
+        with mock.patch.object(
+                update_runner.subprocess, "run",
+                return_value=mock.Mock(returncode=1, stdout="", stderr="boom")):
+            failure = update_runner.verify(["windows"])
+        self.assertIn("exited 1", failure)
+
+    def test_the_windows_liveness_arm_never_runs_off_windows(self):
+        # "windows" can appear in targets off Windows only via the
+        # SMARTBAR_UPDATE_TARGETS test override; the arm must be gated on
+        # sys.platform, not merely on "windows" being present in targets.
+        update_runner.sys.platform = "darwin"
+        with self._ok_version_check(), \
+             mock.patch.object(update_runner.log, "info") as fake_info:
+            update_runner.verify(["windows"])
+        fake_info.assert_not_called()
+
+
+class TestKickstartOnWindows(unittest.TestCase):
+    """D6: kickstart() calls os.getuid(), which win32 CPython does not
+    define at all. Unreachable today (bundled is only True when
+    "macos_swift" is a target, which never happens on win32) but guarded
+    anyway, per the contract, in case that invariant ever changes.
+    """
+
+    def setUp(self):
+        self.saved_platform = update_runner.sys.platform
+
+    def tearDown(self):
+        update_runner.sys.platform = self.saved_platform
+
+    def test_win32_never_calls_launchctl_or_getuid(self):
+        update_runner.sys.platform = "win32"
+        with mock.patch.object(update_runner.subprocess, "run") as fake_run, \
+             mock.patch.object(
+                 update_runner.os, "getuid", create=True,
+                 side_effect=AssertionError("no getuid on win32")):
+            update_runner.kickstart("some.label")
+        fake_run.assert_not_called()
+
+    def test_win32_logs_a_warning_instead_of_crashing(self):
+        update_runner.sys.platform = "win32"
+        with mock.patch.object(update_runner.subprocess, "run"), \
+             mock.patch.object(update_runner.log, "warning") as fake_warn:
+            update_runner.kickstart("some.label")
+        fake_warn.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
