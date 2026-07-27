@@ -166,11 +166,21 @@ class TestSubprocessDecoding(Env):
     """
 
     def test_run_decodes_as_utf8_with_replacement(self):
+        # subprocess.run is stubbed rather than wrapped around a real exec of
+        # a planted "#!/bin/sh" file: Windows' CreateProcess honours no
+        # shebang and finds no PATHEXT match for an extensionless name, so
+        # the real call raises before the kwargs this test is about can be
+        # read. Those kwargs are the entire subject here -- _run()'s
+        # OS-level exec mechanics are not -- so a CompletedProcess stub
+        # proves the same thing on all three platforms.
         os.environ["SMARTBAR_CSWAP"] = write_script(
             self.tmp.name, "cswap", "#!/bin/sh\necho '{}'\n")
+        completed = subprocess.CompletedProcess(
+            args=["cswap", "list", "--json"], returncode=0, stdout="{}",
+            stderr="")
         with mock.patch.object(cswap.subprocess, "run",
-                               wraps=cswap.subprocess.run) as spy:
-            cswap._run(["list", "--json"])
+                               return_value=completed) as spy:
+            self.assertEqual(cswap._run(["list", "--json"]), "{}")
         kwargs = spy.call_args[1]
         self.assertEqual(kwargs.get("encoding"), "utf-8")
         self.assertEqual(kwargs.get("errors"), "replace")
