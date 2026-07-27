@@ -111,6 +111,13 @@ class TestRollbackOnlyRestartsWhatIsThere(Env):
             mock.patch.object(update_runner, "CACHE_DIR", tmp.name),
             mock.patch.object(update_runner, "LOG_FILE",
                               os.path.join(tmp.name, "update.log")),
+            # run_once() calls logging.basicConfig(filename=LOG_FILE), which
+            # opens that file and KEEPS the handle open for the life of the
+            # process. POSIX deletes an open file happily; Windows refuses
+            # with WinError 32, so the TemporaryDirectory cleanup above blew
+            # up on the runner. Logging setup is not what this class is
+            # about, so it is stubbed rather than redirected.
+            mock.patch.object(update_runner.logging, "basicConfig"),
             mock.patch.object(update_runner, "load_state", return_value={}),
             mock.patch.object(update_runner, "save_state"),
             mock.patch.object(update_runner.portable, "lock",
