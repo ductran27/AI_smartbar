@@ -601,6 +601,12 @@ tail ~/.cache/ai-smartbar/warmup.log      # warmup attempts + skip reasons
 tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
 ```
 
+- **Windows: nothing appears and `tray.log` is empty.** The Startup shortcut
+  runs `pythonw.exe`, which has no console — so a failure before logging is
+  configured leaves no trace anywhere. Run it by hand with the console-attached
+  interpreter instead: `venv\Scripts\python.exe bin\ai-smartbar`. Full
+  procedure and the known-unresolved issues are in
+  [`docs/windows-bring-up.md`](docs/windows-bring-up.md).
 - **Purple means spent** — a metric at 100% used is past "critical", so it
   gets its own step in the ramp rather than looking switched off.
 - **A dot is hollow** when there is no measurement behind it (no data yet,

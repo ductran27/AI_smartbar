@@ -178,6 +178,18 @@ so you can see what it says.
   has never been tested against a real `Win32_Process.CommandLine`, and the
   quoting Windows applies there is the part most likely to be wrong.
 
+- **The install probe reads a path under `System32\Tasks`**
+  (`smartbar/update_runner.py:_win_task_file`). `present_installers()` decides
+  this device is installed by stat-ing `%SystemRoot%\System32\Tasks\AI smartbar
+  update` — cheap and side-effect-free, which matters because it runs on every
+  update pass. But it has only ever been exercised against a fake `SystemRoot`
+  in a temp directory. Depending on how the task was registered, reading that
+  file on real Windows can require elevation. **What to watch for:** an update
+  run that logs `no installers detected` while the task is plainly visible in
+  Task Scheduler. If that happens the probe needs the Startup-shortcut half
+  (which lives under the user's own `%APPDATA%` and has no such problem) to
+  carry it, or a `schtasks /query` fallback.
+
 ### Installer checklist
 
 Run these in order, on top of the panel checklist above.
