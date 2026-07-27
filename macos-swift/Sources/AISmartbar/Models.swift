@@ -142,11 +142,20 @@ struct Account: Identifiable, Equatable {
     var status: String     // raw cswap usageStatus ("" when absent)
     var metrics: [Metric]
     var fetchedAt: Date?   // usageFetchedAt: when the measurement was taken
+    // "claude" (cswap slots) or "openai" (OpenAIStatus). OpenAI cards have
+    // no switch button and must not borrow the Claude plan badge or device
+    // count for the same address (pinned by TestOpenAIParity).
+    var provider: String = "claude"
+    var plan: String = ""              // OpenAI cards carry their badge inline
+    var stateTextOverride: String = "" // display text computed by Python
 
     var id: Int { number }
 
     /// Explanation shown when there is no usable usage data ("" otherwise).
     var stateText: String {
+        if !stateTextOverride.isEmpty && metrics.isEmpty {
+            return stateTextOverride
+        }
         if ok { return metrics.isEmpty ? "No usage data" : "" }
         return AccountState.text(forStatus: status)
     }

@@ -124,6 +124,10 @@ def _card(shapes, hits, account, top, now, hover):
                               size=t.SIZE_CHIP, bold=True, anchor="center",
                               color=(1, 1, 1, 1)))
         control_l = chip_x
+    elif getattr(account, "provider", "claude") != "claude":
+        # No switcher exists for a ChatGPT login: a remembered account is a
+        # read-only card, so the header keeps the full width instead.
+        control_l = inner_r
     else:
         # A dead stored credential must not be switchable: activating it
         # would restore a login Anthropic already rejected.
@@ -174,8 +178,15 @@ def _card(shapes, hits, account, top, now, hover):
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
-          fetched_at="", stale=False, error="", now=None, hover="") -> t.Layout:
-    """Positioned primitives + hit rects for the whole popover."""
+          fetched_at="", stale=False, error="", now=None, hover="",
+          provider="") -> t.Layout:
+    """Positioned primitives + hit rects for the whole popover.
+
+    `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
+    to Claude when it has accounts, else OpenAI. The tab row itself exists
+    only when BOTH providers have accounts — a single-provider machine gets
+    exactly the layout it always had.
+    """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
     right = t.WIDTH - t.PAD
@@ -201,21 +212,56 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
 
     cursor = t.PAD + t.HEADER_H + t.SECTION_GAP
     accounts = list(snapshot.accounts) if snapshot is not None else []
+    openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
+    selected = provider or ("openai" if openai and not accounts else "claude")
+    if accounts and openai:
+        # The tab row is part of the header block, not a section of its
+        # own, so it sits TAB_TOP_GAP under the title instead of a full
+        # SECTION_GAP (mirrored by PopoverView's nested header VStack).
+        cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
+        x = t.PAD
+        cy = cursor + t.TAB_H / 2
+        for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
+            current = name == selected
+            width = (t.text_width(text, t.SIZE_CAPTION, bold=current)
+                     + t.BUTTON_PAD_H * 2)
+            hit_name = f"tab:{name}"
+            # Faded / not-faded, not colored: the selected provider is full
+            # strength and the other recedes (mirrored by tabButton in
+            # PopoverView.swift).
+            if current:
+                fill, color = t.TAB_BG_SELECTED, t.TEXT
+            elif hover == hit_name:
+                fill, color = t.TAB_BG_HOVER, t.TEXT
+            else:
+                fill, color = t.TAB_BG, t.TEXT_TERTIARY
+            shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
+                                radius=t.BUTTON_H / 2, fill=fill))
+            shapes.append(t.Label(x + width / 2, cy, text,
+                                  size=t.SIZE_CAPTION, bold=current,
+                                  anchor="center", color=color))
+            hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
+                              t.BUTTON_H))
+            x += width + t.TAB_GAP
+        cursor += t.TAB_H + t.SECTION_GAP
+    cards = accounts if selected == "claude" else openai
     if snapshot is None:
         shapes.append(t.Label(t.PAD, cursor + t.STATE_ROW_H / 2,
                               error or "Loading usage…", size=t.SIZE_CAPTION,
                               color=t.WARNING if error else t.TEXT_SECONDARY,
                               max_width=right - t.PAD))
         cursor += t.STATE_ROW_H + t.CARD_GAP
-    elif snapshot.active_account is None:
+    elif selected == "claude" and snapshot.active_account is None:
+        # cswap registration is a Claude story; the OpenAI tab never begs
+        # the user to sign in to Claude Code.
         shapes.append(t.Label(t.PAD, cursor + t.STATE_ROW_H / 2,
                               NO_ACCOUNTS if not accounts else UNREGISTERED,
                               size=t.SIZE_CAPTION, color=t.TEXT_SECONDARY,
                               max_width=right - t.PAD))
         cursor += t.STATE_ROW_H + t.CARD_GAP
-    for account in accounts:
+    for account in cards:
         cursor += _card(shapes, hits, account, cursor, now, hover) + t.CARD_GAP
-    if accounts:
+    if cards:
         cursor -= t.CARD_GAP
 
     cursor += t.SECTION_GAP

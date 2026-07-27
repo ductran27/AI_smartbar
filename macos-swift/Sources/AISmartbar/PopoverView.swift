@@ -7,17 +7,31 @@ import SwiftUI
 struct PopoverView: View {
     @EnvironmentObject private var store: UsageStore
     @EnvironmentObject private var updates: UpdateStatus
+    @EnvironmentObject private var openai: OpenAIStatus
+    @AppStorage("providerTab") private var providerTab = "claude"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
+            // The tab row rides the header (TAB_TOP_GAP in the shared
+            // theme) rather than being a section of its own — spacing 2
+            // instead of the theme's 3 because the 28pt header controls
+            // already leave slack under the title that the 22pt cairo
+            // header does not.
+            VStack(alignment: .leading, spacing: 2) {
+                header
+                if showsTabs {
+                    providerTabs
+                }
+            }
             if let switchError = store.switchError {
                 Label(switchError, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)
             }
-            if let snapshot = store.snapshot {
+            if selectedProvider == "openai" {
+                openAIList
+            } else if let snapshot = store.snapshot {
                 if snapshot.activeAccount == nil {
                     Label(snapshot.accounts.isEmpty
                             ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
@@ -44,6 +58,64 @@ struct PopoverView: View {
         .onAppear {
             store.refresh()
             updates.reload()
+            openai.refresh()
+        }
+    }
+
+    private var hasClaudeAccounts: Bool {
+        !(store.snapshot?.accounts.isEmpty ?? true)
+    }
+
+    /// The tab row exists only when BOTH providers have accounts — a
+    /// single-provider Mac keeps exactly the popover it always had
+    /// (mirror of popover_layout.build's rule).
+    private var showsTabs: Bool {
+        hasClaudeAccounts && !openai.accounts.isEmpty
+    }
+
+    private var selectedProvider: String {
+        if showsTabs { return providerTab == "openai" ? "openai" : "claude" }
+        return (!openai.accounts.isEmpty && !hasClaudeAccounts)
+            ? "openai" : "claude"
+    }
+
+    private var providerTabs: some View {
+        HStack(spacing: 6) {
+            tabButton("Claude", id: "claude")
+            tabButton("OpenAI", id: "openai")
+            Spacer()
+        }
+    }
+
+    /// Faded / not-faded rather than colored: the selected provider reads
+    /// full strength, the other recedes (mirror of the cairo tab pills —
+    /// popover_theme.TAB_BG*).
+    private func tabButton(_ title: String, id: String) -> some View {
+        let selected = selectedProvider == id
+        return Button { providerTab = id } label: {
+            Text(title)
+                .font(.caption.weight(selected ? .semibold : .regular))
+                .foregroundStyle(Color.white.opacity(selected ? 0.92 : 0.45))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule()
+                    .fill(Color.white.opacity(selected ? 0.16 : 0.06)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var openAIList: some View {
+        let cards = VStack(spacing: 7) {
+            ForEach(openai.accounts) { account in
+                AccountCardView(account: account)
+            }
+        }
+        if openai.accounts.count > 4 {
+            ScrollView(showsIndicators: false) { cards }
+                .frame(maxHeight: 440)
+        } else {
+            cards
         }
     }
 
@@ -136,7 +208,10 @@ struct PopoverView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12.5, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    // 28pt keeps a comfortable pointer target without the
+                    // 44pt frame padding the whole header row out — the gap
+                    // between the title and the cards/tabs was mostly this.
+                    .frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)
