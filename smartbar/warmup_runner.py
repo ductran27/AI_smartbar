@@ -14,7 +14,6 @@ path itself must never appear there.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -24,11 +23,10 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-from smartbar.core import cswap, warmup
+from smartbar.core import cswap, paths, portable, warmup
 from smartbar.core.cswap import CswapError
 
-CACHE_DIR = (os.environ.get("SMARTBAR_CACHE_DIR")
-             or os.path.expanduser("~/.cache/ai-smartbar"))
+CACHE_DIR = paths.cache_dir()
 STATE_FILE = os.path.join(CACHE_DIR, "warmup-state.json")
 LOCK_FILE = os.path.join(CACHE_DIR, "warmup.lock")
 LOG_FILE = os.path.join(CACHE_DIR, "warmup.log")
@@ -38,12 +36,47 @@ log = logging.getLogger("ai-smartbar-warmup")
 
 
 def claude_binary():
+    """The `claude` CLI: env override, then PATH, then well-known installs.
+
+    Both the fallback list and the test for "is this candidate runnable"
+    are platform-specific. On POSIX `os.access(candidate, os.X_OK)` is a
+    real permission check; Windows has no execute bit — a file is
+    executable if its extension says so — so that test degrades into a
+    clumsy existence check, and the POSIX candidate paths are wrong there
+    anyway (nothing installs into /opt/homebrew/bin). Windows installs of
+    the CLI land under %APPDATA%\\npm (a global npm install) or
+    %LOCALAPPDATA%\\Programs\\claude (the packaged installer), named
+    claude.cmd or claude.exe depending on which, so the win32 arm walks
+    both directories against every extension PATHEXT lists and confirms
+    with os.path.isfile — which is what actually matters there.
+    """
     override = os.environ.get("SMARTBAR_CLAUDE")
     if override:
         return override
     found = shutil.which("claude")
     if found:
         return found
+    if sys.platform == "win32":
+        directories = []
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            directories.append(os.path.join(appdata, "npm"))
+        localappdata = os.environ.get("LOCALAPPDATA")
+        if localappdata:
+            directories.append(os.path.join(localappdata, "Programs", "claude"))
+        exts = [ext for ext
+                in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+                if ext]
+        # Lower-cased because what npm and the installer actually write is
+        # "claude.cmd", not PATHEXT's traditional upper case. On Windows the
+        # case would not matter, but this suite also runs on case-SENSITIVE
+        # CI filesystems, where an uppercase candidate misses the real file.
+        for directory in directories:
+            for ext in [""] + [e.lower() for e in exts]:
+                candidate = os.path.join(directory, "claude" + ext)
+                if os.path.isfile(candidate):
+                    return candidate
+        return None
     for candidate in (os.path.expanduser("~/.local/bin/claude"),
                       "/opt/homebrew/bin/claude",
                       "/usr/local/bin/claude"):
@@ -57,13 +90,33 @@ def env_with_claude_on_path(claude: str) -> dict:
 
     Prepends the resolved binary's own directory plus the usual install
     dirs to whatever PATH launchd handed us (deduplicated, order kept).
+
+    Which dirs those are, and what to fall back to when PATH is missing
+    altogether, are both platform-specific: launchd's bare "/usr/bin:/bin"
+    default is a POSIX thing, and ~/.local/bin, /opt/homebrew/bin and
+    /usr/local/bin are POSIX locations nothing on Windows ever populates.
+    The win32 equivalent is the same %APPDATA%\\npm /
+    %LOCALAPPDATA%\\Programs\\claude pair claude_binary() searches, with
+    %SystemRoot% as the fallback instead of a path that resolves nothing.
     """
     env = dict(os.environ)
-    prepend = [os.path.dirname(os.path.abspath(claude)),
-               os.path.expanduser("~/.local/bin"),
-               "/opt/homebrew/bin", "/usr/local/bin"]
+    claude_dir = os.path.dirname(os.path.abspath(claude))
+    if sys.platform == "win32":
+        prepend = [claude_dir]
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            prepend.append(os.path.join(appdata, "npm"))
+        localappdata = os.environ.get("LOCALAPPDATA")
+        if localappdata:
+            prepend.append(os.path.join(localappdata, "Programs", "claude"))
+        default_path = os.environ.get("SystemRoot", "C:\\Windows")
+    else:
+        prepend = [claude_dir,
+                   os.path.expanduser("~/.local/bin"),
+                   "/opt/homebrew/bin", "/usr/local/bin"]
+        default_path = "/usr/bin:/bin"
     parts = []
-    for part in prepend + env.get("PATH", "/usr/bin:/bin").split(os.pathsep):
+    for part in prepend + env.get("PATH", default_path).split(os.pathsep):
         if part and part not in parts:
             parts.append(part)
     env["PATH"] = os.pathsep.join(parts)
@@ -103,6 +156,19 @@ def save_state(state: dict) -> None:
 
 
 def notify_failure(title: str, body: str) -> None:
+    """Best-effort desktop notification, one native mechanism per platform.
+
+    Every branch is subprocess.run(..., check=False) under a blanket
+    `except OSError`, because a notification failing must never fail the
+    warmup run itself. That swallowing is exactly what makes a MISSING
+    branch dangerous: with no win32 arm the else branch shells out to
+    notify-send, which is not there, and the FileNotFoundError it raises is
+    an OSError the handler below eats silently — every warmup notification
+    on Windows would vanish leaving nothing in the log to say why. The
+    win32 arm drives the WinRT toast API through PowerShell: the closest
+    dependency-free analogue to osascript, needing no extra package, only
+    the interpreter every Windows box already ships.
+    """
     if os.environ.get("SMARTBAR_WARMUP_NOTIFY", "") == "off":
         return
     try:
@@ -111,6 +177,28 @@ def notify_failure(title: str, body: str) -> None:
                       .format(body.replace('"', '\\"'), title.replace('"', '\\"')))
             subprocess.run(["/usr/bin/osascript", "-e", script],
                            timeout=10, check=False)
+        elif sys.platform == "win32":
+            # '' is how a single quote is escaped inside a PowerShell
+            # single-quoted string; nothing else needs escaping there.
+            quoted_title = title.replace("'", "''")
+            quoted_body = body.replace("'", "''")
+            script = (
+                "[Windows.UI.Notifications.ToastNotificationManager, "
+                "Windows.UI.Notifications, ContentType=WindowsRuntime] > $null; "
+                "$xml = [Windows.UI.Notifications.ToastNotificationManager]"
+                "::GetTemplateContent("
+                "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+                "$t = $xml.GetElementsByTagName('text'); "
+                f"$t.Item(0).AppendChild($xml.CreateTextNode('{quoted_title}'))"
+                " > $null; "
+                f"$t.Item(1).AppendChild($xml.CreateTextNode('{quoted_body}'))"
+                " > $null; "
+                "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+                "[Windows.UI.Notifications.ToastNotificationManager]"
+                "::CreateToastNotifier('AI smartbar').Show($toast)")
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive",
+                            "-Command", script],
+                           timeout=10, check=False, **portable.no_window())
         else:
             subprocess.run(["notify-send", "-u", "normal", title, body],
                            timeout=10, check=False)
@@ -126,7 +214,8 @@ def ping(account_number: int, claude: str) -> tuple[bool, str]:
         try:
             proc = subprocess.run(ping_argv(account_number, extra),
                                   capture_output=True, text=True,
-                                  timeout=PING_TIMEOUT, env=env)
+                                  timeout=PING_TIMEOUT, env=env,
+                                  **portable.no_window())
         except subprocess.TimeoutExpired:
             return False, f"ping timed out after {PING_TIMEOUT}s"
         except OSError as exc:
@@ -141,10 +230,10 @@ def run_once() -> int:
     os.makedirs(CACHE_DIR, exist_ok=True)
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    lock = open(LOCK_FILE, "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    # Bound to a local for the rest of the run on purpose: dropping the last
+    # reference to the handle releases the lock (see core.portable.lock).
+    lock = portable.lock(LOCK_FILE)
+    if lock is None:
         log.info("another warmup run is in progress; skipping")
         return 0
 

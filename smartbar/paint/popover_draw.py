@@ -1,12 +1,13 @@
 """Cairo painter for a popover Layout — imports cairo, never gi.
 
-Staying GTK-free is deliberate: `ai-smartbar --preview-popover` can then
-render the exact Linux panel to a PNG on any machine with pycairo, which is
-how this UI gets reviewed without a Linux desktop in the loop.
+Staying toolkit-free is deliberate, and is what lets every platform share
+one painter: `ai-smartbar --preview-popover` renders the exact panel each of
+them shows to a PNG on any machine with pycairo, which is how this UI gets
+reviewed without a desktop session in the loop.
 
 Everything is painted rather than themed, so the panel looks the same on
-XFCE, GNOME and KDE and matches the macOS popover instead of inheriting a
-distro's widget style.
+XFCE, GNOME, KDE and Windows, and matches the macOS popover instead of
+inheriting whatever widget style the host happens to supply.
 """
 from __future__ import annotations
 

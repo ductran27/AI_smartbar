@@ -38,11 +38,13 @@ _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 # Installers re-run after a successful checkout, in apply order: the UI
 # this device actually runs, then the side agents (whose plist bodies only
 # change on re-install), then the updater's own agent last.
-APPLY_ORDER = ("macos_swift", "macos_python", "linux", "warmup", "update_agent")
+APPLY_ORDER = ("macos_swift", "macos_python", "linux", "windows", "warmup",
+               "update_agent")
 INSTALLERS = {
     "macos_swift": "install/macos-swift.sh",
     "macos_python": "install/macos.sh",
     "linux": "install/linux.sh",
+    "windows": "install/windows.ps1",
     "warmup": "install/macos-warmup.sh",
     "update_agent": "install/macos-update.sh",
 }
@@ -90,6 +92,18 @@ def cron_spec(seconds: float) -> str:
     if minutes < 60:
         return f"*/{minutes} * * * *"
     return f"17 */{min(23, max(1, int(round(minutes / 60.0))))} * * *"
+
+
+def minutes_spec(seconds: float) -> int:
+    """Whole minutes for a Task Scheduler repetition interval.
+
+    Task Scheduler's repetition trigger has no sub-minute resolution, so this
+    is the Windows analogue of cron_spec — same rounding, same floor. The
+    floor is defensive rather than the normal case: by the time a caller
+    reaches this, check_interval() has already applied MIN_CHECK_INTERVAL
+    (300 s / 5 min), so 1 only fires if that floor is ever lowered.
+    """
+    return max(1, int(round((seconds or 0) / 60.0)))
 
 
 def parse_version(text):

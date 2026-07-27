@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from smartbar.core import presence
+from smartbar.core import portable, presence
 
 REPO_ROOT = os.path.dirname(os.path.dirname(
     os.path.realpath(os.path.abspath(__file__))))
@@ -57,11 +57,14 @@ def counts() -> dict:
 
 def _spawn(args, payload: str) -> None:
     try:
-        proc = subprocess.Popen([sys.executable, LAUNCHER, *args],
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                start_new_session=True)
+        # portable.spawn_detached picks start_new_session=True on POSIX (the
+        # byte-identical behaviour this had before) or the DETACHED_PROCESS /
+        # CREATE_NEW_PROCESS_GROUP pair on win32, where start_new_session is
+        # not a valid Popen keyword at all.
+        proc = portable.spawn_detached([sys.executable, LAUNCHER, *args],
+                                       stdin=subprocess.PIPE,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
     except OSError:
         log.exception("could not start %s", " ".join(args))
         return
