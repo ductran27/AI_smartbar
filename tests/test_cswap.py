@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+from unittest import mock
 
 from smartbar.core import cswap
 
@@ -86,6 +87,54 @@ class TestBinary(unittest.TestCase):
         os.environ["SMARTBAR_CSWAP"] = "/nonexistent/cswap"
         try:
             self.assertEqual(cswap._binary(), "/nonexistent/cswap")
+        finally:
+            del os.environ["SMARTBAR_CSWAP"]
+
+
+class TestBinaryWindowsBatchGuard(unittest.TestCase):
+    """Windows silently reruns a resolved .bat/.cmd through cmd.exe, which
+    re-parses the whole argv (the "BatBadBut" class of bug) — a fourth
+    quoting context SMARTBAR_CSWAP's value never passes through on POSIX.
+    CPython has not closed this at the subprocess layer as of 3.13
+    (list2cmdline() still only implements MSVCRT-style escaping). Pins the
+    decision from the port-review gap: refuse the resolved extension rather
+    than try to out-escape cmd.exe.
+    """
+
+    def test_batch_extension_refused_on_windows(self):
+        os.environ["SMARTBAR_CSWAP"] = "/nonexistent/cswap.bat"
+        try:
+            with mock.patch.object(cswap.sys, "platform", "win32"):
+                with self.assertRaises(cswap.CswapError):
+                    cswap._binary()
+        finally:
+            del os.environ["SMARTBAR_CSWAP"]
+
+    def test_cmd_extension_refused_on_windows_case_insensitive(self):
+        os.environ["SMARTBAR_CSWAP"] = r"C:\tools\cswap.CMD"
+        try:
+            with mock.patch.object(cswap.sys, "platform", "win32"):
+                with self.assertRaises(cswap.CswapError):
+                    cswap._binary()
+        finally:
+            del os.environ["SMARTBAR_CSWAP"]
+
+    def test_batch_extension_allowed_off_windows(self):
+        # POSIX has no equivalent OS-level shell respawn for these
+        # extensions, so the same value is inert there — matches
+        # device_config.py's _BAD_VALUE_WIN comment.
+        os.environ["SMARTBAR_CSWAP"] = "/nonexistent/cswap.bat"
+        try:
+            with mock.patch.object(cswap.sys, "platform", "darwin"):
+                self.assertEqual(cswap._binary(), "/nonexistent/cswap.bat")
+        finally:
+            del os.environ["SMARTBAR_CSWAP"]
+
+    def test_exe_extension_allowed_on_windows(self):
+        os.environ["SMARTBAR_CSWAP"] = r"C:\tools\cswap.exe"
+        try:
+            with mock.patch.object(cswap.sys, "platform", "win32"):
+                self.assertEqual(cswap._binary(), r"C:\tools\cswap.exe")
         finally:
             del os.environ["SMARTBAR_CSWAP"]
 

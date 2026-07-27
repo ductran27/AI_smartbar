@@ -939,5 +939,96 @@ class TestTooltipTruncationCountsUtf16CodeUnits(GuiStubbedTestCase):
         fitted.encode("utf-16-le").decode("utf-16-le")
 
 
+class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
+    """The v0.8.0 OpenAI-tab feature (linux/tray.py:122-3): a "tab:..." hit
+    must update self.provider, and the very next popover layout must be
+    built with that provider -- mirroring linux/tray.py:111's
+    `provider=self.provider` passthrough. Proven by mutation: a dispatcher
+    that recognises "tab:" but forgets to write self.provider would pass
+    every hit-name-recognition test above while leaving the OpenAI tab
+    permanently stuck on whichever provider auto-resolves first.
+    """
+
+    def test_tab_hit_sets_provider_and_next_layout_uses_it(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = mod.Tray.__new__(mod.Tray)
+        tray.popover = None
+        tray.provider = ""
+        tray._quit = mock.Mock()
+        tray._start_fetch = mock.Mock()
+        tray._on_update = mock.Mock()
+        tray._on_switch = mock.Mock()
+
+        tray._on_popover_action("tab:openai")
+        self.assertEqual(tray.provider, "openai")
+        tray._quit.assert_not_called()
+        tray._start_fetch.assert_not_called()
+        tray._on_update.assert_not_called()
+        tray._on_switch.assert_not_called()
+
+        # The next layout build must carry the provider just set above --
+        # this is what actually makes the click switch panel tabs.
+        tray.snapshot = None
+        tray.update_pending = ""
+        tray.update_blocked = ""
+        tray.failures = 0
+        tray.last_error = ""
+        with mock.patch.object(mod.popover_layout, "build") as fake_build:
+            tray._popover_layout(hover="quit")
+        _args, kwargs = fake_build.call_args
+        self.assertEqual(kwargs.get("provider"), "openai")
+
+
+class TestApplySnapshotStampsPlanBadgesAndOpenaiAccounts(GuiStubbedTestCase):
+    """The v0.7.0 plan-badge and v0.8.0 OpenAI-tab features
+    (linux/tray.py:420-3): every applied snapshot must be stamped with plan
+    badges and the ChatGPT account list before anything renders -- the
+    painter and popover_layout already know how to draw both, so a missing
+    call here is a silent parity gap, not a crash.
+    """
+
+    def _tray_ready_for_apply_snapshot(self, mod):
+        tray = mod.Tray.__new__(mod.Tray)
+        tray.generation = 0
+        tray.failures = 1
+        tray.last_error = "boom"
+        tray.snapshot = None
+        tray.presence_started = True  # skip the first-snapshot beat() call
+        tray.popover = None
+        tray.icon = mock.Mock()
+        tray.alerts = mock.Mock()
+        tray.alerts.check.return_value = []
+        tray.recapture = mock.Mock()
+        tray.recapture.action.return_value = None
+        tray._pending_update = mock.Mock(return_value="")
+        tray._set_icon = mock.Mock()
+        tray._refresh_menu = mock.Mock()
+        return tray
+
+    def test_apply_snapshot_stamps_plan_badges_and_openai_accounts(self):
+        mod = _reimport("smartbar.windows.tray")
+        from smartbar.core import model as core_model
+
+        tray = self._tray_ready_for_apply_snapshot(mod)
+        snap = core_model.Snapshot(accounts=[])
+        fake_openai_accounts = [mock.Mock(name="chatgpt-account")]
+
+        with mock.patch.object(mod, "presence_client") as fake_presence_client, \
+             mock.patch.object(mod.plan, "apply_plans") as fake_apply_plans, \
+             mock.patch.object(
+                 mod.plan, "plans_by_email",
+                 return_value={"a@example.com": "Max"}) as fake_plans_by_email, \
+             mock.patch.object(
+                 mod.codex, "accounts",
+                 return_value=fake_openai_accounts) as fake_accounts:
+            fake_presence_client.counts.return_value = {}
+            tray._apply_snapshot(snap, 0)
+
+        fake_plans_by_email.assert_called_once_with()
+        fake_apply_plans.assert_called_once_with(snap, fake_plans_by_email.return_value)
+        fake_accounts.assert_called_once_with()
+        self.assertEqual(snap.openai, fake_openai_accounts)
+
+
 if __name__ == "__main__":
     unittest.main()

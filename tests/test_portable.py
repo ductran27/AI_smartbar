@@ -18,10 +18,13 @@ class TestLockIsExclusive(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        # Deliberately addCleanup rather than `def tearDown: self.tmp.cleanup()`.
+        # unittest runs tearDown BEFORE the callbacks a test method registers,
+        # so a tearDown delete would run while this test's lock handle is still
+        # open. POSIX unlinks an open file happily; Windows raises WinError 32.
+        # Same queue means LIFO order: handles close, then the directory goes.
+        self.addCleanup(self.tmp.cleanup)
         self.path = os.path.join(self.tmp.name, "run.lock")
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def test_a_second_lock_while_the_first_is_held_returns_none(self):
         first = portable.lock(self.path)
