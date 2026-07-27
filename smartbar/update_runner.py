@@ -80,6 +80,28 @@ def save_state(state: dict) -> None:
             pass
 
 
+def pending_for_ui():
+    """(version waiting, why one is held back) for a tray row — never raises.
+
+    All three front-ends carried a byte-for-byte copy of this: load_state(),
+    read "reason" when the action is blocked, then update.pending_version().
+    None of it is toolkit-bound, so it had no reason to exist three times —
+    and the macOS copy had already dropped the blocked half, which is how
+    that front-end ended up unable to say why an update was being withheld.
+
+    The broad except is deliberate and inherited: a truncated or absent state
+    file must never be able to take a tray down over a menu row.
+    """
+    try:
+        state = load_state()
+        blocked = (state.get("reason", "")
+                   if state.get("action") == update.BLOCKED else "")
+        return update.pending_version(state), blocked
+    except Exception:
+        log.exception("could not read the update state")
+        return "", ""
+
+
 def _win32_notify(title: str, body: str) -> None:
     """Best-effort Windows balloon notification for the headless update pass.
 
@@ -167,7 +189,12 @@ def notify(title: str, body: str) -> None:
         else:
             subprocess.run(["notify-send", "-u", "normal", title, body],
                            timeout=10, check=False)
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
+        # TimeoutExpired is a SubprocessError, NOT an OSError, so the bare
+        # OSError this replaces let a hung osascript/notify-send escape. Both
+        # calls above set timeout=, so the exception is reachable, and notify()
+        # is called from run_once()'s failure arm where an escape loses the
+        # exit code the caller acts on.
         log.exception("notification failed")
 
 
@@ -252,14 +279,26 @@ def backup_bundle() -> bool:
     return True
 
 
-def restore_bundle() -> None:
+def restore_bundle() -> bool:
+    """Put the known-good bundle back; True only if it is actually there after.
+
+    Returns a bool for the same reason backup_bundle() above does -- the
+    caller has to know. The rmtree() runs BEFORE the move that can fail, so
+    a failed restore leaves no bundle at all, and run_once()'s rollback arm
+    would otherwise walk straight on to kickstart() a LaunchAgent whose
+    program it has just deleted. That is precisely the "a bad release must
+    never leave a device with no menu bar" outcome this module exists to
+    prevent, reached through the code written to prevent it.
+    """
     if not os.path.isdir(BUNDLE_BACKUP):
-        return
+        return False
     shutil.rmtree(APP_BUNDLE, ignore_errors=True)
     try:
         shutil.move(BUNDLE_BACKUP, APP_BUNDLE)
     except OSError:
         log.exception("could not restore the app bundle")
+        return False
+    return True
 
 
 def drop_backup() -> None:
@@ -298,9 +337,17 @@ def kickstart(label: str) -> None:
         # does not define at all.
         log.warning("kickstart() has no launchctl equivalent on win32")
         return
-    subprocess.run(["/bin/launchctl", "kickstart", "-k",
-                    f"gui/{os.getuid()}/{label}"],
-                   capture_output=True, timeout=60, check=False)
+    try:
+        subprocess.run(["/bin/launchctl", "kickstart", "-k",
+                        f"gui/{os.getuid()}/{label}"],
+                       capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        # agent_status(), run_installer() and verify() all already catch this
+        # pair; this call did not. It is reached from run_once()'s rollback
+        # arm, and an escape there skips the record_failure/save_state/notify
+        # that follow it -- the update fails with nothing written down, no
+        # notification, and a non-zero exit the caller never sees.
+        log.exception("could not kickstart %s", label)
 
 
 def run_installer(key: str) -> str:
@@ -515,8 +562,12 @@ def run_once(*, reset: bool = False, force: bool = False,
         log.error("update to %s failed: %s — rolling back", plan.target_ref, failure)
         update_git.restore(prev_head, prev_branch)
         if bundled:
-            restore_bundle()      # the previous binary, already known good
-            kickstart(APP_LABEL)
+            if restore_bundle():  # the previous binary, already known good
+                kickstart(APP_LABEL)
+            else:
+                # Nothing to restart: kickstarting the agent now would only
+                # respawn a job whose program is missing, in a loop.
+                log.error("app bundle not restored — leaving the agent down")
         else:
             for key in targets:   # cheap for the non-Swift shapes
                 run_installer(key)

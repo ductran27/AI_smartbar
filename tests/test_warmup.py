@@ -72,24 +72,68 @@ class TestWindowIdle(Env):
         self.assertEqual(warmup.parse_iso(past_z).tzinfo, timezone.utc)
 
 
+def at_local_hour(hour):
+    """A UTC-aware instant whose LOCAL clock reads `hour` on whatever host runs this.
+
+    The tests below used NOW.replace(hour=...) on a UTC datetime, which only
+    described the intended scenario on a machine whose local zone IS UTC --
+    i.e. the CI runners, and not the machine this was written on.
+    """
+    return datetime(2026, 7, 19, hour, 0).astimezone().astimezone(timezone.utc)
+
+
+class _SplitClock:
+    """A datetime stand-in whose UTC hour and local hour deliberately differ.
+
+    Needed because a real datetime cannot express that on a UTC host: there,
+    at_local_hour() above produces an instant whose two hours are equal, so a
+    test built from it passes whether or not the code localises, and the CI
+    runners are all UTC. This stub pins the behaviour itself -- that
+    in_quiet_hours() goes through astimezone() before reading .hour -- and it
+    does so identically on every host.
+    """
+
+    def __init__(self, hour, local_hour):
+        self.hour = hour
+        self._local_hour = local_hour
+
+    def astimezone(self):
+        return _SplitClock(self._local_hour, self._local_hour)
+
+
 class TestQuietHours(Env):
     def test_empty_never_quiet(self):
-        self.assertFalse(warmup.in_quiet_hours("", NOW.replace(hour=3)))
+        self.assertFalse(warmup.in_quiet_hours("", at_local_hour(3)))
 
     def test_plain_range(self):
-        self.assertTrue(warmup.in_quiet_hours("13-15", NOW.replace(hour=13)))
-        self.assertTrue(warmup.in_quiet_hours("13-15", NOW.replace(hour=14)))
-        self.assertFalse(warmup.in_quiet_hours("13-15", NOW.replace(hour=15)))
-        self.assertFalse(warmup.in_quiet_hours("13-15", NOW.replace(hour=12)))
+        self.assertTrue(warmup.in_quiet_hours("13-15", at_local_hour(13)))
+        self.assertTrue(warmup.in_quiet_hours("13-15", at_local_hour(14)))
+        self.assertFalse(warmup.in_quiet_hours("13-15", at_local_hour(15)))
+        self.assertFalse(warmup.in_quiet_hours("13-15", at_local_hour(12)))
 
     def test_wraps_midnight(self):
-        self.assertTrue(warmup.in_quiet_hours("23-05", NOW.replace(hour=23)))
-        self.assertTrue(warmup.in_quiet_hours("23-05", NOW.replace(hour=2)))
-        self.assertFalse(warmup.in_quiet_hours("23-05", NOW.replace(hour=5)))
-        self.assertFalse(warmup.in_quiet_hours("23-05", NOW.replace(hour=12)))
+        self.assertTrue(warmup.in_quiet_hours("23-05", at_local_hour(23)))
+        self.assertTrue(warmup.in_quiet_hours("23-05", at_local_hour(2)))
+        self.assertFalse(warmup.in_quiet_hours("23-05", at_local_hour(5)))
+        self.assertFalse(warmup.in_quiet_hours("23-05", at_local_hour(12)))
 
     def test_garbage_never_quiet(self):
-        self.assertFalse(warmup.in_quiet_hours("night", NOW.replace(hour=3)))
+        self.assertFalse(warmup.in_quiet_hours("night", at_local_hour(3)))
+
+    def test_reads_the_local_hour_and_not_the_utc_one(self):
+        """The bug this prevents: "23-05" silencing the user's whole morning.
+
+        warmup_runner passes datetime.now(timezone.utc), so reading now.hour
+        made the setting mean UTC. On a UTC+7 device "23-05" then covered
+        06:00-12:00 local and left 3am wide open -- the exact inverse of what
+        the README says the setting does.
+        """
+        # 20:00 UTC is 03:00 the next morning at UTC+7: inside "23-05".
+        self.assertTrue(warmup.in_quiet_hours("23-05", _SplitClock(20, 3)))
+        # 23:00 UTC is 06:00 there: outside it, though the UTC hour says 23.
+        self.assertFalse(warmup.in_quiet_hours("23-05", _SplitClock(23, 6)))
+        # And the plain (non-wrapping) branch localises too.
+        self.assertTrue(warmup.in_quiet_hours("13-15", _SplitClock(7, 14)))
 
 
 class TestShouldWarm(Env):

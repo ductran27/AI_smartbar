@@ -202,7 +202,14 @@ def notify_failure(title: str, body: str) -> None:
         else:
             subprocess.run(["notify-send", "-u", "normal", title, body],
                            timeout=10, check=False)
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
+        # TimeoutExpired is a SubprocessError, not an OSError. Every branch
+        # above sets timeout=10, so the bare OSError this replaces could not
+        # catch a notifier that HANGS -- only one that fails to start. This
+        # runs inside run_once()'s `for account in snap.accounts` loop, and a
+        # session-less timer/cron run with no D-Bus daemon is exactly where
+        # notify-send hangs, so the escape aborted the whole warmup batch
+        # part-way through instead of skipping one notification.
         log.exception("notification failed")
 
 
