@@ -379,9 +379,25 @@ how it opens there and for what is still unverified. Everything below
 this point is Linux-specific plumbing (StatusNotifier, DBus, xfwm4) and
 does not apply to Windows.
 
+**Where it opens, and moving it.** The panel opens in the top-right corner
+of the work area, and any part of it — cards and buttons included — is a
+drag handle: a press that travels moves the panel, a press that stays put
+is the click it always was. The spot a drag ends on is remembered
+(`~/.cache/ai-smartbar/panel-position.json`) and reused until the monitor
+it was on goes away, at which point the panel re-parks in its corner.
+
+On a Wayland desktop the tray prefers X11 via XWayland (it sets
+`GDK_BACKEND=x11,wayland` at startup; an explicit `GDK_BACKEND` wins),
+because a native Wayland client can neither choose where its window opens —
+GNOME just centers it — nor move itself, which is exactly the placement and
+the drag above. A session with no X server at all falls back to native
+Wayland: the compositor places the panel, and a drag hands the gesture to
+the compositor instead of moving the window by hand.
+
 **Or keep it up permanently.** `SMARTBAR_PANEL=always` turns the panel into a
 desktop readout instead of a popover: shown at startup, never auto-hidden,
-anchored to the top-right of the work area, on every workspace, and never
+anchored to the top-right of the work area (or wherever you last dragged
+it), on every workspace, and never
 taking keyboard focus so it cannot steal typing from the app underneath. The
 tray icon and its menu stay exactly as they are. This is the zero-gesture
 option for hosts where a click cannot reach the app at all (see below).

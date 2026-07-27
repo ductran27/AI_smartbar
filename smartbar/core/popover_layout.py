@@ -45,6 +45,32 @@ def pin_origin(workareas, size, margin):
     return (x0 + width - panel_w - margin, top + margin)
 
 
+def restore_origin(saved, workareas, size):
+    """A user-dragged origin, if it would still leave the panel grabbable.
+
+    `saved` is the (x, y) a drag ended on — this run or a previous one —
+    and `workareas`/`size` are as in pin_origin. Monitors come and go
+    between sessions, so a remembered spot is honoured only while a decent
+    slice of the panel's top edge — the part you grab to drag it — still
+    lands inside some current work area (at least 60px of width and the
+    top 24px of height). Anything else returns None and the panel re-parks
+    in its default corner rather than stranding itself off-screen.
+    """
+    if not saved:
+        return None
+    try:
+        x, y = int(saved[0]), int(saved[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    panel_w, _panel_h = size
+    for ax, ay, aw, ah in (a for a in workareas if a and a[2] > 0 and a[3] > 0):
+        grab_w = min(x + panel_w, ax + aw) - max(x, ax)
+        grab_h = min(y + 24, ay + ah) - max(y, ay)
+        if grab_w >= 60 and grab_h >= 24:
+            return (x, y)
+    return None
+
+
 def updated_label(fetched_at: str, now=None) -> str:
     """"Updated 2:02 PM" from an ISO stamp, or "" — mirrors the Swift header."""
     stamp = parse_iso(fetched_at)
