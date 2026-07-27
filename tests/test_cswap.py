@@ -43,6 +43,23 @@ class TestParse(unittest.TestCase):
         self.assertFalse(snap.accounts[0].ok)
         self.assertEqual(snap.accounts[0].metrics, [])
 
+    def test_parses_enterprise_spend_budget(self):
+        data = json.loads(self.raw)
+        data["accounts"][0]["usage"] = {
+            "spend": {
+                "used": 48.45,
+                "limit": 350.0,
+                "pct": 13.842857142857143,
+                "currency": "USD",
+            }
+        }
+        snap = cswap.parse_snapshot(json.dumps(data))
+        spend = snap.active_account.metrics[0]
+        self.assertEqual(spend.key, "spend")
+        self.assertEqual(spend.label, "Spend")
+        self.assertEqual(spend.short, "$")
+        self.assertAlmostEqual(spend.pct, 13.842857142857143)
+
     def test_usage_status_carried_through(self):
         data = json.loads(self.raw)
         data["accounts"][0]["usage"] = None

@@ -211,6 +211,8 @@ def parse_snapshot(text: str) -> Snapshot:
                 acct.metrics.append(_metric("5h", "5h", "5h", usage["fiveHour"]))
             if "sevenDay" in usage:
                 acct.metrics.append(_metric("7d", "7d", "7d", usage["sevenDay"]))
+            if "spend" in usage:
+                acct.metrics.append(_metric("spend", "Spend", "$", usage["spend"]))
             for scoped in usage.get("scoped", []):
                 name = scoped.get("name") or "?"
                 acct.metrics.append(_metric(f"scoped:{name}", name,

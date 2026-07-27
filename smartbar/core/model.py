@@ -86,9 +86,9 @@ def panel_pinned() -> bool:
 
 @dataclass
 class Metric:
-    key: str            # "5h", "7d", or "scoped:<Name>"
-    label: str          # "5h", "7d", "Fable"
-    short: str          # "5h", "7d", "F"
+    key: str            # "5h", "7d", "spend", or "scoped:<Name>"
+    label: str          # "5h", "7d", "Spend", "Fable"
+    short: str          # "5h", "7d", "$", "F"
     pct: float          # % used, as reported by cswap (same scale as /usage)
     resets_at: str = ""
     countdown: str = ""  # preformatted by cswap, e.g. "4h 3m"
@@ -146,7 +146,7 @@ def color(pct: float) -> str:
 
 
 def general_worst(account):
-    """Worst non-scoped metric (5h/7d) — the all-models limits."""
+    """Worst non-scoped metric (5h/7d/spend) — the account-wide limits."""
     if account is None:
         return None
     general = [m for m in account.metrics if not m.key.startswith("scoped:")]
