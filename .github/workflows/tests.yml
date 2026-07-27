@@ -33,10 +33,12 @@ jobs:
       # skip when it's absent -- installing it on any runner, let alone
       # windows-latest/macos-latest, would defeat that seam.
       #
-      # pycairo was measured, not assumed. Run locally on 2026-07-26:
-      #   python -m unittest discover -s tests   -> Ran 396 tests, OK (skipped=13)
-      #   pip install pycairo; same command      -> Ran 396 tests, OK (skipped=0)
-      # So pycairo is worth 13 extra real assertions instead of skips --
+      # pycairo was measured, not assumed. Measured on a dev Mac that HAS
+      # Homebrew's cairo: with pycairo installed the painter tests all run;
+      # without it they skip and nothing else changes. (An earlier version of
+      # this comment quoted a test count, which was stale by 150+ within a
+      # week -- the ratio is the durable part, the total is not.)
+      # So pycairo is worth those extra real assertions instead of skips --
       # but only on this dev Mac, which already had Homebrew's cairo
       # (headers + pkg-config) installed. Checked against PyPI directly:
       # pycairo ships prebuilt wheels ONLY for win_amd64 (cp39 through
@@ -51,3 +53,15 @@ jobs:
       # a per-OS system-package install step.
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+
+      # macos-swift/ is a second, independent implementation of the model
+      # layer, and until now nothing in CI compiled it -- a plain Swift syntax
+      # error stayed invisible until a human ran install/macos-swift.sh by
+      # hand. Commit fa88a4c fixed a real codesign defect in that installer
+      # that this job still would not catch; compiling is the cheap half of
+      # that gap, and it is the half that fails loudly. macos-latest already
+      # ships the Xcode command line tools, so this adds one step on one leg
+      # and no new dependency. Measured locally: 4.9s from cold.
+      - name: Build the Swift front-end
+        if: runner.os == 'macOS'
+        run: swift build -c release --package-path macos-swift
