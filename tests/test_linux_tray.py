@@ -44,10 +44,14 @@ What is pinned here, and why:
      off the TOP of the screen). That helper is gone: 4c20b69 replaced
      pointer-following placement with top-right + drag + a remembered
      origin, so pin_origin now returns `top + margin` and the header
-     cannot leave the work area by construction. What is still NOT fixed
-     on this side is the other half -- an overtall panel's FOOTER runs
-     past the bottom, and there is no scrolling (the Windows panel got a
-     scrolling viewport; this one did not).
+     cannot leave the work area by construction.
+  8. FINDING 9's other half -- an overtall panel's FOOTER running past
+     the bottom of the work area -- and the scrolling viewport that now
+     catches it, matching the Windows panel. What is worth pinning is
+     not the cap arithmetic but the coordinate translation: the PAINT is
+     what scrolls (one ctx.translate in _on_draw), so a click, a hover
+     and a tooltip on a scrolled panel all have to go back through
+     _content_y or they land on whatever sits at the untranslated y.
 
 Deliberately NOT covered: real AppIndicator/menu rendering, real cairo
 painting of the popover, and Wayland's "leave placement alone" branch --
@@ -90,6 +94,37 @@ def snapshot_with_a_dead_credential():
     return model.Snapshot(accounts=[
         model.Account(number=1, email="dead@example.com", ok=False,
                       status="relogin_required", metrics=[])])
+
+
+class _RecordingArea:
+    """Stand-in for the Gtk.DrawingArea: counts repaints."""
+
+    def __init__(self):
+        self.redraws = 0
+
+    def queue_draw(self):
+        self.redraws += 1
+
+
+def snapshot_with_many_accounts(count=8):
+    """Enough cards to overflow a real work area -- FINDING 9 measured 8
+    accounts at 769pt of content and 12 at 1117pt, against the 984pt a
+    1080p work area leaves once MAX_HEIGHT_MARGIN is taken off both ends."""
+    return model.Snapshot(accounts=[
+        model.Account(number=n, email="user%d@example.com" % n,
+                      metrics=[model.Metric(key="5h", label="5h", short="5h",
+                                            pct=10.0, countdown="1h 2m")])
+        for n in range(1, count + 1)])
+
+
+def _press_event(x, y):
+    return types.SimpleNamespace(button=1, x=x, y=y, x_root=0.0, y_root=0.0,
+                                 time=0)
+
+
+def _wheel(direction, deltas=None):
+    return types.SimpleNamespace(direction=direction,
+                                 get_scroll_deltas=lambda: deltas)
 
 
 def _install_gi_stubs():
@@ -177,7 +212,9 @@ def _install_gi_stubs():
 
     Gdk = types.ModuleType("gi.repository.Gdk")
     Gdk.EventMask = types.SimpleNamespace(
-        BUTTON_PRESS_MASK=1, POINTER_MOTION_MASK=2, LEAVE_NOTIFY_MASK=4)
+        BUTTON_PRESS_MASK=1, BUTTON_RELEASE_MASK=2, POINTER_MOTION_MASK=4,
+        LEAVE_NOTIFY_MASK=8, SCROLL_MASK=16, SMOOTH_SCROLL_MASK=32)
+    Gdk.ScrollDirection = types.SimpleNamespace(UP=0, DOWN=1, SMOOTH=4)
     Gdk.WindowTypeHint = types.SimpleNamespace(DOCK=0, UTILITY=1)
     Gdk.KEY_Escape = 65307
     Gdk.Display = _Display
@@ -544,6 +581,7 @@ class TestPanelTooltips(GuiStubbedTestCase):
         super().setUp()
         self.module = _reimport("smartbar.linux.popover_window")
         self.popover = self.module.Popover.__new__(self.module.Popover)
+        self.popover._scroll = 0.0    # unscrolled: widget y IS layout y
         self.popover.layout = layout.build(snapshot_with_a_dead_credential())
         self.tip = _RecordingTooltip()
 
@@ -584,6 +622,227 @@ class TestPanelTooltips(GuiStubbedTestCase):
         self.popover.layout = None
         self.assertFalse(
             self.popover._on_query_tooltip(None, 5, 5, False, self.tip))
+
+
+class TestPanelViewport(GuiStubbedTestCase):
+    """FINDING 9's other half: an overtall panel ran its footer past the
+    bottom of the work area with no way to reach it.
+
+    The window is capped at _max_panel_height() and the wheel slides the
+    paint underneath. Everything here exists because the scroll offset
+    lives in exactly one place (_on_draw's ctx.translate) and therefore has
+    to be undone in exactly one place too (_content_y) -- and a hit test
+    that forgets is not a crash, it is a click on the wrong button.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.module = _reimport("smartbar.linux.popover_window")
+        self.popover = self.module.Popover.__new__(self.module.Popover)
+        self.popover.hover = ""
+        self.popover.pinned = False
+        self.popover.layout = None
+        self.popover._scroll = 0.0
+        self.popover._overflow = 0
+        self.popover._size = (0, 0)
+        self.popover._press = None
+        self.popover._dragging = False
+        self.popover._placed = None
+        self.popover._saved = None
+        self.popover._x11 = False       # Wayland branch: _position does nothing
+        self.popover._tick_id = 1
+        self.popover.area = _RecordingArea()
+        self.resized = []
+        self.popover.resize = lambda w, h: self.resized.append((w, h))
+        self.tall = self._arm(snapshot_with_many_accounts())
+        self.tall_height = int(round(self.tall.height))
+
+    def _arm(self, snapshot):
+        """Point rebuild() at a fresh Layout for this snapshot."""
+        built = layout.build(snapshot)
+        self.popover.rebuild = lambda _hover: built
+        return built
+
+    @contextlib.contextmanager
+    def _screen(self, areas):
+        """Pretend the desktop is exactly these work areas."""
+        with mock.patch.object(self.module.Gdk.Display, "get_default",
+                               staticmethod(lambda: object())), \
+             mock.patch.object(self.module.Popover, "_workareas",
+                               staticmethod(lambda _display: areas)):
+            yield
+
+    def _cap_for(self, height):
+        return height - 2 * self.module.MAX_HEIGHT_MARGIN
+
+    # --- the cap ------------------------------------------------------------
+    def test_content_that_fits_the_screen_is_left_alone(self):
+        """A panel that fits must not become scrollable: an offset that can
+        only ever be 0 would still make every hit test pay for it."""
+        with self._screen([(0, 0, 1920, 1080)]):
+            self.popover.refresh_layout()
+        self.assertLess(self.tall_height, self._cap_for(1080))
+        self.assertEqual(self.resized[-1][1], self.tall_height)
+        self.assertEqual(self.popover._overflow, 0)
+
+    def test_content_taller_than_the_work_area_is_capped_and_scrollable(self):
+        with self._screen([(0, 0, 1920, 400)]):
+            self.popover.refresh_layout()
+        self.assertEqual(self.resized[-1][1], self._cap_for(400))
+        self.assertEqual(self.popover._overflow,
+                         self.tall_height - self._cap_for(400))
+
+    def test_a_failed_screen_lookup_leaves_the_panel_uncapped(self):
+        """No monitors, no guessing: degrade to the old behaviour rather
+        than invent a screen size and clip content nobody can scroll to."""
+        def boom(_display):
+            raise RuntimeError("no monitors here")
+
+        with mock.patch.object(self.module.Gdk.Display, "get_default",
+                               staticmethod(lambda: object())), \
+             mock.patch.object(self.module.Popover, "_workareas",
+                               staticmethod(boom)), \
+             mock.patch.object(self.module.log, "exception"):
+            self.popover.refresh_layout()
+        self.assertEqual(self.resized[-1][1], self.tall_height)
+        self.assertEqual(self.popover._overflow, 0)
+
+    def test_no_display_at_all_leaves_the_panel_uncapped(self):
+        self.assertEqual(self.popover._max_panel_height(), 0)
+
+    def test_the_cap_uses_the_monitor_the_panel_was_dragged_onto(self):
+        """Not the roomiest one: a panel remembered onto the small second
+        monitor has to fit THAT screen, not the big one it is not on."""
+        self.popover._saved = (2000, 10)
+        with self._screen([(0, 0, 1920, 1080), (1920, 0, 1280, 400)]):
+            self.assertEqual(self.popover._max_panel_height(),
+                             self._cap_for(400))
+
+    def test_with_nowhere_placed_yet_the_cap_uses_the_roomiest_monitor(self):
+        """pin_origin's own tie-break, because that is where an unplaced
+        panel is about to be parked."""
+        with self._screen([(1920, 0, 1280, 400), (0, 0, 1920, 1080)]):
+            self.assertEqual(self.popover._max_panel_height(),
+                             self._cap_for(1080))
+
+    # --- the wheel ----------------------------------------------------------
+    def test_the_wheel_moves_the_viewport_and_stops_at_the_bottom(self):
+        self.popover._overflow = 100
+        for _ in range(2):
+            self.popover._on_scroll(None, _wheel(self.module.Gdk.
+                                                 ScrollDirection.DOWN))
+        self.assertEqual(self.popover._scroll,
+                         2.0 * self.module.SCROLL_STEP)
+        for _ in range(10):
+            self.popover._on_scroll(None, _wheel(self.module.Gdk.
+                                                 ScrollDirection.DOWN))
+        self.assertEqual(self.popover._scroll, 100.0)
+
+    def test_the_wheel_stops_at_the_top_rather_than_going_negative(self):
+        self.popover._overflow = 100
+        self.popover._scroll = 20.0
+        for _ in range(5):
+            self.popover._on_scroll(None, _wheel(self.module.Gdk.
+                                                 ScrollDirection.UP))
+        self.assertEqual(self.popover._scroll, 0.0)
+
+    def test_a_touchpads_smooth_deltas_scroll_too(self):
+        """A wheel sends UP/DOWN; a touchpad sends SMOOTH with the numbers
+        in get_scroll_deltas(). Reading only one leaves the other device
+        scrolling nothing at all."""
+        self.popover._overflow = 500
+        self.popover._on_scroll(None, _wheel(
+            self.module.Gdk.ScrollDirection.SMOOTH, (True, 0.0, 2.0)))
+        self.assertEqual(self.popover._scroll,
+                         2.0 * self.module.SCROLL_STEP)
+
+    def test_smooth_deltas_that_are_not_available_scroll_nothing(self):
+        self.popover._overflow = 500
+        handled = self.popover._on_scroll(None, _wheel(
+            self.module.Gdk.ScrollDirection.SMOOTH, (False, 0.0, 0.0)))
+        self.assertFalse(handled)
+        self.assertEqual(self.popover._scroll, 0.0)
+
+    def test_a_wheel_over_a_panel_that_fits_is_not_swallowed(self):
+        """Returning True on a panel with nothing to scroll would quietly
+        eat wheel events that belong to whatever is underneath."""
+        self.popover._overflow = 0
+        handled = self.popover._on_scroll(None, _wheel(self.module.Gdk.
+                                                       ScrollDirection.DOWN))
+        self.assertFalse(handled)
+
+    # --- the coordinate translation ----------------------------------------
+    def test_the_paint_is_translated_by_the_scroll_offset(self):
+        """Negative: scrolling DOWN moves the content UP past the window's
+        top edge. The sign is one character and inverts the whole feature."""
+        self.popover.layout = self.tall
+        self.popover._scroll = 77.0
+        moves = []
+        ctx = types.SimpleNamespace(
+            translate=lambda dx, dy: moves.append((dx, dy)))
+        with mock.patch.object(self.module.popover_draw, "draw"):
+            self.popover._on_draw(None, ctx)
+        self.assertEqual(moves, [(0, -77.0)])
+
+    def test_a_click_after_scrolling_lands_on_what_the_user_can_see(self):
+        self.popover.layout = self.tall
+        deep = self._deep_hit()
+        self.popover._scroll = 200.0
+        self.popover._on_press(
+            None, _press_event(deep.x + 2, deep.y + deep.h / 2 - 200.0))
+        self.assertEqual(self.popover._press[4], deep.name)
+
+    def test_the_same_pointer_position_means_something_else_unscrolled(self):
+        """The other half of the test above: without it, a _content_y that
+        returned y unchanged would still pass if the two rects overlapped."""
+        self.popover.layout = self.tall
+        deep = self._deep_hit()
+        self.popover._scroll = 0.0
+        self.popover._on_press(
+            None, _press_event(deep.x + 2, deep.y + deep.h / 2 - 200.0))
+        self.assertNotEqual(self.popover._press[4], deep.name)
+
+    def test_a_tooltip_after_scrolling_describes_what_is_under_the_pointer(self):
+        built = layout.build(snapshot_with_a_dead_credential())
+        self.popover.layout = built
+        target = [h for h in built.hits if h.name.startswith("switch:")][0]
+        tip = _RecordingTooltip()
+        # Unscrolled, that same pointer position is 40px above the button.
+        self.assertFalse(self.popover._on_query_tooltip(
+            None, target.x + target.w / 2,
+            target.y + target.h / 2 - 40.0, False, tip))
+        self.assertIsNone(tip.text)
+        self.popover._scroll = 40.0
+        self.assertTrue(self.popover._on_query_tooltip(
+            None, target.x + target.w / 2,
+            target.y + target.h / 2 - 40.0, False, tip))
+        self.assertEqual(tip.text, target.tooltip)
+
+    def _deep_hit(self):
+        """A hit far enough down the tall layout that a 200px scroll cannot
+        leave it overlapping where it started."""
+        return [h for h in self.tall.hits
+                if h.name.startswith("card:") and h.y > 400][-1]
+
+    # --- keeping the offset in range ---------------------------------------
+    def test_reopening_the_panel_scrolls_back_to_the_top(self):
+        self.popover._scroll = 120.0
+        with self._screen([(0, 0, 1920, 400)]):
+            self.popover.show_panel()
+        self.assertGreater(self.popover._overflow, 120)   # it COULD have stayed
+        self.assertEqual(self.popover._scroll, 0.0)
+
+    def test_shrinking_content_pulls_the_viewport_back_into_range(self):
+        """Scrolled to the bottom, then an account disappears: leaving the
+        offset alone would park the window on blank space past the end."""
+        with self._screen([(0, 0, 1920, 400)]):
+            self.popover.refresh_layout()
+            self.popover._scroll = float(self.popover._overflow)
+            was = self.popover._scroll
+            self._arm(snapshot_with_many_accounts(2))
+            self.popover.refresh_layout()
+        self.assertLess(self.popover._scroll, was)
+        self.assertLessEqual(self.popover._scroll, float(self.popover._overflow))
 
 
 if __name__ == "__main__":
