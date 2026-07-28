@@ -37,9 +37,7 @@ struct AccountCardView: View {
     /// with its account payload; the Claude badge from the plans helper.
     private var headerText: Text {
         var text = Text(account.email)
-        let plan = account.provider == "openai"
-            ? account.plan
-            : (planStatus.plans[account.email] ?? "")
+        let plan = accountPlan
         if !plan.isEmpty {
             text = text + Text(" \u{00B7} \(plan)").foregroundColor(.secondary)
         }
@@ -47,6 +45,25 @@ struct AccountCardView: View {
             text = text + Text(" (\(devices))")
         }
         return text
+    }
+
+    private var accountPlan: String {
+        account.provider == "openai"
+            ? account.plan
+            : (planStatus.plans[account.email] ?? "")
+    }
+
+    /// Plain-string twin of headerText — model.account_label(account) as a
+    /// single String rather than a colored Text, for spots (the remove
+    /// confirmation) where the shared layout draws it as one plain label
+    /// instead of three styled segments. MUST stay in step with
+    /// model.account_label the same way headerText does.
+    private var accountLabel: String {
+        var label = account.email
+        let plan = accountPlan
+        if !plan.isEmpty { label += " \u{00B7} \(plan)" }
+        if devices > 0 { label += " (\(devices))" }
+        return label
     }
 
     /// OpenAI cards say when their numbers were measured (they move only
@@ -123,19 +140,26 @@ struct AccountCardView: View {
                 .truncationMode(.middle)
                 .help(headerHelp)
             Spacer(minLength: 8)
-            // The remove ✕ exists only while the pointer is on a
-            // non-active card (mirror of the shared layout's remove hit);
-            // the live login would just be re-registered, so it never
-            // offers removal.
-            if hovering && !account.active {
+            // The remove ✕'s HIT TARGET and TAP only exist while the
+            // pointer is on a non-active card (mirror of the shared
+            // layout's `on_card` guard on its remove hit) — the live
+            // login would just be re-registered, so it never offers
+            // removal. Its 18pt WIDTH, though, is reserved unconditionally
+            // whenever the card is removable, not only while hovering:
+            // reserving it only on hover let headerText expand into that
+            // space when idle, then re-truncate the instant the pointer
+            // arrived (the shared layout's FINDING 4, popover_layout._card).
+            if !account.active {
                 Button { confirmToken = removalToken } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         // REMOVE_HIT in the shared theme
                         .frame(width: 18, height: 18)
+                        .opacity(hovering ? 1 : 0)
                 }
                 .buttonStyle(.plain)
+                .disabled(!hovering)
                 .help("Remove \(account.email) from AI smartbar")
                 .accessibilityLabel("Remove \(account.email)")
             }
@@ -164,30 +188,37 @@ struct AccountCardView: View {
         }
     }
 
-    /// Header-row-only confirm: same height, the bars stay put (mirror of
-    /// the shared layout's `confirm` state in popover_layout._card).
+    /// Two rows, not one: the full identity ("a@b.com · 20x (2)") on its
+    /// own line, wrapped rather than middle-truncated, above the
+    /// Remove/Keep buttons — mirror of the shared layout's confirm state
+    /// (popover_layout._card / confirm_header_height). The old one-line
+    /// "same height always" design elided an ordinary address at exactly
+    /// the moment the user had to be sure what they were deleting; this
+    /// trades that for a one-time card-height growth on an explicit user
+    /// action, same trade-off the shared layout made.
     private var confirmHeader: some View {
-        HStack(spacing: 7) {
-            Text("Remove \(account.email)?")
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Remove \(accountLabel)?")
                 .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            Button("Remove") {
-                confirmToken = nil
-                performRemoval()
-            }
-            .buttonStyle(.borderedProminent)
-            // DANGER in the shared theme — the status ramp's critical red.
-            .tint(Status.critical.color)
-            .controlSize(.small)
-            .help(account.provider == "openai"
-                  ? "Forget this card (labels and last numbers). Signing in with Codex brings it back"
-                  : "Deletes claude-swap's stored credential backup for slot \(account.number). Signing in as this account re-registers it")
-            .accessibilityLabel("Confirm removing \(account.email)")
-            Button("Keep") { confirmToken = nil }
-                .buttonStyle(.bordered)
+                .lineLimit(2)
+            HStack(spacing: 7) {
+                Spacer(minLength: 0)
+                Button("Remove") {
+                    confirmToken = nil
+                    performRemoval()
+                }
+                .buttonStyle(.borderedProminent)
+                // DANGER in the shared theme — the status ramp's critical red.
+                .tint(Status.critical.color)
                 .controlSize(.small)
+                .help(account.provider == "openai"
+                      ? "Forget this card (labels and last numbers). Signing in with Codex brings it back"
+                      : "Deletes claude-swap's stored credential backup for slot \(account.number). Signing in as this account re-registers it")
+                .accessibilityLabel("Confirm removing \(account.email)")
+                Button("Keep") { confirmToken = nil }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
     }
 

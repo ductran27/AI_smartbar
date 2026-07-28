@@ -62,6 +62,46 @@ class TestPopoverPainter(unittest.TestCase):
         demo.accounts[0].email = "a" * 120 + "@example.com"
         self.render(layout.build(demo, version="1.2.3"))
 
+    def test_remove_confirm_state_renders(self):
+        # FINDING 2's two-row header (a possibly-wrapped question stacked
+        # above its own Remove/Keep row) is new painted territory — a
+        # normal card never draws a Label with max_lines > 1 at
+        # SIZE_EMAIL, so this exercises _wrap() at that size for the
+        # first time.
+        demo = _demo()
+        self.render(layout.build(demo, confirm="claude:1"))
+        # An OpenAI card's pid suffix is its EMAIL, not its number (see
+        # _card(): non-Claude accounts have no stable numeric slot), and
+        # its tab must be selected for the card to be drawn at all.
+        self.render(layout.build(demo, provider="openai",
+                                 confirm="openai:former@openai.example"))
+
+    def test_hovering_a_removable_card_renders(self):
+        demo = _demo()
+        self.render(layout.build(demo, hover="card:claude:1"))
+
+    def test_action_error_banner_renders(self):
+        # FINDING 6: the dismissible error banner is new painted territory
+        # — nothing else draws a Label plus a "close" Glyph outside a card.
+        demo = _demo()
+        self.render(layout.build(demo, action_error="Switch failed: in use"))
+        self.render(layout.build(demo, action_error="Switch failed: in use",
+                                 hover="dismiss-error"))
+
+    def test_refreshing_renders_the_dimmed_disabled_glyph(self):
+        demo = _demo()
+        self.render(layout.build(demo, refreshing=True))
+
+    def test_stale_and_blocked_footer_render_with_their_reasons(self):
+        # FINDING 7: stale_reason/blocked_reason don't change what's drawn
+        # (the reason only ever shows via `tooltip`, never painted), but
+        # exercise the branches that populate those Hits.
+        demo = _demo()
+        self.render(layout.build(demo, version="1.2.3", stale=True,
+                                 fetched_at="2026-07-24T18:00:00Z",
+                                 stale_reason="cswap timed out",
+                                 blocked_reason="2 unpushed commit(s)"))
+
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
 class TestTrayBadge(unittest.TestCase):

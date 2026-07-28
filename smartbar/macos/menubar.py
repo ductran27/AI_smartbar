@@ -62,6 +62,7 @@ class SmartBarApp(rumps.App):
         self.check_token = 0
         self.update_pending = ""
         self.update_blocked = ""
+        self.switch_error = ""  # sticky until the next switch attempt
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         self.presence_started = False  # first beat waits for the first fetch
         self._ui_queue = queue.Queue()
@@ -198,6 +199,9 @@ class SmartBarApp(rumps.App):
     def _rebuild_menu(self):
         self.menu.clear()
         items = []
+        if self.switch_error:
+            items.append(rumps.MenuItem(f"✕ {self.switch_error}"))
+            items.append(None)  # separator
         if self.snapshot is None:
             items.append(rumps.MenuItem("Loading…"))
         else:
@@ -323,14 +327,29 @@ class SmartBarApp(rumps.App):
 
     def _make_switch(self, number):
         def callback(_sender):
+            self.switch_error = ""
+            self._rebuild_menu()
+
             def run():
                 try:
                     cswap.switch(number)
                 except cswap.CswapError as exc:
                     log.warning("switch to #%s failed: %s", number, exc)
+                    self._to_main(self._apply_switch_error, str(exc))
                 self._to_main(self._tick, None)
             threading.Thread(target=run, daemon=True).start()
         return callback
+
+    def _apply_switch_error(self, message):
+        """Worker -> main: the switch failed. Sticky until _make_switch's
+        callback clears it on the next attempt, exactly like the Swift
+        store's switchError (UsageStore.swift:15, :156, :181) -- not on a
+        timer, and not on the next periodic _tick, so it survives long
+        enough to actually be read.
+        """
+        self.switch_error = f"Switch failed: {message}"
+        self._notify("AI smartbar", "", self.switch_error)
+        self._rebuild_menu()
 
     def _on_quit(self, _sender):
         """Deliberate quit: stop being counted before going away."""

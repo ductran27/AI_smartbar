@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from smartbar.core import model
 from smartbar.core import popover_theme as t
 from smartbar.core.reset_countdown_format import parse_iso, remaining_text
+from smartbar.core.reset_countdown_format import prefers_24_hour_clock
 
 NO_ACCOUNTS = ("No accounts yet — sign in to Claude Code and it will be "
                "registered automatically")
@@ -71,39 +72,94 @@ def restore_origin(saved, workareas, size):
     return None
 
 
-def updated_label(fetched_at: str, now=None) -> str:
-    """"Updated 2:02 PM" from an ISO stamp, or "" — mirrors the Swift header."""
+def updated_label(fetched_at: str, now=None, hour24=None) -> str:
+    """"Updated 2:02 PM" (or "Updated 14:02") from an ISO stamp, or "".
+
+    Mirrors the Swift header, which asks SwiftUI's own `.formatted(time:
+    .shortened)` and so already follows the Mac's Region setting; this
+    side has no such API, so `hour24=None` (the default) asks
+    prefers_24_hour_clock() to guess instead. Pass True/False to force one
+    convention regardless of the guess (mainly for tests, where the
+    machine running them must not change the expected output).
+    """
     stamp = parse_iso(fetched_at)
     if stamp is None:
         return ""
     local = stamp.astimezone()
+    if hour24 is None:
+        hour24 = prefers_24_hour_clock()
+    if hour24:
+        return "Updated " + local.strftime("%H:%M")
     return "Updated " + local.strftime("%I:%M %p").lstrip("0")
 
 
-def state_lines(account) -> int:
-    """How many lines the explanatory text needs (SwiftUI wraps at 2).
+def _lines_for_width(text, width, *, size=t.SIZE_CAPTION, bold=False,
+                     cap=t.STATE_MAX_LINES) -> int:
+    """How many lines `text` needs at `width`, capped at `cap`.
 
-    Estimated from the width factors rather than measured, so card height
-    stays a pure function; the renderer wraps to the same limit.
+    Estimated from text_width() rather than measured, so card/row height
+    stays a pure function of numbers already in the layout; the renderer
+    wraps to the same limit (popover_draw._wrap). Every caller passes its
+    OWN available width — a full-width top-level slot and a card's inner
+    width are not the same number, and hardcoding one for both is exactly
+    how FINDING 1 happened.
     """
+    if width <= 0 or t.text_width(text, size, bold=bold) <= width:
+        return 1
+    return cap
+
+
+def state_lines(account) -> int:
+    """How many lines an account's explanatory caption needs inside a card
+    (SwiftUI wraps at 2 via .lineLimit(2))."""
     text = model.state_text(account) or "No usage data"
     room = t.WIDTH - 2 * t.PAD - 2 * t.CARD_PAD_H
-    wide = t.text_width(text, t.SIZE_CAPTION) > room
-    return t.STATE_MAX_LINES if wide else 1
+    return _lines_for_width(text, room)
 
 
-def card_height(account) -> float:
-    """Height of one account card, metrics or explanatory line."""
+def _confirm_question(account):
+    """(question text, wrapped line count) for the remove-confirm header.
+
+    Shared by confirm_header_height() and _card() so the height RESERVED
+    for the question and the height it is actually drawn with cannot drift
+    apart — the exact trap FINDING 1 hit with the top-level state labels.
+    """
+    room = t.WIDTH - 2 * t.PAD - 2 * t.CARD_PAD_H
+    text = f"Remove {model.account_label(account)}?"
+    lines = _lines_for_width(text, room, size=t.SIZE_EMAIL, bold=True,
+                             cap=t.CONFIRM_MAX_LINES)
+    return text, lines
+
+
+def confirm_header_height(account) -> float:
+    """Height of the remove-confirm header: the full, never-middle-
+    truncated question (wrapped if a long address needs it) stacked above
+    its own Remove/Keep button row — see _card()'s confirm branch."""
+    _, lines = _confirm_question(account)
+    question_h = t.CARD_HEADER_H + (lines - 1) * t.CONFIRM_LINE_H
+    return question_h + t.CARD_INNER_GAP + t.BUTTON_H
+
+
+def card_height(account, confirm=False) -> float:
+    """Height of one account card: metrics, explanatory line, or (with
+    `confirm=True`) the remove-confirm header in place of the normal one.
+
+    The confirm header is allowed to be taller than the normal one — a
+    deliberate one-time growth on an explicit user action, so the full
+    account identity can be shown un-truncated (see FINDING 2). The rest
+    of the card (its body) never reflows because of it.
+    """
     if account.metrics:
         body = (len(account.metrics) * t.ROW_H
                 + (len(account.metrics) - 1) * t.ROW_GAP)
     else:
         body = t.STATE_ROW_H + (state_lines(account) - 1) * t.STATE_LINE_H
-    return t.CARD_PAD_V * 2 + t.CARD_HEADER_H + t.CARD_INNER_GAP + body
+    header = confirm_header_height(account) if confirm else t.CARD_HEADER_H
+    return t.CARD_PAD_V * 2 + header + t.CARD_INNER_GAP + body
 
 
 def _button(shapes, hits, name, right, cy, text, *, enabled=True,
-            accent=False, danger=False, hover=""):
+            accent=False, danger=False, hover="", tooltip=""):
     """Right-aligned pill button; returns its left edge."""
     bold = accent or danger
     width = t.text_width(text, t.SIZE_CAPTION, bold=bold) + t.BUTTON_PAD_H * 2
@@ -125,7 +181,8 @@ def _button(shapes, hits, name, right, cy, text, *, enabled=True,
     shapes.append(t.Label(x + width / 2, cy, text, size=t.SIZE_CAPTION,
                           bold=bold, anchor="center",
                           color=t.TEXT if enabled else t.TEXT_TERTIARY))
-    hits.append(t.Hit(name, x, top, width, t.BUTTON_H, enabled=enabled))
+    hits.append(t.Hit(name, x, top, width, t.BUTTON_H, enabled=enabled,
+                      tooltip=tooltip))
     return x
 
 
@@ -133,15 +190,22 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     """One account card: dot, email, ACTIVE chip or Make Active, metric rows.
 
     Hovering a non-active card reveals a small ✕ (hit "remove:<p>:<id>");
-    `confirm` naming this card swaps ONLY the header row for
-    "Remove <email>?  [Remove][Keep]" — same height, the bars stay put
-    (mirror of AccountCardView's hover/confirm states).
+    `confirm` naming this card swaps the header for a two-row "Remove
+    <full label>?" question over its own [Remove][Keep] button row
+    (mirror of AccountCardView's hover/confirm states). That block is
+    allowed to be TALLER than the normal one-line header — see
+    confirm_header_height(): the full identity, un-truncated, is worth a
+    one-time height change on an explicit user action; the card's body
+    never reflows because of it.
     """
-    height = card_height(account)
-    left, right = t.PAD, t.WIDTH - t.PAD
     provider = getattr(account, "provider", "claude") or "claude"
     ident = account.number if provider == "claude" else account.email
     pid = f"{provider}:{ident}"
+    # A stale confirm token can name a card that turned active under it
+    # (data refresh) — the active guard here keeps that card unremovable.
+    is_confirm = confirm == pid and not account.active
+    height = card_height(account, confirm=is_confirm)
+    left, right = t.PAD, t.WIDTH - t.PAD
     # The whole card is a non-action hover region (see t.Hit) — appended
     # FIRST so every real button inside it wins hit-testing.
     hits.append(t.Hit(f"card:{pid}", left, top, right - left, height))
@@ -151,23 +215,33 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         line_width=1.5 if account.active else 1.0))
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
-    head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
 
-    if confirm == pid and not account.active:
-        # The active guard repeats here on purpose: a stale confirm token
-        # can name a card that turned active under it (data refresh), and
-        # that card must render — and stay — unremovable.
-        keep_l = _button(shapes, hits, "cancel-remove", inner_r, head_cy,
-                         "Keep", hover=hover)
-        remove_l = _button(shapes, hits, f"confirm-remove:{pid}",
-                           keep_l - 6, head_cy, "Remove", hover=hover,
-                           danger=True)
-        shapes.append(t.Label(inner_l, head_cy, f"Remove {account.email}?",
-                              size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
-                              max_width=remove_l - 8 - inner_l))
-        _card_body(shapes, account, top, now, inner_l, inner_r)
+    if is_confirm:
+        question, lines = _confirm_question(account)
+        question_h = t.CARD_HEADER_H + (lines - 1) * t.CONFIRM_LINE_H
+        shapes.append(t.Label(inner_l, top + t.CARD_PAD_V + question_h / 2,
+                              question, size=t.SIZE_EMAIL, bold=True,
+                              color=t.TEXT, max_width=inner_r - inner_l,
+                              max_lines=lines))
+        button_cy = (top + t.CARD_PAD_V + question_h + t.CARD_INNER_GAP
+                     + t.BUTTON_H / 2)
+        keep_l = _button(shapes, hits, "cancel-remove", inner_r, button_cy,
+                         "Keep", hover=hover, tooltip="Keep this account")
+        # Wording from AccountCardView.swift:184-186's .help(), which
+        # differs by provider: an OpenAI card has no re-registration story.
+        confirm_tip = (
+            "Forget this card (labels and last numbers). Signing in with "
+            "Codex brings it back" if provider == "openai" else
+            f"Deletes claude-swap's stored credential backup for slot "
+            f"{account.number}. Signing in as this account re-registers it")
+        _button(shapes, hits, f"confirm-remove:{pid}", keep_l - 6, button_cy,
+                "Remove", hover=hover, danger=True, tooltip=confirm_tip)
+        header_h = question_h + t.CARD_INNER_GAP + t.BUTTON_H
+        _card_body(shapes, account, top, now, inner_l, inner_r,
+                   header_h=header_h)
         return height
 
+    head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
     dot_color = t.status_rgba(model.dot_color(account))
     shapes.append(t.Dot(inner_l + t.DOT_R, head_cy, t.DOT_R, dot_color,
                         hollow=model.dot_style(account) == "hollow"))
@@ -189,25 +263,37 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     else:
         # A dead stored credential must not be switchable: activating it
         # would restore a login Anthropic already rejected.
+        blocked = model.switch_blocked(account)
+        # Wording from AccountCardView.swift:159-161's .help().
+        switch_tip = (
+            f"Stored credential is dead — switching would log Claude Code "
+            f"out. {model.state_text(account)}." if blocked else
+            f"Switch Claude Code to {account.email}")
         control_l = _button(shapes, hits, f"switch:{account.number}", inner_r,
                             head_cy, "Make Active", hover=hover,
-                            enabled=not model.switch_blocked(account))
+                            enabled=not blocked, tooltip=switch_tip)
 
-    label_r = control_l - 8
     # The ✕ exists only while the pointer is on this card (any of its hover
     # names) and never on the active card — the live login would just be
-    # re-registered, so offering to remove it would be a lie.
+    # re-registered, so offering to remove it would be a lie. Its gutter is
+    # reserved UNCONDITIONALLY on a removable card, though: reserving it
+    # only while hovering (the old behaviour) let a long address wrap to
+    # the full width, then re-truncate the instant the pointer arrived
+    # (FINDING 4).
+    removable = not account.active
+    label_r = control_l - 8 - (t.REMOVE_HIT + 6 if removable else 0)
     on_card = hover in (f"card:{pid}", f"remove:{pid}",
                         f"switch:{account.number}")
-    if on_card and not account.active:
+    if removable and on_card:
         cx = control_l - 8 - t.REMOVE_HIT / 2
         shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
                               t.TEXT if hover == f"remove:{pid}"
                               else t.TEXT_TERTIARY))
+        # Wording from AccountCardView.swift:139's .help().
         hits.append(t.Hit(f"remove:{pid}", cx - t.REMOVE_HIT / 2,
                           head_cy - t.REMOVE_HIT / 2,
-                          t.REMOVE_HIT, t.REMOVE_HIT))
-        label_r = cx - t.REMOVE_HIT / 2 - 6
+                          t.REMOVE_HIT, t.REMOVE_HIT,
+                          tooltip=f"Remove {account.email} from AI smartbar"))
 
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
                           model.account_label(account),
@@ -218,10 +304,11 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     return height
 
 
-def _card_body(shapes, account, top, now, inner_l, inner_r):
+def _card_body(shapes, account, top, now, inner_l, inner_r,
+               header_h=t.CARD_HEADER_H):
     """Metric rows, or the explanatory line on a data-less card — shared by
-    the normal and the remove-confirm header (the body never reflows)."""
-    body_top = top + t.CARD_PAD_V + t.CARD_HEADER_H + t.CARD_INNER_GAP
+    the normal header and the (possibly taller) remove-confirm header."""
+    body_top = top + t.CARD_PAD_V + header_h + t.CARD_INNER_GAP
     if not account.metrics:
         blocked = model.switch_blocked(account)
         lines = state_lines(account)
@@ -234,7 +321,9 @@ def _card_body(shapes, account, top, now, inner_l, inner_r):
         return
 
     bar_l = inner_l + t.LABEL_W + t.BAR_GAP
-    bar_w = inner_r - t.VALUE_W - t.BAR_GAP - bar_l
+    value_w = t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W
+    bar_w = inner_r - value_w - t.BAR_GAP - bar_l
+    pct_r = inner_r - t.VALUE_COUNTDOWN_W
     for index, metric in enumerate(account.metrics):
         cy = body_top + index * (t.ROW_H + t.ROW_GAP) + t.ROW_H / 2
         shapes.append(t.Label(inner_l, cy, metric.label, size=t.SIZE_ROW_LABEL,
@@ -250,16 +339,25 @@ def _card_body(shapes, account, top, now, inner_l, inner_r):
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
-        value = f"{round(metric.pct)}%" + (f" · {countdown}" if countdown else "")
-        shapes.append(t.Label(inner_r, cy, value, size=t.SIZE_ROW_VALUE,
-                              mono=True, anchor="right",
-                              color=t.TEXT_SPENT if metric.pct >= 100
-                              else (1, 1, 1, 0.8)))
+        color = t.TEXT_SPENT if metric.pct >= 100 else (1, 1, 1, 0.8)
+        # Percentage and countdown are two INDEPENDENTLY right-anchored
+        # labels, not one concatenated string right-anchored at inner_r —
+        # a single string makes the percentage slide sideways every time
+        # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
+        # exactly what FINDING 3 measured (a 19pt swing on the "·").
+        shapes.append(t.Label(pct_r, cy, f"{round(metric.pct)}%",
+                              size=t.SIZE_ROW_VALUE, mono=True,
+                              anchor="right", color=color))
+        if countdown:
+            shapes.append(t.Label(inner_r, cy, f" · {countdown}",
+                                  size=t.SIZE_ROW_VALUE, mono=True,
+                                  anchor="right", color=color))
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
-          provider="", confirm="") -> t.Layout:
+          provider="", confirm="", action_error="", refreshing=False,
+          stale_reason="") -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
     `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
@@ -271,29 +369,66 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     ("<provider>:<id>", the suffix of its "remove:" hit); that card's
     header becomes the Remove/Keep question. A token naming a card that
     is not rendered — or that turned active — is simply ignored.
+
+    `action_error` renders a dismissible one-line banner (hit
+    "dismiss-error") under the header/tabs for the most recent switch or
+    remove failure — mirrors PopoverView.swift:28's `switchError ??
+    removeError`. `refreshing` dims the ⟳ glyph and disables its hit so a
+    second click cannot queue a second fetch while one is in flight
+    (mirrors `.disabled(store.isRefreshing)`).
+
+    `stale_reason` is why the last refresh failed, surfaced on hover of
+    the "stale" marker (mirrors `store.lastError`); `blocked_reason` is
+    likewise surfaced on hover of the footer's "update held" label
+    (mirrors `.help("Update held back: …")`). Both were previously
+    computed and then thrown away (FINDING 7).
     """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
     right = t.WIDTH - t.PAD
 
     head_cy = t.PAD + t.HEADER_H / 2
-    shapes.append(t.Label(t.PAD, head_cy, "AI smartbar", size=t.SIZE_TITLE,
+    title = "AI smartbar"
+    shapes.append(t.Label(t.PAD, head_cy, title, size=t.SIZE_TITLE,
                           bold=True, color=t.TEXT))
     updated = updated_label(fetched_at, now)
+    # Both offsets below are DERIVED from the module's own text_width()
+    # estimate, never hardcoded — popover_layout has no font engine, so an
+    # estimate is the only width it can know, and deriving the "stale"
+    # marker's position from that SAME estimate (rather than the
+    # renderer's real, narrower measurement) keeps the two offsets
+    # consistent with EACH OTHER even though neither matches cairo exactly.
+    updated_x = (t.PAD + t.text_width(title, t.SIZE_TITLE, bold=True)
+                 + t.HEADER_LABEL_GAP)
     if updated:
-        shapes.append(t.Label(t.PAD + 82, head_cy, updated,
+        shapes.append(t.Label(updated_x, head_cy, updated,
                               size=t.SIZE_CAPTION, color=t.TEXT_TERTIARY))
     if stale:
-        shapes.append(t.Label(t.PAD + 82 + t.text_width(updated, t.SIZE_CAPTION)
-                              + 6, head_cy, "stale", size=t.SIZE_CAPTION,
+        stale_x = (updated_x + t.text_width(updated, t.SIZE_CAPTION)
+                   + t.HEADER_LABEL_GAP)
+        shapes.append(t.Label(stale_x, head_cy, "stale", size=t.SIZE_CAPTION,
                               color=t.WARNING))
+        # Non-action hit (see t.Hit) purely so a front-end can show WHY on
+        # hover — mirrors store.lastError on PopoverView.swift:206.
+        stale_w = t.text_width("stale", t.SIZE_CAPTION)
+        hits.append(t.Hit("stale", stale_x, head_cy - t.ICON_BUTTON_W / 2,
+                          stale_w, t.ICON_BUTTON_W,
+                          tooltip=(stale_reason
+                                  or "last refresh failed; showing old data")))
     for name, offset in (("quit", 0.0), ("refresh", t.ICON_BUTTON_W)):
         cx = right - offset - t.ICON_BUTTON_W / 2
-        shapes.append(t.Glyph(name, cx, head_cy, t.SIZE_ICON,
-                              t.TEXT if hover != name else (1, 1, 1, 1)))
+        # Refreshing dims the glyph AND disables its hit (mirrors
+        # .disabled(store.isRefreshing), PopoverView.swift:220) so a
+        # second click while a fetch is in flight cannot queue another.
+        busy = refreshing and name == "refresh"
+        color = (t.TEXT_TERTIARY if busy
+                 else (1, 1, 1, 1) if hover == name else t.TEXT)
+        shapes.append(t.Glyph(name, cx, head_cy, t.SIZE_ICON, color))
+        tip = "Refresh now" if name == "refresh" else "Quit AI smartbar"
         hits.append(t.Hit(name, cx - t.ICON_BUTTON_W / 2,
                           head_cy - t.ICON_BUTTON_W / 2,
-                          t.ICON_BUTTON_W, t.ICON_BUTTON_W))
+                          t.ICON_BUTTON_W, t.ICON_BUTTON_W,
+                          enabled=not busy, tooltip=tip))
 
     cursor = t.PAD + t.HEADER_H + t.SECTION_GAP
     accounts = list(snapshot.accounts) if snapshot is not None else []
@@ -326,24 +461,52 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                                   size=t.SIZE_CAPTION, bold=current,
                                   anchor="center", color=color))
             hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
-                              t.BUTTON_H))
+                              t.BUTTON_H, tooltip=f"Show {text} accounts"))
             x += width + t.TAB_GAP
         cursor += t.TAB_H + t.SECTION_GAP
+    if action_error:
+        # One error line for whichever card action failed most recently —
+        # mirrors PopoverView.swift:28's `switchError ?? removeError`, in
+        # the same spot: under the header/tabs, above the account list.
+        gutter = t.REMOVE_HIT + 6   # dismiss "x", same math as a card's ✕
+        text_w = right - t.PAD - gutter
+        lines = _lines_for_width(action_error, text_w)
+        block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+        err_cy = cursor + block_h / 2
+        shapes.append(t.Label(t.PAD, err_cy, action_error,
+                              size=t.SIZE_CAPTION, color=t.WARNING,
+                              max_width=text_w, max_lines=lines))
+        dx = right - t.REMOVE_HIT / 2
+        shapes.append(t.Glyph("close", dx, err_cy, t.REMOVE_ICON,
+                              t.TEXT if hover == "dismiss-error"
+                              else t.TEXT_TERTIARY))
+        hits.append(t.Hit("dismiss-error", dx - t.REMOVE_HIT / 2,
+                          err_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
+                          t.REMOVE_HIT, tooltip="Dismiss"))
+        cursor += block_h + t.CARD_GAP
     cards = accounts if selected == "claude" else openai
     if snapshot is None:
-        shapes.append(t.Label(t.PAD, cursor + t.STATE_ROW_H / 2,
-                              error or "Loading usage…", size=t.SIZE_CAPTION,
+        text_ = error or "Loading usage…"
+        lines = _lines_for_width(text_, right - t.PAD)
+        block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+        shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
+                              size=t.SIZE_CAPTION,
                               color=t.WARNING if error else t.TEXT_SECONDARY,
-                              max_width=right - t.PAD))
-        cursor += t.STATE_ROW_H + t.CARD_GAP
+                              max_width=right - t.PAD, max_lines=lines))
+        cursor += block_h + t.CARD_GAP
     elif selected == "claude" and snapshot.active_account is None:
         # cswap registration is a Claude story; the OpenAI tab never begs
-        # the user to sign in to Claude Code.
-        shapes.append(t.Label(t.PAD, cursor + t.STATE_ROW_H / 2,
-                              NO_ACCOUNTS if not accounts else UNREGISTERED,
+        # the user to sign in to Claude Code. max_lines=2 (SwiftUI wraps
+        # at 2 here too) plus the matching height growth is FINDING 1:
+        # NO_ACCOUNTS needs ~355pt in a 308pt slot, and without both it
+        # used to middle-truncate into nonsense.
+        text_ = NO_ACCOUNTS if not accounts else UNREGISTERED
+        lines = _lines_for_width(text_, right - t.PAD)
+        block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+        shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
                               size=t.SIZE_CAPTION, color=t.TEXT_SECONDARY,
-                              max_width=right - t.PAD))
-        cursor += t.STATE_ROW_H + t.CARD_GAP
+                              max_width=right - t.PAD, max_lines=lines))
+        cursor += block_h + t.CARD_GAP
     for account in cards:
         cursor += _card(shapes, hits, account, cursor, now, hover,
                         confirm) + t.CARD_GAP
@@ -358,7 +521,15 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     if label:
         shapes.append(t.Label(t.PAD, foot_cy, label, size=t.SIZE_CAPTION,
                               color=t.TEXT_TERTIARY))
+        if blocked_reason:
+            # Non-action hit: PopoverView.swift:136 shows the actual
+            # reason on hover rather than a bare "update held" label.
+            label_w = t.text_width(label, t.SIZE_CAPTION)
+            hits.append(t.Hit("update-held", t.PAD, foot_cy - t.FOOTER_H / 2,
+                              label_w, t.FOOTER_H,
+                              tooltip=f"Update held back: {blocked_reason}"))
     if pending_version:
         _button(shapes, hits, "update", right, foot_cy,
-                f"Update to {pending_version}", accent=True, hover=hover)
+                f"Update to {pending_version}", accent=True, hover=hover,
+                tooltip="Fetch, rebuild and restart AI smartbar")
     return t.Layout(t.WIDTH, cursor + t.FOOTER_H + t.PAD, shapes, hits)

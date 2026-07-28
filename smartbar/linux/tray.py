@@ -78,6 +78,9 @@ class Tray:
         self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         self.last_error = ""
+        self.action_error = ""   # switch/remove failure; sticky until next
+                                  # attempt (mirrors UsageStore.swift:15-16)
+        self.refreshing = False  # true while a fetch is in flight
         self.update_blocked = ""
         self.presence_started = False  # first beat waits for the first fetch
         self.open_item = None
@@ -123,7 +126,9 @@ class Tray:
             fetched_at=self.snapshot.fetched_at if self.snapshot else "",
             stale=bool(self.failures and self.snapshot),
             error=self.last_error if self.snapshot is None else "",
-            hover=hover, provider=self.provider, confirm=self.confirm)
+            hover=hover, provider=self.provider, confirm=self.confirm,
+            action_error=self.action_error, refreshing=self.refreshing,
+            stale_reason=self.last_error)
 
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel."""
@@ -134,6 +139,8 @@ class Tray:
             self._start_fetch()
         elif name == "update":
             self._on_update(None)
+        elif name == "dismiss-error":
+            self.action_error = ""
         elif name.startswith("tab:"):
             self.provider = name.split(":", 1)[1]
             self.confirm = ""
@@ -296,13 +303,45 @@ class Tray:
             self._install_menu(self.pending_menu)
 
     def _on_switch(self, _item, number):
+        self.action_error = ""
+        self._flip_active_optimistically(number)
+
         def run():
             try:
                 cswap.switch(number)
-            except cswap.CswapError:
+            except cswap.CswapError as exc:
                 log.exception("switch failed")
+                GLib.idle_add(self._set_action_error, f"Switch failed: {exc}")
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
+
+    def _flip_active_optimistically(self, number):
+        """ACTIVE chip/icon/title move now, matching UsageStore.swift:
+        159-166: bumping self.generation (like Swift's fetchGeneration +=
+        1) makes _apply_snapshot/_apply_error drop any pre-switch fetch
+        that lands after this guess, and the forced refetch _on_switch
+        starts next is the truth that confirms or corrects it."""
+        if self.snapshot is None:
+            return
+        for acct in self.snapshot.accounts:
+            acct.active = acct.number == number
+        self.generation += 1
+        self.refreshing = False
+        account = self.snapshot.active_account
+        self._set_icon(model.pill_states(account) if account else [])
+        self.indicator.set_title(model.title_line(account))
+        self._refresh_menu()
+        if self.popover is not None and self.popover.get_visible():
+            self.popover.refresh_layout()
+
+    def _set_action_error(self, message):
+        """GLib.idle_add target: a worker thread must never poke UI state
+        directly (that is a crash waiting to happen, not a cosmetic bug),
+        so a switch/remove failure lands here instead."""
+        self.action_error = message
+        if self.popover is not None and self.popover.get_visible():
+            self.popover.refresh_layout()
+        return False
 
     def _on_remove(self, token):
         """Confirmed removal ("<provider>:<id>"): drop the card now, remove
@@ -310,6 +349,7 @@ class Tray:
         refetch — the truth that resurrects the card if the removal failed."""
         provider, _, ident = token.partition(":")
         self.confirm = ""
+        self.action_error = ""
         if self.snapshot is not None:
             if provider == "claude":
                 self.snapshot.accounts = [
@@ -325,8 +365,9 @@ class Tray:
                     cswap.remove_account(int(ident))
                 else:
                     codex.remove_account(ident)
-            except (cswap.CswapError, ValueError, OSError):
+            except (cswap.CswapError, ValueError, OSError) as exc:
                 log.exception("remove failed")
+                GLib.idle_add(self._set_action_error, f"Remove failed: {exc}")
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
 
@@ -439,6 +480,7 @@ class Tray:
 
     def _start_fetch(self):
         self.generation += 1
+        self.refreshing = True
         self.last_fetch_at = time.monotonic()
         threading.Thread(target=self._fetch, args=(self.generation,),
                          daemon=True).start()
@@ -455,6 +497,7 @@ class Tray:
     def _apply_snapshot(self, snap, generation):
         if generation != self.generation:
             return False  # superseded (e.g. a pre-switch fetch landing late)
+        self.refreshing = False
         self.failures = 0
         self.last_error = ""
         self.snapshot = snap
@@ -513,6 +556,7 @@ class Tray:
     def _apply_error(self, message, generation):
         if generation != self.generation:
             return False  # superseded
+        self.refreshing = False
         self.failures += 1
         self.last_error = message
         if self.failures >= 3:

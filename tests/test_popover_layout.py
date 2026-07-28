@@ -5,8 +5,10 @@ us: no widget toolkit, no layout engine, and no Linux box here to look at.
 These tests are that safety net, and they pin the parity claim — the card
 structure, bar geometry and wording all mirror PopoverView.swift.
 """
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from smartbar.core import model, popover_layout as layout
 from smartbar.core import popover_theme as t
@@ -211,13 +213,42 @@ class TestCardContent(unittest.TestCase):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])), now=NOW)
-        self.assertIn("79% · 2h 5m", labels(built))
+        # Two separate labels (FINDING 3), not one concatenated string —
+        # see test_percent_position_is_stable_across_countdown_lengths for
+        # why keeping them apart matters.
+        self.assertIn("79%", labels(built))
+        self.assertIn(" · 2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
-        self.assertIn("5% · 3h 1m", labels(built))
+        self.assertIn("5%", labels(built))
+        self.assertIn(" · 3h 1m", labels(built))
+
+    def test_percent_position_is_stable_across_countdown_lengths(self):
+        # FINDING 3: the percentage used to be right-anchored as part of
+        # ONE string with the countdown, so it visibly slid sideways every
+        # time the countdown's length changed (e.g. "1h 0m" -> "59m").
+        # Independently anchored labels mean the percentage's x never
+        # moves, no matter how long or short the countdown text is.
+        short = layout.build(
+            snap(account(metrics=[metric(pct=79.0, countdown="9m")])),
+            now=NOW)
+        long_ = layout.build(
+            snap(account(metrics=[metric(pct=79.0, countdown="6d 23h")])),
+            now=NOW)
+        pct_short = next(s for s in short.shapes
+                         if isinstance(s, t.Label) and s.text == "79%")
+        pct_long = next(s for s in long_.shapes
+                        if isinstance(s, t.Label) and s.text == "79%")
+        self.assertEqual(pct_short.x, pct_long.x)
+
+    def test_the_bar_reclaims_the_width_the_old_single_column_wasted(self):
+        # FINDING 3: VALUE_W used to reserve 104pt for a value no realistic
+        # string needs; the two-column layout reserves less, in total, so
+        # the bar itself gets wider.
+        self.assertLess(t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W, 104.0)
 
     def test_bar_fill_is_proportional_and_clamped(self):
         for pct, expect_full in ((50.0, False), (100.0, True), (140.0, True)):
@@ -271,6 +302,51 @@ class TestDataless(unittest.TestCase):
         self.assertIn("Loading usage…", labels(layout.build(None, now=NOW)))
         self.assertIn("cswap exploded",
                       labels(layout.build(None, error="cswap exploded", now=NOW)))
+
+    def test_a_long_error_message_wraps_instead_of_overflowing(self):
+        long_error = "cswap exploded: " + "x" * 80
+        built = layout.build(None, error=long_error, now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == long_error)
+        self.assertEqual(label.max_lines, 2)
+
+    def test_a_short_error_message_stays_one_line(self):
+        built = layout.build(None, error="offline", now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == "offline")
+        self.assertEqual(label.max_lines, 1)
+
+
+class TestFirstRunMessage(unittest.TestCase):
+    """FINDING 1: NO_ACCOUNTS/UNREGISTERED need 2 lines, not SwiftUI's
+    implicit 1, or popover_draw._fit middle-truncates them into nonsense —
+    the first thing a brand-new user sees."""
+
+    def test_no_accounts_message_wraps_to_two_lines(self):
+        built = layout.build(snap(), now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == layout.NO_ACCOUNTS)
+        self.assertEqual(label.max_lines, 2)
+
+    def test_unregistered_message_fits_on_one_line(self):
+        # Shorter than NO_ACCOUNTS and comfortably inside the slot both by
+        # the estimate and by real cairo measurement — pinned so a future
+        # wording change that makes this ALSO need 2 lines doesn't
+        # silently reserve the wrong height (the FINDING 1 trap, in the
+        # opposite direction: too MUCH height, an empty gap).
+        built = layout.build(snap(account()), now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == layout.UNREGISTERED)
+        self.assertEqual(label.max_lines, 1)
+
+    def test_the_reserved_height_grows_to_match_the_second_line(self):
+        # Without the matching height growth, the next section down would
+        # sit on top of the caption's wrapped second line.
+        built = layout.build(snap(), now=NOW)
+        expected = (t.PAD + t.HEADER_H + t.SECTION_GAP + t.STATE_ROW_H
+                    + t.STATE_LINE_H + t.CARD_GAP + t.SECTION_GAP
+                    + t.FOOTER_H + t.PAD)
+        self.assertAlmostEqual(built.height, expected)
 
 
 class TestHitTesting(unittest.TestCase):
@@ -445,11 +521,18 @@ class TestRemoveAffordance(unittest.TestCase):
         self.assertLessEqual(address.x + address.max_width, cross.x)
         self.assertLessEqual(cross.x + cross.w, switch.x)
 
-    def test_confirm_swaps_the_header_and_keeps_the_height(self):
+    def test_confirm_grows_the_card_to_show_the_full_identity(self):
+        # FINDING 2: the old header put the question and the Remove/Keep
+        # buttons on ONE row, so "Remove <email>?" had to middle-truncate
+        # on any realistic address. The new header stacks the (never
+        # middle-truncated) question above its own button row instead — a
+        # deliberate one-time height change on an explicit user action,
+        # not the "same height always" property the old docstring pinned.
         plain = layout.build(snap(account(number=2)), now=NOW)
         confirm = layout.build(snap(account(number=2)), confirm="claude:2",
                                now=NOW)
-        self.assertEqual(confirm.height, plain.height)
+        self.assertAlmostEqual(confirm.height - plain.height,
+                               t.CARD_INNER_GAP + t.BUTTON_H)
         self.assertIn("Remove a@example.com?", labels(confirm))
         names = {h.name for h in confirm.hits}
         self.assertIn("confirm-remove:claude:2", names)
@@ -458,6 +541,24 @@ class TestRemoveAffordance(unittest.TestCase):
         self.assertNotIn("Make Active", labels(confirm))
         # the metric bars survive the question
         self.assertEqual(len(bars(confirm)), len(bars(plain)))
+
+    def test_the_confirm_question_never_needs_more_than_its_reserved_lines(self):
+        # CONSTRAINT from FINDING 2: the full account label — including the
+        # plan badge and device count, not just the bare address — must
+        # stay readable, un-truncated, for a realistic address. Stack a
+        # long one with both badges to stress the reserved line budget.
+        card = account(number=2, email="nguyen.tran@employmenthero.com")
+        card.plan = "20x"
+        card.devices = 3
+        built = layout.build(snap(card), confirm="claude:2", now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text.startswith("Remove"))
+        self.assertEqual(
+            label.text, "Remove nguyen.tran@employmenthero.com · 20x (3)?")
+        needed = layout._lines_for_width(label.text, label.max_width,
+                                         size=t.SIZE_EMAIL, bold=True,
+                                         cap=t.CONFIRM_MAX_LINES)
+        self.assertLessEqual(needed, label.max_lines)
 
     def test_confirm_remove_button_is_destructive_red(self):
         confirm = layout.build(snap(account(number=2)), confirm="claude:2",
@@ -500,12 +601,36 @@ class TestRemoveAffordance(unittest.TestCase):
         self.assertEqual(built.hit(switch.x + switch.w / 2,
                                    switch.y + switch.h / 2).name, "switch:2")
 
+    def test_hovering_does_not_reflow_the_address(self):
+        # FINDING 4: the ✕ gutter used to be reserved only while
+        # hovering, so a long address re-wrapped — and could re-truncate —
+        # the instant the pointer arrived. It must be reserved
+        # unconditionally on any removable card.
+        plain = layout.build(snap(account(number=2)), now=NOW)
+        hovered = layout.build(snap(account(number=2)),
+                               hover="card:claude:2", now=NOW)
+        address_plain = next(s for s in plain.shapes
+                             if isinstance(s, t.Label) and "@" in s.text)
+        address_hovered = next(s for s in hovered.shapes
+                               if isinstance(s, t.Label) and "@" in s.text)
+        self.assertEqual(address_plain.max_width, address_hovered.max_width)
+
 
 class TestHeaderAndFooter(unittest.TestCase):
     def test_updated_label_is_local_short_time(self):
-        text = layout.updated_label("2026-07-24T18:00:00Z", NOW)
+        # hour24 pinned explicitly: the auto-detected convention (FINDING
+        # 5b) depends on the machine running the test, and this test is
+        # about the TIME VALUE, not which convention won.
+        text = layout.updated_label("2026-07-24T18:00:00Z", NOW, hour24=False)
         self.assertTrue(text.startswith("Updated "), text)
         self.assertRegex(text, r"^Updated \d{1,2}:\d{2} (AM|PM)$")
+
+    def test_updated_label_honors_an_explicit_24_hour_override(self):
+        # FINDING 5b: a user on a 24-hour clock must not always be shown
+        # 12-hour time. hour24=True forces the other convention outright,
+        # independent of whatever the host machine's locale guesses.
+        text = layout.updated_label("2026-07-24T18:00:00Z", NOW, hour24=True)
+        self.assertRegex(text, r"^Updated \d{2}:\d{2}$")
 
     def test_updated_label_empty_without_a_stamp(self):
         self.assertEqual(layout.updated_label("", NOW), "")
@@ -516,10 +641,246 @@ class TestHeaderAndFooter(unittest.TestCase):
                              stale=True, now=NOW)
         self.assertIn("stale", labels(built))
 
+    def test_stale_marker_never_sits_under_the_updated_label(self):
+        # FINDING 5a: both offsets are now DERIVED from the same
+        # text_width() estimate rather than one hardcoded and one
+        # estimated — pin that they stay consistent with each other.
+        built = layout.build(snap(account()), fetched_at="2026-07-24T18:00:00Z",
+                             stale=True, now=NOW)
+        updated = next(s for s in built.shapes if isinstance(s, t.Label)
+                       and s.text.startswith("Updated"))
+        stale = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == "stale")
+        self.assertGreaterEqual(
+            stale.x, updated.x + t.text_width(updated.text, t.SIZE_CAPTION))
+
     def test_blocked_update_is_surfaced_in_the_footer(self):
         built = layout.build(snap(account()), version="1.0.0",
                              blocked_reason="2 unpushed commit(s)", now=NOW)
         self.assertIn("v1.0.0 · update held", labels(built))
+
+
+class TestClockConvention(unittest.TestCase):
+    """FINDING 5b: auto-detect the locale's clock convention, but let an
+    explicit override win, and never crash when detection is impossible."""
+
+    def test_smartbar_clock_env_override_wins_outright(self):
+        with mock.patch.dict(os.environ, {"SMARTBAR_CLOCK": "24"}):
+            self.assertTrue(layout.prefers_24_hour_clock())
+        with mock.patch.dict(os.environ, {"SMARTBAR_CLOCK": "12"}):
+            self.assertFalse(layout.prefers_24_hour_clock())
+
+    def test_an_unrecognised_override_falls_through_to_the_guess(self):
+        with mock.patch.dict(os.environ, {"SMARTBAR_CLOCK": "banana"}):
+            self.assertIn(layout.prefers_24_hour_clock(), (True, False))
+
+    def test_the_guess_never_raises(self):
+        # Best-effort by contract: whatever the host's locale looks like,
+        # this must return a bool, never throw.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SMARTBAR_CLOCK", None)
+            self.assertIsInstance(layout.prefers_24_hour_clock(), bool)
+
+
+class TestActionFeedback(unittest.TestCase):
+    """FINDING 6: a switch/remove failure used to vanish silently (tray.py
+    logs and refetches; nothing on screen changes). action_error renders a
+    dismissible banner; refreshing dims and disables the ⟳ hit so a second
+    click cannot queue a second fetch."""
+
+    def test_default_call_has_no_banner_or_busy_state(self):
+        # Byte-for-byte: an un-migrated caller (no action_error/refreshing
+        # keyword at all) must render exactly as it did before either param
+        # existed.
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertFalse(any(h.name == "dismiss-error" for h in built.hits))
+        refresh = next(h for h in built.hits if h.name == "refresh")
+        self.assertTrue(refresh.enabled)
+        glyph = next(s for s in built.shapes
+                    if isinstance(s, t.Glyph) and s.kind == "refresh")
+        self.assertEqual(glyph.color, t.TEXT)
+
+    def test_action_error_renders_as_a_dismissible_banner(self):
+        built = layout.build(snap(account(active=True)),
+                             action_error="Switch failed: in use", now=NOW)
+        self.assertIn("Switch failed: in use", labels(built))
+        dismiss = next(h for h in built.hits if h.name == "dismiss-error")
+        self.assertTrue(dismiss.enabled)
+        self.assertEqual(dismiss.tooltip, "Dismiss")
+
+    def test_action_error_sits_above_the_account_list(self):
+        # Mirrors PopoverView.swift:28 — under the header/tabs, above
+        # whichever provider's cards are showing.
+        built = layout.build(snap(account(number=2)),
+                             action_error="Remove failed: in use", now=NOW)
+        banner = next(s for s in built.shapes if isinstance(s, t.Label)
+                     and s.text == "Remove failed: in use")
+        card = next(h for h in built.hits if h.name.startswith("card:"))
+        self.assertLess(banner.y, card.y)
+
+    def test_a_long_action_error_wraps_and_grows_the_panel(self):
+        plain = layout.build(snap(account(active=True)), now=NOW)
+        long_error = "Switch failed: " + "connection refused " * 6
+        built = layout.build(snap(account(active=True)),
+                             action_error=long_error, now=NOW)
+        self.assertGreater(built.height, plain.height)
+
+    def test_refreshing_dims_and_disables_only_the_refresh_glyph(self):
+        built = layout.build(snap(account(active=True)), refreshing=True,
+                             now=NOW)
+        refresh = next(h for h in built.hits if h.name == "refresh")
+        quit_ = next(h for h in built.hits if h.name == "quit")
+        self.assertFalse(refresh.enabled)
+        self.assertTrue(quit_.enabled)
+        glyphs = {s.kind: s.color for s in built.shapes
+                 if isinstance(s, t.Glyph) and s.kind in ("refresh", "quit")}
+        self.assertEqual(glyphs["refresh"], t.TEXT_TERTIARY)
+        self.assertEqual(glyphs["quit"], t.TEXT)
+
+    def test_a_click_on_the_disabled_refresh_hit_resolves_to_nothing(self):
+        # enabled=False, not just dimmed — a real second click while a
+        # fetch is in flight must not resolve to "refresh" at all.
+        built = layout.build(snap(account(active=True)), refreshing=True,
+                             now=NOW)
+        refresh = next(h for h in built.hits if h.name == "refresh")
+        found = built.hit(refresh.x + refresh.w / 2, refresh.y + refresh.h / 2)
+        self.assertIsNone(found)
+
+
+class TestTooltips(unittest.TestCase):
+    """FINDING 8: every actionable hit, plus the "stale" and "update-held"
+    non-action hits, carry a tooltip worded from the matching
+    PopoverView.swift / AccountCardView.swift `.help()` string, so both
+    platforms explain themselves the same way."""
+
+    def test_refresh_and_quit(self):
+        built = layout.build(snap(account(active=True)), now=NOW)
+        tips = {h.name: h.tooltip for h in built.hits}
+        self.assertEqual(tips["refresh"], "Refresh now")
+        self.assertEqual(tips["quit"], "Quit AI smartbar")
+
+    def test_update_button(self):
+        built = layout.build(snap(account(active=True)),
+                             pending_version="9.9.9", now=NOW)
+        update = next(h for h in built.hits if h.name == "update")
+        self.assertEqual(update.tooltip,
+                         "Fetch, rebuild and restart AI smartbar")
+
+    def test_switch_button_names_the_target_account(self):
+        built = layout.build(snap(account(number=2)), now=NOW)
+        switch = next(h for h in built.hits if h.name == "switch:2")
+        self.assertEqual(switch.tooltip, "Switch Claude Code to a@example.com")
+
+    def test_a_dead_credential_explains_why_switching_is_blocked(self):
+        blocked = account(number=2, status="relogin_required")
+        built = layout.build(snap(blocked), now=NOW)
+        switch = next(h for h in built.hits if h.name == "switch:2")
+        self.assertIn("switching would log Claude Code out", switch.tooltip)
+        self.assertIn(model.state_text(blocked), switch.tooltip)
+
+    def test_remove_names_the_account(self):
+        built = layout.build(snap(account(number=2)), hover="card:claude:2",
+                             now=NOW)
+        remove = next(h for h in built.hits if h.name == "remove:claude:2")
+        self.assertEqual(remove.tooltip,
+                         "Remove a@example.com from AI smartbar")
+
+    def test_confirm_remove_explains_what_it_deletes_for_claude(self):
+        built = layout.build(snap(account(number=2)), confirm="claude:2",
+                             now=NOW)
+        confirm = next(h for h in built.hits
+                      if h.name == "confirm-remove:claude:2")
+        self.assertIn("claude-swap's stored credential backup for slot 2",
+                      confirm.tooltip)
+
+    def test_confirm_remove_explains_what_it_deletes_for_openai(self):
+        s = snap()
+        s.openai = [openai_account(number=2, email="old@x.com", active=False,
+                                   ok=False, status="signed_out", metrics=[])]
+        built = layout.build(s, provider="openai", confirm="openai:old@x.com",
+                             now=NOW)
+        confirm = next(h for h in built.hits
+                      if h.name == "confirm-remove:openai:old@x.com")
+        self.assertIn("Codex brings it back", confirm.tooltip)
+
+    def test_cancel_remove_offers_to_keep_the_account(self):
+        built = layout.build(snap(account(number=2)), confirm="claude:2",
+                             now=NOW)
+        cancel = next(h for h in built.hits if h.name == "cancel-remove")
+        self.assertEqual(cancel.tooltip, "Keep this account")
+
+    def test_tab_tooltips_name_the_provider_they_switch_to(self):
+        both = snap(account(active=True))
+        both.openai = [openai_account()]
+        built = layout.build(both, now=NOW)
+        tips = {h.name: h.tooltip for h in built.hits
+               if h.name.startswith("tab:")}
+        self.assertEqual(tips["tab:claude"], "Show Claude accounts")
+        self.assertEqual(tips["tab:openai"], "Show OpenAI accounts")
+
+    def test_stale_and_update_held_surface_the_actual_reason(self):
+        # FINDING 7: both reasons used to be computed and thrown away.
+        built = layout.build(snap(account(active=True)), version="1.0.0",
+                             stale=True, stale_reason="cswap timed out",
+                             blocked_reason="2 unpushed commit(s)", now=NOW)
+        tips = {h.name: h.tooltip for h in built.hits}
+        self.assertEqual(tips["stale"], "cswap timed out")
+        self.assertEqual(tips["update-held"],
+                         "Update held back: 2 unpushed commit(s)")
+
+    def test_stale_falls_back_to_a_generic_reason_without_one(self):
+        built = layout.build(snap(account(active=True)), stale=True, now=NOW)
+        stale = next(h for h in built.hits if h.name == "stale")
+        self.assertEqual(stale.tooltip,
+                         "last refresh failed; showing old data")
+
+    def test_no_update_held_hit_when_nothing_is_blocked(self):
+        built = layout.build(snap(account(active=True)), version="1.0.0",
+                             now=NOW)
+        self.assertFalse(any(h.name == "update-held" for h in built.hits))
+
+
+class TestDisabledControlsStillExplainThemselves(unittest.TestCase):
+    """Layout.tooltip_at must answer for DISABLED hits too.
+
+    The blocked "Make Active" button is the single most valuable tooltip in
+    the panel: it is the only thing that says why the button will not
+    respond. It is also a disabled Hit, and Hit.contains() refuses those,
+    so routing tooltips through Layout.hit() authored that string and then
+    made it unreachable on both painted front-ends (SwiftUI keeps a .help()
+    on its own .disabled() button, so macOS showed it and Linux/Windows
+    could not). Pinned here because a front-end reaching for the obvious
+    `layout.hit(x, y).tooltip` would silently reintroduce it.
+    """
+
+    def _blocked_layout(self):
+        return layout.build(snap(account(email="dead@example.com", ok=False,
+                                         status="relogin_required",
+                                         metrics=[])))
+
+    def test_a_disabled_switch_button_still_has_a_reachable_tooltip(self):
+        built = self._blocked_layout()
+        switch = [h for h in built.hits if h.name.startswith("switch:")]
+        self.assertEqual(len(switch), 1)
+        target = switch[0]
+        self.assertFalse(target.enabled, "a dead credential stays blocked")
+        self.assertTrue(target.tooltip)
+        point = (target.x + target.w / 2, target.y + target.h / 2)
+        # The bug, precisely: hit() skips the disabled button and lands on
+        # the card's own hover region underneath, whose tooltip is "" — so
+        # a front-end reading hit().tooltip gets silence, not the reason.
+        under = built.hit(*point)
+        self.assertEqual(under.name, "card:claude:1")
+        self.assertEqual(under.tooltip, "")
+        self.assertEqual(built.tooltip_at(*point), target.tooltip)
+
+    def test_the_blocked_tooltip_says_why_rather_than_just_that(self):
+        built = self._blocked_layout()
+        target = [h for h in built.hits if h.name.startswith("switch:")][0]
+        self.assertIn("Stored credential is dead", target.tooltip)
+
+    def test_empty_space_has_no_tooltip(self):
+        self.assertEqual(self._blocked_layout().tooltip_at(-5, -5), "")
 
 
 if __name__ == "__main__":
