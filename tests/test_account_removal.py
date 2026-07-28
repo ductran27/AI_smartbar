@@ -126,9 +126,31 @@ class TestRemovalParity(unittest.TestCase):
             for p in sorted(SWIFT_DIR.glob("*.swift")))
 
     def test_swift_confirm_question_matches_the_shared_layout(self):
-        # popover_layout renders f"Remove {email}?"; the Swift card must ask
-        # the identical question.
-        self.assertIn('Remove \\(account.email)?', self.card)
+        """Both languages must name the account in FULL when asking.
+
+        This assertion used to pin the bare `account.email`, which is the
+        BUG it now guards against: at 12pt semibold "Remove
+        duc.dut.wr@gmail.com?" needs 189pt in the 182pt the one-row confirm
+        header had, so an ordinary address was middle-truncated to
+        "Remove duc.d…r@gmail.com?" — the identity elided at exactly the
+        moment the user has to be certain what they are deleting. Both
+        sides now ask with the full account label (address · plan ·
+        devices), which is also what tells two similar addresses apart.
+        """
+        self.assertIn('Remove \\(accountLabel)?', self.card)
+        # accountLabel must be the plain-string twin of model.account_label,
+        # not a second opinion about what an account is called.
+        self.assertIn("private var accountLabel: String", self.card)
+        layout = (REPO / "smartbar/core/popover_layout.py").read_text(
+            encoding="utf-8")
+        self.assertIn('f"Remove {model.account_label(account)}?"', layout)
+
+    def test_neither_language_asks_with_a_bare_email(self):
+        """The regression above is one edit away in either language."""
+        layout = (REPO / "smartbar/core/popover_layout.py").read_text(
+            encoding="utf-8")
+        self.assertNotIn('Remove \\(account.email)?', self.card)
+        self.assertNotIn('f"Remove {account.email}?"', layout)
 
     def test_swift_removes_through_the_launcher_not_cswap(self):
         # ONE SHARED ANSWER: the active-account guard and both providers'

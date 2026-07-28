@@ -43,6 +43,8 @@ import smartbar
 
 LINUX_TRAY_PATH = os.path.join(os.path.dirname(smartbar.__file__), "linux",
                                "tray.py")
+SWIFT_STORE_PATH = os.path.join(os.path.dirname(os.path.dirname(smartbar.__file__)),
+                                "macos-swift", "Sources", "AISmartbar", "UsageStore.swift")
 
 
 class _FakeApp:
@@ -290,6 +292,80 @@ class TestCheckUpdateRow(MenubarTestCase):
             app._checked(1, None)
         self.assertEqual(app.check_result, "✕ Check failed")
         self.assertFalse(app.checking)
+
+
+class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
+    """_make_switch used to do
+
+        except cswap.CswapError as exc: log.warning(...)
+
+    and then just refetch: the click closed the menu, the switch failed,
+    and the redraw looked identical to success. Mirrors UsageStore.swift's
+    sticky switchError -- cleared only when a switch is attempted again,
+    not by the next periodic refresh -- because that refresh is the one
+    thing that must NOT erase the very error it is about to redraw around.
+    """
+
+    def _run_switch(self, app, number, thread):
+        """Drive _make_switch's callback and its worker synchronously."""
+        app._make_switch(number)(None)
+        thread.call_args.kwargs["target"]()
+
+    def test_a_failed_switch_sets_a_sticky_row_and_notifies(self):
+        app = self.build()
+        with mock.patch.object(self.menubar.threading, "Thread") as thread, \
+             mock.patch.object(self.menubar.cswap, "switch",
+                               side_effect=self.menubar.cswap.CswapError("in use")):
+            self._run_switch(app, 2, thread)
+            # Not applied yet: the failure crossed back through _to_main,
+            # same as every other worker -> UI handoff in this file.
+            self.assertEqual(app.switch_error, "")
+            app._drain_ui(None)
+        self.assertEqual(app.switch_error, "Switch failed: in use")
+        self.rumps.notification.assert_called_once()
+        _, _, body = self.rumps.notification.call_args.args
+        self.assertIn("in use", body)
+
+    def test_the_sticky_row_sits_above_the_account_list(self):
+        """Closest rumps analogue to switchError's slot in PopoverView.swift,
+        which sits above the account list -- this text menu has no header
+        row to place it under."""
+        app = self.build()
+        app.switch_error = "Switch failed: in use"
+        app.snapshot = snapshot()
+        app._rebuild_menu()
+        self.assertEqual(app.menu[0].title, "✕ Switch failed: in use")
+
+    def test_a_new_switch_attempt_clears_the_previous_sticky_error(self):
+        """The clear happens the instant the row is clicked (main thread),
+        before the worker even starts -- the optimistic clear UsageStore
+        does at UsageStore.swift:161, ahead of its own Task."""
+        app = self.build()
+        app.switch_error = "Switch failed: in use"
+        with mock.patch.object(self.menubar.threading, "Thread"), \
+             mock.patch.object(self.menubar.cswap, "switch"):
+            app._make_switch(2)(None)
+        self.assertEqual(app.switch_error, "")
+
+    def test_a_successful_switch_never_notifies(self):
+        app = self.build()
+        with mock.patch.object(self.menubar.threading, "Thread") as thread, \
+             mock.patch.object(self.menubar.cswap, "switch"):
+            self._run_switch(app, 2, thread)
+            app._drain_ui(None)
+        self.assertEqual(app.switch_error, "")
+        self.rumps.notification.assert_not_called()
+
+    def test_the_failure_wording_matches_the_swift_store_word_for_word(self):
+        """Source-scraped like TestCheckUpdateRow's Linux comparison: a
+        reworded message in one front-end and not the other is drift a
+        reader would never notice."""
+        with open(SWIFT_STORE_PATH, encoding="utf-8") as handle:
+            swift = handle.read()
+        self.assertIn('"Switch failed: \\(failure)"', swift)
+        with open(self.menubar.__file__, encoding="utf-8") as handle:
+            mac = handle.read()
+        self.assertIn('f"Switch failed: {message}"', mac)
 
 
 class TestPendingUpdateIsShared(MenubarTestCase):

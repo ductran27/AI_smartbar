@@ -203,6 +203,11 @@ class Tray:
         self._last_menu_signature = None  # last (text, enabled) rows sent to pystray
         self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
         self.last_error = ""
+        self.action_error = ""    # last switch/remove failure; sticky until
+                                   # the next attempt (mirrors UsageStore.swift's
+                                   # switchError/removeError)
+        self.refreshing = False   # a usage fetch is in flight; dims/disables
+                                   # the ⟳ glyph so a second click can't queue
         self.update_blocked = ""
         self.presence_started = False  # first beat waits for the first fetch
         self.checking = False     # a manual update check is in flight
@@ -246,7 +251,9 @@ class Tray:
             fetched_at=self.snapshot.fetched_at if self.snapshot else "",
             stale=bool(self.failures and self.snapshot),
             error=self.last_error if self.snapshot is None else "",
-            hover=hover, provider=self.provider, confirm=self.confirm)
+            hover=hover, provider=self.provider, confirm=self.confirm,
+            action_error=self.action_error, refreshing=self.refreshing,
+            stale_reason=self.last_error)
 
     def _to_main(self, callback, *args):
         """Marshal `callback(*args)` onto the tk main thread. thread -> UI handoff.
@@ -317,6 +324,8 @@ class Tray:
             pass   # hover container — a click on the card body does nothing
         elif name.startswith("switch:"):
             self._on_switch(int(name.split(":", 1)[1]))
+        elif name == "dismiss-error":
+            self.action_error = ""
         if self.popover is not None:
             self.popover.refresh_layout()
 
@@ -457,13 +466,62 @@ class Tray:
         self._on_quit()
 
     def _on_switch(self, number):
+        """Optimistic ACTIVE flip (mirrors UsageStore.swift:152-187's
+        switchTo). Reached from BOTH the tk thread (_on_popover_action, a
+        card's "Make Active" hit) and the pystray worker thread (a
+        fallback-menu account row, via _account_switch_action) -- unlike
+        _on_remove, which only ever fires from the tk thread -- so the
+        actual state-touching work (_begin_switch) is marshaled through
+        _to_main unconditionally rather than assumed tk-thread-safe.
+        thread -> UI handoff either way; see _quit's docstring for why
+        calling _to_main from the tk thread itself is also safe.
+        """
+        self._to_main(self._begin_switch, number)  # thread -> UI handoff
+
+    def _begin_switch(self, number):
+        """Runs on the tk thread (always via _on_switch's _to_main call).
+
+        A blocked account (dead stored credential) never reaches the real
+        switch -- the same belt as the disabled "Make Active" button and
+        UsageStore.swift:154-158's own guard. Otherwise the ACTIVE chip
+        flips immediately (the icon lags one _set_icon call behind, same
+        as macOS) and only then does the real switch start in the
+        background; the generation bump makes any pre-switch fetch still
+        in flight land as superseded once it completes.
+        """
+        account = None
+        if self.snapshot is not None:
+            account = next((a for a in self.snapshot.accounts
+                            if a.number == number), None)
+        if account is not None and model.switch_blocked(account):
+            self._set_action_error(
+                f"Cannot switch: {model.state_text(account)}")
+            return
+        self.action_error = ""   # a new attempt clears the last one's error
+        if self.snapshot is not None:
+            for acct in self.snapshot.accounts:
+                acct.active = acct.number == number
+            if self.popover is not None:
+                self.popover.refresh_layout()
+        with self._generation_lock:
+            self.generation += 1  # an in-flight pre-switch fetch is now stale
+
         def run():
             try:
                 cswap.switch(number)
-            except cswap.CswapError:
+            except cswap.CswapError as exc:
                 log.exception("switch failed")
+                self._to_main(self._set_action_error,
+                              f"Switch failed: {exc}")  # thread -> UI handoff
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
+
+    def _set_action_error(self, message):
+        """Runs on the tk thread (via _to_main from a worker, or directly
+        from _begin_switch, which got there through _to_main itself)."""
+        self.action_error = message
+        if self.popover is not None and self.popover.get_visible():
+            self.popover.refresh_layout()
 
     def _on_remove(self, token):
         """Confirmed removal ("<provider>:<id>"): drop the card now, remove
@@ -471,6 +529,7 @@ class Tray:
         refetch — the truth that resurrects the card if the removal failed."""
         provider, _, ident = token.partition(":")
         self.confirm = ""
+        self.action_error = ""   # a new attempt clears the last one's error
         if self.snapshot is not None:
             if provider == "claude":
                 self.snapshot.accounts = [
@@ -486,8 +545,10 @@ class Tray:
                     cswap.remove_account(int(ident))
                 else:
                     codex.remove_account(ident)
-            except (cswap.CswapError, ValueError, OSError):
+            except (cswap.CswapError, ValueError, OSError) as exc:
                 log.exception("remove failed")
+                self._to_main(self._set_action_error,
+                              f"Remove failed: {exc}")  # thread -> UI handoff
             self._start_fetch()
         threading.Thread(target=run, daemon=True).start()
 
@@ -710,6 +771,8 @@ class Tray:
             self.generation += 1
             generation = self.generation
         self.last_fetch_at = time.monotonic()
+        self.refreshing = True   # plain attribute write -- see the class
+                                  # docstring's note on self.generation above
         threading.Thread(target=self._fetch, args=(generation,),
                          daemon=True).start()
 
@@ -732,6 +795,7 @@ class Tray:
             return  # superseded (e.g. a pre-switch fetch landing late)
         self.failures = 0
         self.last_error = ""
+        self.refreshing = False
         self.snapshot = snap
         # Stamp the device counts and plan badges before anything renders:
         # the menu rows and the panel both name accounts through
@@ -791,6 +855,7 @@ class Tray:
             return  # superseded
         self.failures += 1
         self.last_error = message
+        self.refreshing = False
         if self.failures >= 3:
             self._set_icon([])
             self.icon.title = _fit_wchars(

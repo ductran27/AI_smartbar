@@ -9,6 +9,9 @@ is live. Format mirrors claude-swap's ``oauth.format_reset``: "44m",
 """
 from __future__ import annotations
 
+import locale
+import os
+import sys
 from datetime import datetime, timezone
 
 
@@ -52,3 +55,58 @@ def remaining_text(resets_at: str, now=None) -> str:
     if hours > 0:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
+
+
+def _windows_prefers_24_hour() -> bool:
+    """The Control Panel's actual per-user setting, via ctypes (stdlib).
+
+    Windows shells routinely leave LANG/LC_TIME unset, so the POSIX path
+    below has nothing to read; GetLocaleInfoW asks the OS directly instead.
+    """
+    try:
+        import ctypes
+        # LOCALE_USER_DEFAULT, LOCALE_ITIME (winnls.h): 0 = 12-hour "tt",
+        # 1 = 24-hour "HH" in the user's Control Panel short-time format.
+        get_locale_info = ctypes.windll.kernel32.GetLocaleInfoW
+        buf = ctypes.create_unicode_buffer(8)
+        n = get_locale_info(0x0400, 0x00000021, buf, len(buf))
+        return n > 0 and buf.value.strip() == "1"
+    except Exception:
+        return False
+
+
+def prefers_24_hour_clock() -> bool:
+    """Best-effort: does the local convention favor "14:02" over "2:02 PM"?
+
+    Dependency-free and meant to work on macOS, Linux AND Windows on
+    Python 3.9, so there is no single stdlib call that just answers this:
+
+    - ``SMARTBAR_CLOCK=24``/``=12`` is an explicit override (same
+      convention as core/model.py's SMARTBAR_YELLOW/LOW/RED), for whenever
+      the guess below gets it wrong.
+    - Windows has no ``locale.nl_langinfo`` at all, so it goes through
+      ``GetLocaleInfoW`` instead — the real Control Panel setting.
+    - POSIX's ``nl_langinfo(T_FMT)`` answers exactly, but only for the
+      locale category Python is CURRENTLY running under, which starts as
+      "C" until something calls ``setlocale``. We peek at the env-derived
+      locale and restore the previous one immediately after reading it —
+      brief, and nothing else in this codebase does locale-sensitive
+      formatting, but it is process-global state, hence the narrow
+      try/finally instead of leaving it changed.
+    - Any failure along the way falls back to today's behaviour: 12-hour.
+    """
+    override = os.environ.get("SMARTBAR_CLOCK", "").strip()
+    if override in ("24", "12"):
+        return override == "24"
+    if sys.platform == "win32":
+        return _windows_prefers_24_hour()
+    try:
+        previous = locale.setlocale(locale.LC_TIME)
+        try:
+            locale.setlocale(locale.LC_TIME, "")
+            fmt = locale.nl_langinfo(locale.T_FMT)
+        finally:
+            locale.setlocale(locale.LC_TIME, previous)
+    except (locale.Error, AttributeError, ValueError):
+        return False
+    return bool(fmt) and "%I" not in fmt and "%l" not in fmt

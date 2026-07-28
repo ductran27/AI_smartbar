@@ -33,19 +33,34 @@ struct MetricBarRow: View {
             TimelineView(.everyMinute) { context in
                 valueText(now: context.date)
             }
-            .frame(width: 104, alignment: .trailing)
+            // VALUE_PCT_W + VALUE_COUNTDOWN_W in the shared theme.
+            .frame(width: 94, alignment: .trailing)
         }
     }
 
     private func valueText(now: Date) -> some View {
         let countdown = metric.liveCountdown(now: now)
-        return (Text("\(metric.usedPct)%").fontWeight(.bold)
-            + Text(countdown.isEmpty ? "" : " · \(countdown)"))
-            .font(.system(size: 10.5, design: .monospaced))
-            // A spent limit is a deliberate signal (purple bar), not a
-            // disabled row — keep its number readable, just distinguishable.
-            .foregroundStyle(metric.pct >= 100 ? Color.white.opacity(0.68)
-                                               : Color.white.opacity(0.8))
-            .lineLimit(1)
+        let color = metric.pct >= 100 ? Color.white.opacity(0.68)
+                                       : Color.white.opacity(0.8)
+        // Percentage and countdown are two INDEPENDENTLY right-anchored
+        // labels, each in its own fixed-width trailing frame, not one
+        // concatenated Text right-anchored as a block — a single string
+        // makes the percentage slide sideways every time the countdown's
+        // length changes (e.g. "1h 0m" -> "59m"), a 19pt swing on the "·"
+        // (the shared layout's FINDING 3, popover_layout._card_body).
+        return HStack(spacing: 0) {
+            Text("\(metric.usedPct)%")
+                .fontWeight(.bold)
+                // VALUE_PCT_W in the shared theme.
+                .frame(width: 28, alignment: .trailing)
+            Text(countdown.isEmpty ? "" : " · \(countdown)")
+                // VALUE_COUNTDOWN_W in the shared theme.
+                .frame(width: 66, alignment: .trailing)
+        }
+        .font(.system(size: 10.5, design: .monospaced))
+        // A spent limit is a deliberate signal (purple bar), not a
+        // disabled row — keep its number readable, just distinguishable.
+        .foregroundStyle(color)
+        .lineLimit(1)
     }
 }

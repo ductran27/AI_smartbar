@@ -109,6 +109,11 @@ class Popover(Gtk.Window):
                              | Gdk.EventMask.BUTTON_RELEASE_MASK
                              | Gdk.EventMask.POINTER_MOTION_MASK
                              | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        # The panel is painted, not a widget tree, so GTK has nothing to
+        # attach a tooltip to on its own: set_has_tooltip puts the pointer
+        # position through our own hit-test instead (FINDING 8).
+        self.area.set_has_tooltip(True)
+        self.area.connect("query-tooltip", self._on_query_tooltip)
         self.area.connect("draw", self._on_draw)
         self.area.connect("button-press-event", self._on_press)
         self.area.connect("button-release-event", self._on_release)
@@ -216,6 +221,29 @@ class Popover(Gtk.Window):
             self.begin_move_drag(1, int(x_root), int(y_root), stamp)
         except Exception:
             log.debug("begin_move_drag failed", exc_info=True)
+
+    def _on_query_tooltip(self, _area, x, y, keyboard_mode, tooltip) -> bool:
+        """Explain whatever the pointer is over — the GTK half of FINDING 8.
+
+        Returning False is what HIDES a tooltip GTK is already showing, so
+        the "nothing to say here" path must fall through rather than leave
+        the previous hit's text up as the pointer moves on.
+
+        Keyboard mode is declined outright: it asks for the tooltip of the
+        focused widget, and this window deliberately owns exactly one
+        (the DrawingArea) with no pointer position to hit-test against.
+
+        tooltip_at(), not hit(): the blocked "Make Active" button is a
+        disabled hit, and its tooltip is the only thing that says why it
+        is refusing. See popover_theme.Layout.tooltip_at.
+        """
+        if self.layout is None or keyboard_mode:
+            return False
+        text = self.layout.tooltip_at(x, y)
+        if not text:
+            return False
+        tooltip.set_text(text)
+        return True
 
     def _on_leave(self, *_args) -> bool:
         if self._dragging:

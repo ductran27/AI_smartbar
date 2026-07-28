@@ -55,6 +55,7 @@ import os
 import re
 import sys
 import textwrap
+import threading
 import types
 import unittest
 from unittest import mock
@@ -610,6 +611,18 @@ class TestActionDispatchInvokesTheRightHandler(GuiStubbedTestCase):
                         tray._on_switch, tray._on_remove):
             handler.assert_not_called()
 
+    def test_dismiss_error_hit_clears_action_error_and_nothing_else(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray_with_mocked_actions(mod)
+        tray.confirm = ""
+        tray.action_error = "Switch failed: in use"
+        tray._on_remove = mock.Mock()
+        tray._on_popover_action("dismiss-error")
+        self.assertEqual(tray.action_error, "")
+        for handler in (tray._quit, tray._start_fetch, tray._on_update,
+                        tray._on_switch, tray._on_remove):
+            handler.assert_not_called()
+
 
 class _InlineThread:
     """threading.Thread stand-in that runs the target synchronously on
@@ -632,7 +645,9 @@ class TestRemoveFlow(GuiStubbedTestCase):
         tray = mod.Tray.__new__(mod.Tray)
         tray.popover = None
         tray.confirm = "stale"
+        tray.action_error = "stale error"
         tray._start_fetch = mock.Mock()
+        tray._to_main = mock.Mock()  # a failure marshals _set_action_error
         tray.snapshot = core_model.Snapshot(accounts=[
             core_model.Account(number=1, email="a@x.com", active=True),
             core_model.Account(number=2, email="b@x.com")])
@@ -671,6 +686,22 @@ class TestRemoveFlow(GuiStubbedTestCase):
                                side_effect=mod.cswap.CswapError("in use")):
             tray._on_remove("claude:2")   # must not raise
         tray._start_fetch.assert_called_once_with()
+        # A new attempt clears the sticky error from a previous one, then a
+        # failure inside the daemon thread reports the new one -- marshaled
+        # through _to_main, never touching self.action_error directly from
+        # the worker thread.
+        self.assertEqual(tray.action_error, "")
+        tray._to_main.assert_called_once_with(
+            tray._set_action_error, "Remove failed: in use")
+
+    def test_a_successful_removal_leaves_no_stale_error_behind(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.cswap, "remove_account"):
+            tray._on_remove("claude:2")
+        self.assertEqual(tray.action_error, "")
+        tray._to_main.assert_not_called()
 
 
 class TestThreadToUiMarshalling(GuiStubbedTestCase):
@@ -1075,6 +1106,8 @@ class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
         tray.update_blocked = ""
         tray.failures = 0
         tray.last_error = ""
+        tray.action_error = ""
+        tray.refreshing = False
         with mock.patch.object(mod.popover_layout, "build") as fake_build:
             tray._popover_layout(hover="quit")
         _args, kwargs = fake_build.call_args
@@ -1130,6 +1163,171 @@ class TestApplySnapshotStampsPlanBadgesAndOpenaiAccounts(GuiStubbedTestCase):
         fake_apply_plans.assert_called_once_with(snap, fake_plans_by_email.return_value)
         fake_accounts.assert_called_once_with()
         self.assertEqual(snap.openai, fake_openai_accounts)
+
+
+class TestOptimisticSwitchFlip(GuiStubbedTestCase):
+    """_on_switch/_begin_switch mirror UsageStore.swift:152-187: a belt
+    check against a dead stored credential, an immediate ACTIVE-chip flip,
+    a generation bump so a stale in-flight fetch cannot land after it, and
+    action_error's sticky-until-next-attempt semantics on failure.
+    """
+
+    def _tray(self, mod):
+        from smartbar.core import model as core_model
+        tray = mod.Tray.__new__(mod.Tray)
+        tray.popover = mock.Mock()
+        tray.popover.get_visible.return_value = True
+        tray.snapshot = core_model.Snapshot(accounts=[
+            core_model.Account(number=1, email="a@x.com", active=True),
+            core_model.Account(number=2, email="b@x.com", active=False),
+            core_model.Account(number=3, email="dead@x.com", active=False,
+                               ok=False, status="relogin_required")])
+        tray.action_error = "stale error"
+        tray.generation = 0
+        tray._generation_lock = threading.Lock()
+        tray._start_fetch = mock.Mock()
+        tray._to_main = mock.Mock()
+        return tray
+
+    def test_on_switch_always_marshals_through_to_main(self):
+        # Reached from BOTH the tk thread (a popover card click) and the
+        # pystray worker thread (a fallback-menu row) -- must never touch
+        # self.snapshot/self.popover directly, so this only asserts the
+        # marshal happened, not what _begin_switch itself does.
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        tray._begin_switch = mock.Mock()
+        tray._on_switch(2)
+        tray._to_main.assert_called_once_with(tray._begin_switch, 2)
+        tray._begin_switch.assert_not_called()
+
+    def test_blocked_account_sets_action_error_and_touches_nothing_else(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread") as thread_ctor:
+            tray._begin_switch(3)   # slot 3 is relogin_required
+        thread_ctor.assert_not_called()
+        self.assertEqual(
+            tray.action_error,
+            "Cannot switch: Re-login required — sign in as this "
+            "account in Claude Code once")
+        self.assertEqual(tray.generation, 0)   # no in-flight fetch invalidated
+        self.assertTrue(tray.snapshot.accounts[0].active)    # unchanged
+        self.assertFalse(tray.snapshot.accounts[2].active)
+        tray.popover.refresh_layout.assert_called_once_with()
+
+    def test_healthy_switch_flips_active_immediately_and_bumps_generation(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.cswap, "switch") as switch:
+            tray._begin_switch(2)
+        # The flip is synchronous, before cswap.switch() is even called --
+        # that is what "optimistic" means.
+        self.assertFalse(tray.snapshot.accounts[0].active)
+        self.assertTrue(tray.snapshot.accounts[1].active)
+        self.assertEqual(tray.action_error, "")   # a new attempt clears it
+        self.assertEqual(tray.generation, 1)
+        switch.assert_called_once_with(2)
+        tray._start_fetch.assert_called_once_with()
+        tray._to_main.assert_not_called()   # cswap.switch succeeded
+
+    def test_switch_failure_marshals_action_error_and_still_refetches(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread", _InlineThread), \
+             mock.patch.object(mod.cswap, "switch",
+                               side_effect=mod.cswap.CswapError("in use")):
+            tray._begin_switch(2)
+        tray._to_main.assert_called_once_with(
+            tray._set_action_error, "Switch failed: in use")
+        tray._start_fetch.assert_called_once_with()
+
+    def test_set_action_error_repaints_a_visible_popover(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        tray._set_action_error("Switch failed: boom")
+        self.assertEqual(tray.action_error, "Switch failed: boom")
+        tray.popover.refresh_layout.assert_called_once_with()
+
+    def test_set_action_error_skips_repaint_when_popover_is_hidden(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        tray.popover.get_visible.return_value = False
+        tray._set_action_error("Switch failed: boom")
+        tray.popover.refresh_layout.assert_not_called()
+
+
+class TestRefreshingFlagTracksFetchLifecycle(GuiStubbedTestCase):
+    """`refreshing` dims/disables the panel's ⟳ glyph while a fetch is in
+    flight (build()'s `refreshing` parameter) and must clear on BOTH a
+    successful and a failed fetch -- left stuck True would permanently
+    disable the button."""
+
+    def _tray(self, mod):
+        tray = mod.Tray.__new__(mod.Tray)
+        tray.generation = 0
+        tray._generation_lock = threading.Lock()
+        tray.last_fetch_at = 0.0
+        tray.refreshing = False
+        return tray
+
+    def test_start_fetch_raises_the_flag_before_the_daemon_starts(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        with mock.patch.object(mod.threading, "Thread") as thread_ctor:
+            tray._start_fetch()
+        self.assertTrue(tray.refreshing)
+        thread_ctor.assert_called_once()
+
+    def test_apply_snapshot_clears_the_flag_on_success(self):
+        mod = _reimport("smartbar.windows.tray")
+        from smartbar.core import model as core_model
+        tray = self._tray(mod)
+        tray.refreshing = True
+        tray.failures = 1
+        tray.last_error = "boom"
+        tray.presence_started = True
+        tray.popover = None
+        tray.icon = mock.Mock()
+        tray.alerts = mock.Mock()
+        tray.alerts.check.return_value = []
+        tray.recapture = mock.Mock()
+        tray.recapture.action.return_value = None
+        tray._pending_update = mock.Mock(return_value="")
+        tray._set_icon = mock.Mock()
+        tray._refresh_menu = mock.Mock()
+        snap = core_model.Snapshot(accounts=[])
+        with mock.patch.object(mod, "presence_client") as fake_presence, \
+             mock.patch.object(mod.plan, "apply_plans"), \
+             mock.patch.object(mod.plan, "plans_by_email", return_value={}), \
+             mock.patch.object(mod.codex, "accounts", return_value=[]):
+            fake_presence.counts.return_value = {}
+            tray._apply_snapshot(snap, 0)
+        self.assertFalse(tray.refreshing)
+
+    def test_apply_error_clears_the_flag_on_failure(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        tray.refreshing = True
+        tray.failures = 0
+        tray.popover = None
+        tray.icon = mock.Mock()
+        tray._set_icon = mock.Mock()
+        tray._refresh_menu = mock.Mock()
+        tray._apply_error("boom", 0)
+        self.assertFalse(tray.refreshing)
+
+    def test_a_superseded_completion_leaves_the_flag_untouched(self):
+        # A generation mismatch means early return; the newer fetch already
+        # set refreshing True and owns clearing it, so a superseded, late-
+        # arriving failure must not clear it out from under that newer one.
+        mod = _reimport("smartbar.windows.tray")
+        tray = self._tray(mod)
+        tray.generation = 2
+        tray.refreshing = True
+        tray._apply_error("boom", 1)
+        self.assertTrue(tray.refreshing)
 
 
 if __name__ == "__main__":
