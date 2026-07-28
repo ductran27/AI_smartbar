@@ -34,6 +34,8 @@ from smartbar.paint import popover_draw    # noqa: E402
 TICK_SECONDS = 30    # countdowns are minute-resolution; this keeps them live
 CORNER_MARGIN = 12   # gap from the work-area corner the panel parks in
 DRAG_THRESHOLD = 4   # px of pointer travel that turns a press into a drag
+MAX_HEIGHT_MARGIN = 48   # breathing room off the top+bottom of the work area
+SCROLL_STEP = 30         # content px per wheel notch (the Windows increment)
 # Where a drag's final origin is remembered across shows and restarts. Cache,
 # not config: losing it only means the panel re-opens in its default corner.
 POSITION_FILE = os.path.join(paths.cache_dir(), "panel-position.json")
@@ -53,6 +55,14 @@ class Popover(Gtk.Window):
 
     `pinned` (SMARTBAR_PANEL=always) makes this a permanent desktop readout
     instead of a popover: shown at startup and never auto-hidden.
+
+    Taller than the screen, the panel becomes a scrolling viewport rather
+    than running off the bottom of the work area: the window is capped at
+    _max_panel_height() and the wheel moves the paint underneath it. The
+    wheel is the only way to reach the rest — no scrollbar affordance, no
+    keyboard scrolling — and a still pointer keeps whatever hover it had
+    while the content slides under it. All three match the Windows
+    viewport, which disclosed the same gaps: one UI, one set of holes.
     """
 
     def __init__(self, rebuild, on_action, pinned=False):
@@ -70,6 +80,8 @@ class Popover(Gtk.Window):
         self._placed = None   # last origin WE chose, to spot WM-driven moves
         self._saved = self._load_position()  # origin a drag chose, or None
         self._move_grace = 0.0  # ignore focus-out just after a Wayland drag
+        self._scroll = 0.0   # content px hidden above the viewport's top edge
+        self._overflow = 0   # content px that do not fit; 0 = nothing to scroll
         display = Gdk.Display.get_default()
         self._x11 = (display is not None
                      and "x11" in type(display).__name__.lower())
@@ -108,7 +120,9 @@ class Popover(Gtk.Window):
         self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
                              | Gdk.EventMask.BUTTON_RELEASE_MASK
                              | Gdk.EventMask.POINTER_MOTION_MASK
-                             | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+                             | Gdk.EventMask.LEAVE_NOTIFY_MASK
+                             | Gdk.EventMask.SCROLL_MASK
+                             | Gdk.EventMask.SMOOTH_SCROLL_MASK)
         # The panel is painted, not a widget tree, so GTK has nothing to
         # attach a tooltip to on its own: set_has_tooltip puts the pointer
         # position through our own hit-test instead (FINDING 8).
@@ -119,6 +133,7 @@ class Popover(Gtk.Window):
         self.area.connect("button-release-event", self._on_release)
         self.area.connect("motion-notify-event", self._on_motion)
         self.area.connect("leave-notify-event", self._on_leave)
+        self.area.connect("scroll-event", self._on_scroll)
         self.add(self.area)
 
         self.connect("focus-out-event", self._on_focus_out)
@@ -129,7 +144,13 @@ class Popover(Gtk.Window):
     def refresh_layout(self) -> None:
         layout = self.rebuild(self.hover)
         self.layout = layout
-        width, height = int(round(layout.width)), int(round(layout.height))
+        width, full_height = int(round(layout.width)), int(round(layout.height))
+        cap = self._max_panel_height()
+        # cap <= 0 means the lookup failed (see its own docstring): degrade
+        # to the old, uncapped behaviour rather than guess a screen size.
+        height = full_height if cap <= 0 else min(full_height, cap)
+        self._overflow = max(0, full_height - height)
+        self._scroll = min(self._scroll, float(self._overflow))
         self.set_size_request(width, height)
         self.resize(width, height)
         self.area.queue_draw()
@@ -143,6 +164,10 @@ class Popover(Gtk.Window):
 
     def _on_draw(self, _area, ctx) -> bool:
         if self.layout is not None:
+            # The FULL layout is painted every time and the window clips it;
+            # scrolling moves the paint, so nothing downstream of here (the
+            # painter, the layout, the hit rects) knows a viewport exists.
+            ctx.translate(0, -self._scroll)
             popover_draw.draw(self.layout, ctx)
         return False
 
@@ -150,7 +175,7 @@ class Popover(Gtk.Window):
     def _on_press(self, _area, event) -> bool:
         if event.button != 1 or self.layout is None:
             return False
-        hit = self.layout.hit(event.x, event.y)
+        hit = self.layout.hit(event.x, self._content_y(event.y))
         # Nothing fires yet: a press only arms. The click happens on release,
         # so that dragging from anywhere — a card, a button, the header —
         # moves the panel instead of activating whatever sat under the
@@ -171,7 +196,7 @@ class Popover(Gtk.Window):
         press, self._press = self._press, None
         if press is None or self.layout is None:
             return False
-        hit = self.layout.hit(event.x, event.y)
+        hit = self.layout.hit(event.x, self._content_y(event.y))
         # Fire only when the release lands on what was pressed — ordinary
         # button semantics, and a sub-threshold wobble stays a click.
         if hit is not None and hit.name == press[4]:
@@ -191,7 +216,7 @@ class Popover(Gtk.Window):
                 return True
         if self.layout is None:
             return False
-        hit = self.layout.hit(event.x, event.y)
+        hit = self.layout.hit(event.x, self._content_y(event.y))
         name = hit.name if hit is not None else ""
         if name != self.hover:
             self.hover = name
@@ -239,7 +264,7 @@ class Popover(Gtk.Window):
         """
         if self.layout is None or keyboard_mode:
             return False
-        text = self.layout.tooltip_at(x, y)
+        text = self.layout.tooltip_at(x, self._content_y(y))
         if not text:
             return False
         tooltip.set_text(text)
@@ -272,9 +297,94 @@ class Popover(Gtk.Window):
         self.hide_panel()
         return True            # never destroy: the tray reuses this window
 
+    # --- scrolling viewport -----------------------------------------------
+    def _content_y(self, y: float) -> float:
+        """Widget y -> layout y.
+
+        EVERY hit test has to come through here. The viewport scrolls the
+        PAINT (one ctx.translate in _on_draw), so once the panel is scrolled
+        a pointer 10px below the window's top edge is over content that may
+        be hundreds of px down the layout -- and a click would otherwise
+        fire whichever button happens to sit at the untranslated coordinate.
+        """
+        return y + self._scroll
+
+    def _on_scroll(self, _area, event) -> bool:
+        """Wheel an overtall panel -- FINDING 9's other half.
+
+        Returns False when there is nothing to scroll rather than
+        swallowing the event, so a wheel over a panel that fits still
+        reaches whatever would otherwise have had it.
+        """
+        if self._overflow <= 0:
+            return False
+        delta = self._scroll_delta(event)
+        if not delta:
+            return False
+        self._scroll = max(0.0, min(float(self._overflow),
+                                    self._scroll + delta * SCROLL_STEP))
+        self.area.queue_draw()
+        return True
+
+    @staticmethod
+    def _scroll_delta(event) -> float:
+        """Notches from either kind of GTK scroll event; + is towards the end.
+
+        Both have to be read. A touchpad (and an X11 wheel under a
+        compositor that synthesises smooth scrolling) sends direction=SMOOTH
+        with the real numbers in get_scroll_deltas(); a plain wheel sends
+        UP/DOWN and get_scroll_deltas() returns nothing useful. Handling
+        only one leaves the other device scrolling nothing at all.
+        """
+        direction = getattr(event, "direction", None)
+        if direction == Gdk.ScrollDirection.SMOOTH:
+            ok, _dx, dy = event.get_scroll_deltas()
+            return dy if ok else 0.0
+        if direction == Gdk.ScrollDirection.DOWN:
+            return 1.0
+        if direction == Gdk.ScrollDirection.UP:
+            return -1.0
+        return 0.0
+
+    def _max_panel_height(self) -> int:
+        """Panel px to cap at before content must scroll instead of running
+        past the bottom of the work area.
+
+        FINDING 9, measured: 8 accounts is 769pt of content and 12 is
+        1117pt, both past what a 1080p work area can show. 0 means "could
+        not work one out" -- no display, a lookup that raised, or the
+        stubbed-gi test environment -- and refresh_layout treats that as
+        "do not clamp" rather than guessing a screen size, the same way
+        _position() treats a failed placement as cosmetic.
+        """
+        try:
+            display = Gdk.Display.get_default()
+            if display is None:
+                return 0
+            areas = [a for a in self._workareas(display)
+                     if a[2] > 0 and a[3] > 0]
+            if not areas:
+                return 0
+            # The monitor the panel is on, if it is anywhere yet; otherwise
+            # the roomiest, which is both pin_origin's own tie-break and
+            # where an unplaced panel is about to be parked.
+            area_h = max(areas, key=lambda a: a[2] * a[3])[3]
+            origin = self._placed or self._saved
+            if origin is not None:
+                for ax, ay, aw, ah in areas:
+                    if (ax <= origin[0] < ax + aw
+                            and ay <= origin[1] < ay + ah):
+                        area_h = ah
+                        break
+            return max(0, area_h - 2 * MAX_HEIGHT_MARGIN)
+        except Exception:
+            log.exception("screen height lookup failed; panel stays uncapped")
+            return 0
+
     # --- visibility -------------------------------------------------------
     def show_panel(self) -> None:
         self.hover = ""
+        self._scroll = 0.0   # a fresh open starts at the top of the content
         self.refresh_layout()
         self._position()   # before the map, so the panel APPEARS in place …
         self.show_all()
