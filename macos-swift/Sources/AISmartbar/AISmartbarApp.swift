@@ -11,6 +11,7 @@ struct AISmartbarApp: App {
     @StateObject private var updates = UpdateStatus()
     @StateObject private var plans = PlanStatus()
     @StateObject private var openai = OpenAIStatus()
+    @StateObject private var fallbackGuard = FallbackGuardStatus()
 
     var body: some Scene {
         MenuBarExtra {
@@ -20,6 +21,7 @@ struct AISmartbarApp: App {
                 .environmentObject(store.presence)
                 .environmentObject(plans)
                 .environmentObject(openai)
+                .environmentObject(fallbackGuard)
         } label: {
             // A waiting release badges the icon itself, so a device announces
             // an update without the user opening anything.
