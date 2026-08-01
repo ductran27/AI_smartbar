@@ -16,13 +16,17 @@ from __future__ import annotations
 import json
 import os
 import plistlib
-import pwd
 import shlex
 import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+try:  # pwd does not exist on Windows; import must still reach unsupported JSON.
+    import pwd
+except ImportError:  # pragma: no cover - exercised by source-level win32 test
+    pwd = None
 
 
 MANAGED_ROOT = Path("/Library/Application Support/ClaudeCode")
@@ -55,7 +59,7 @@ def default_mdm_paths() -> Tuple[Path, ...]:
 
     paths = [Path("/Library/Managed Preferences") / MDM_DOMAIN]
     try:
-        username = pwd.getpwuid(os.getuid()).pw_name
+        username = pwd.getpwuid(os.getuid()).pw_name if pwd is not None else ""
     except (KeyError, OSError):
         username = ""
     if username:
@@ -270,7 +274,8 @@ def _live_status(last_live_check: Optional[Dict[str, Any]],
     checked_version = last_live_check.get("claudeVersion")
     if status_value not in ("passed", "failed", "inconclusive"):
         return ""
-    if status_value == "passed" and claude_version and checked_version != claude_version:
+    if status_value == "passed" \
+            and (not claude_version or checked_version != claude_version):
         return "inconclusive"
     return status_value
 
@@ -429,7 +434,10 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
             chosen = {}
         else:
             chosen = remote_settings
-            higher_unknown = False
+            # A valid higher remote source makes plist uncertainty irrelevant,
+            # but a malformed visible file sibling remains fail-closed by the
+            # guard's explicit static-integrity contract.
+            higher_unknown = source_unknown
         chosen_providers = {}
     # policyHelper outranks all static sources and its output is intentionally
     # not executed during an inspection.
