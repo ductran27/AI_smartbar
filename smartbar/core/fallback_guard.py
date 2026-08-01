@@ -1,9 +1,9 @@
-"""Machine-wide Claude automatic-fallback guard for macOS.
+"""Machine-wide Claude automatic-fallback guard for macOS and Linux/WSL.
 
 The guard is deliberately tiny: one managed-settings drop-in containing only
 ``switchModelsOnFlag=false`` and ``fallbackModel=[]``.  This module owns the
 filesystem policy and builds privileged commands as *data*; importing it never
-runs ``sudo``, ``osascript`` or writes under ``/Library``.
+runs ``sudo``, ``osascript``, ``pkexec`` or writes under a system policy root.
 
 File inspection fails closed.  A green-ish static verdict requires readable,
 root-owned, non-symlink managed files and no later drop-in, plist, or
@@ -29,7 +29,12 @@ except ImportError:  # pragma: no cover - exercised by source-level win32 test
     pwd = None
 
 
-MANAGED_ROOT = Path("/Library/Application Support/ClaudeCode")
+DARWIN_MANAGED_ROOT = Path("/Library/Application Support/ClaudeCode")
+LINUX_MANAGED_ROOT = Path("/etc/claude-code")
+# Backwards-compatible name for callers that explicitly mean the documented
+# macOS location.  New platform-aware callers use ``managed_root_for_platform``.
+MANAGED_ROOT = DARWIN_MANAGED_ROOT
+PKEXEC_PATH = Path("/usr/bin/pkexec")
 BASE_NAME = "managed-settings.json"
 DROPIN_NAME = "managed-settings.d"
 POLICY_NAME = "99-ai-smartbar-auto-fallback-guard.json"
@@ -52,6 +57,46 @@ STATE_ERROR = "error"
 
 MDM_DOMAIN = "com.anthropic.claudecode.plist"
 DEFAULT_REMOTE_PATH = Path.home() / ".claude" / "remote-settings.json"
+
+
+def platform_family(platform: Optional[str] = None) -> str:
+    """Return ``darwin``, ``linux``, or ``unsupported``.
+
+    WSL reports a Linux ``sys.platform`` and intentionally follows the same
+    ``/etc/claude-code`` policy contract as a native Linux host.
+    """
+
+    value = sys.platform if platform is None else str(platform)
+    if value == "darwin":
+        return "darwin"
+    if value.startswith("linux"):
+        return "linux"
+    return "unsupported"
+
+
+def managed_root_for_platform(platform: Optional[str] = None) -> Path:
+    """Return the fixed production policy root for a supported platform."""
+
+    return (LINUX_MANAGED_ROOT if platform_family(platform) == "linux"
+            else DARWIN_MANAGED_ROOT)
+
+
+def _scope_for_platform(family: str) -> str:
+    if family == "darwin":
+        return "local Claude Code sessions on this Mac"
+    if family == "linux":
+        return "local Claude Code sessions in this Linux/WSL environment"
+    return "local Claude Code sessions on this device"
+
+
+def scope_for_platform(platform: Optional[str] = None) -> str:
+    """Return the stable user-facing scope string for a report."""
+
+    return _scope_for_platform(platform_family(platform))
+
+
+def _owner_for_platform(family: str) -> str:
+    return "root:root" if family == "linux" else "root:wheel"
 
 
 def default_mdm_paths() -> Tuple[Path, ...]:
@@ -103,10 +148,12 @@ def _policy_path(root: Path) -> Path:
     return root / DROPIN_NAME / POLICY_NAME
 
 
-def policy_path(managed_root: Optional[os.PathLike] = None) -> Path:
+def policy_path(managed_root: Optional[os.PathLike] = None,
+                platform: Optional[str] = None) -> Path:
     """The fixed app fragment path (``managed_root`` is test-only injection)."""
 
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(platform))
     return _policy_path(root)
 
 
@@ -150,7 +197,7 @@ def _read_json_source(path: Path) -> _Source:
 
 
 def _directory_problem(path: Path, required_uid: int,
-                       required_gid: int) -> str:
+                       required_gid: int, owner_text: str) -> str:
     try:
         info = os.lstat(str(path))
     except FileNotFoundError:
@@ -163,7 +210,7 @@ def _directory_problem(path: Path, required_uid: int,
         return "%s is not a directory" % path
     mode = stat.S_IMODE(info.st_mode)
     if info.st_uid != required_uid or info.st_gid != required_gid:
-        return "%s must be owned by root:wheel" % path
+        return "%s must be owned by %s" % (path, owner_text)
     if mode != 0o755:
         return "%s has mode %s; expected 0755" % (path, _mode_text(mode))
     return ""
@@ -290,12 +337,15 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
 
     ``managed_root``/``mdm_paths`` and required IDs are injectable exclusively
     so unit tests can exercise the real traversal in a temporary directory.
-    Production callers use the fixed system locations and root:wheel IDs.
+    Production callers use the fixed platform system location and root IDs.
     """
 
     current_platform = sys.platform if platform is None else platform
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    family = platform_family(current_platform)
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(current_platform))
     target_path = _policy_path(root)
+    owner_text = _owner_for_platform(family)
     live = last_live_check if isinstance(last_live_check, dict) else None
     base_report: Dict[str, Any] = {
         "ok": True,
@@ -304,16 +354,16 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         "safetyAutoFallback": UNKNOWN,
         "availabilityAutoFallback": UNKNOWN,
         "manualOpusRestrictedByGuard": False,
-        "scope": "local Claude Code sessions on this Mac",
+        "scope": _scope_for_platform(family),
         "claudeVersion": claude_version or "",
         "activeManagedSource": "unknown",
         "policyPath": str(target_path),
         "details": [],
         "lastLiveCheck": live,
     }
-    if current_platform != "darwin":
+    if family == "unsupported":
         base_report.update(ok=False, state=STATE_UNSUPPORTED,
-                           details=["Machine-wide fallback guard is supported on macOS only."])
+                           details=["Machine-wide fallback guard is supported on macOS and Linux/WSL only."])
         return base_report
 
     sources, scan_details, scan_complete = _scan_file_sources(root)
@@ -321,9 +371,11 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
     source_by_path = {source.path: source for source in sources}
     target = source_by_path.get(target_path, _read_json_source(target_path))
 
-    root_problem = _directory_problem(root, required_uid, required_gid)
+    root_problem = _directory_problem(root, required_uid, required_gid,
+                                      owner_text)
     dropin_problem = _directory_problem(root / DROPIN_NAME,
-                                         required_uid, required_gid)
+                                         required_uid, required_gid,
+                                         owner_text)
     target_secure = bool(
         target.regular and not target.symlink
         and target.uid == required_uid and target.gid == required_gid
@@ -338,7 +390,7 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         if not target_exact:
             details.append("The app policy must contain exactly switchModelsOnFlag=false and fallbackModel=[].")
         if target.uid != required_uid or target.gid != required_gid:
-            details.append("The app policy must be owned by root:wheel.")
+            details.append("The app policy must be owned by %s." % owner_text)
         if target.mode != 0o644:
             details.append("The app policy has mode %s; expected 0644." % _mode_text(target.mode))
         if target_exact and not target_canonical:
@@ -364,7 +416,7 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
             # partially load the file tier.  Never infer merge-through.
             source_unknown = True
             continue
-        if source.data and source.data.get("policyHelper"):
+        if source.data is not None and "policyHelper" in source.data:
             helper_present = True
         if not source.data:
             continue
@@ -382,7 +434,13 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
     plist_settings: Optional[Dict[str, Any]] = None
     plist_present = False
     plist_unknown = False
-    plist_paths = default_mdm_paths() if mdm_paths is None else tuple(Path(p) for p in mdm_paths)
+    if family == "darwin":
+        plist_paths = (default_mdm_paths() if mdm_paths is None
+                       else tuple(Path(p) for p in mdm_paths))
+    else:
+        # Linux/WSL has no macOS managed-preference tier.  In particular, a
+        # stray plist in a mounted tree must not outrank the Linux file source.
+        plist_paths = ()
     for path_value in plist_paths:
         present, settings, error = _read_plist(Path(path_value), required_uid)
         if not present:
@@ -441,8 +499,11 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         chosen_providers = {}
     # policyHelper outranks all static sources and its output is intentionally
     # not executed during an inspection.
-    if helper_present or (plist_settings and plist_settings.get("policyHelper")) \
-            or (remote_settings and remote_settings.get("policyHelper")):
+    if helper_present \
+            or (plist_settings is not None
+                and "policyHelper" in plist_settings) \
+            or (remote_settings is not None
+                and "policyHelper" in remote_settings):
         active_source = "policyHelper"
         higher_unknown = True
         chosen = {}
@@ -522,23 +583,28 @@ def is_protected() -> bool:
 
 
 def removal_allowed(*, managed_root: Optional[os.PathLike] = None,
-                    required_uid: int = 0, required_gid: int = 0) -> Tuple[bool, str]:
+                    required_uid: int = 0, required_gid: int = 0,
+                    platform: Optional[str] = None) -> Tuple[bool, str]:
     """Whether this exact app-owned, unmodified fragment may be removed."""
 
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    family = platform_family(platform)
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(platform))
     source = _read_json_source(_policy_path(root))
     if not source.exists:
         return True, ""
     if source.symlink or not source.regular:
         return False, "Refusing removal: the app policy is not a regular non-symlink file."
     if source.uid != required_uid or source.gid != required_gid or source.mode != 0o644:
-        return False, "Refusing removal: the app policy is not root:wheel mode 0644."
+        return False, ("Refusing removal: the app policy is not %s mode 0644."
+                       % _owner_for_platform(family))
     if source.raw != POLICY_BYTES:
         return False, "Refusing removal: the app policy was modified after installation."
     return True, ""
 
 
-def enable_allowed(*, managed_root: Optional[os.PathLike] = None) -> Tuple[bool, str]:
+def enable_allowed(*, managed_root: Optional[os.PathLike] = None,
+                   platform: Optional[str] = None) -> Tuple[bool, str]:
     """Refuse to overwrite any existing target not byte-for-byte ours.
 
     Canonical bytes with changed metadata are allowed: the atomic enable plan
@@ -546,7 +612,8 @@ def enable_allowed(*, managed_root: Optional[os.PathLike] = None) -> Tuple[bool,
     silently replaced even though the filename belongs to this app.
     """
 
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(platform))
     source = _read_json_source(_policy_path(root))
     if not source.exists:
         return True, ""
@@ -573,57 +640,134 @@ def _osascript_plan(action: str, shell_script: str, *, confirm: bool = False) ->
                        shell_script)
 
 
-def enable_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand:
+def _pkexec_plan(action: str, shell_script: str,
+                 pkexec_path: Optional[os.PathLike] = None) -> RootCommand:
+    """Build one list-form PolicyKit invocation with no persistent helper."""
+
+    binary = Path(pkexec_path) if pkexec_path is not None else PKEXEC_PATH
+    return RootCommand(action, (str(binary), "/bin/sh", "-c", shell_script),
+                       shell_script)
+
+
+def enable_command(*, managed_root: Optional[os.PathLike] = None,
+                   platform: Optional[str] = None,
+                   pkexec_path: Optional[os.PathLike] = None) -> RootCommand:
     """Build the one-shot, atomic administrator command; do not execute it."""
 
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    family = platform_family(platform)
+    if family == "unsupported":
+        raise ValueError("fallback guard is unsupported on %s" %
+                         (sys.platform if platform is None else platform))
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(platform))
     directory = root / DROPIN_NAME
     target = _policy_path(root)
     qroot, qdir, qtarget = map(lambda p: shlex.quote(str(p)),
                                (root, directory, target))
     content = shlex.quote(POLICY_BYTES.decode("ascii").rstrip("\n"))
+    if family == "darwin":
+        script = "\n".join((
+            "set -eu",
+            "root=%s" % qroot,
+            "directory=%s" % qdir,
+            "target=%s" % qtarget,
+            "[ ! -L \"$root\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: managed root is a symlink' >&2; exit 40; }",
+            "[ ! -L \"$directory\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: drop-in directory is a symlink' >&2; exit 40; }",
+            "/bin/mkdir -p \"$directory\"",
+            "/usr/sbin/chown root:wheel \"$root\" \"$directory\"",
+            "/bin/chmod 0755 \"$root\" \"$directory\"",
+            "tmp=$(/usr/bin/mktemp \"$directory/.ai-smartbar-fallback-guard.XXXXXX\")",
+            "trap '/bin/rm -f \"$tmp\"' EXIT HUP INT TERM",
+            "/usr/bin/printf '%s\\n' %s > \"$tmp\"" % ("%s", content),
+            "/usr/sbin/chown root:wheel \"$tmp\"",
+            "/bin/chmod 0644 \"$tmp\"",
+            "if [ -e \"$target\" ] || [ -L \"$target\" ]; then",
+            "  [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
+            "  /usr/bin/cmp -s \"$tmp\" \"$target\" || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing modified policy' >&2; exit 41; }",
+            "fi",
+            "/bin/mv -f \"$tmp\" \"$target\"",
+            "trap - EXIT HUP INT TERM",
+        ))
+        return _osascript_plan("enable", script)
+
     script = "\n".join((
         "set -eu",
         "root=%s" % qroot,
         "directory=%s" % qdir,
         "target=%s" % qtarget,
-        "[ ! -L \"$root\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: managed root is a symlink' >&2; exit 40; }",
-        "[ ! -L \"$directory\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: drop-in directory is a symlink' >&2; exit 40; }",
-        "/bin/mkdir -p \"$directory\"",
-        "/usr/sbin/chown root:wheel \"$root\" \"$directory\"",
-        "/bin/chmod 0755 \"$root\" \"$directory\"",
+        "if [ -e \"$root\" ] || [ -L \"$root\" ]; then",
+        "  [ ! -L \"$root\" ] && [ -d \"$root\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-directory or symlink managed root' >&2; exit 40; }",
+        "else /bin/mkdir \"$root\"; fi",
+        "/usr/bin/chown root:root \"$root\"",
+        "/bin/chmod 0755 \"$root\"",
+        "[ \"$(/usr/bin/stat -c '%u:%g:%a' \"$root\")\" = '0:0:755' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: managed root owner or mode verification failed' >&2; exit 40; }",
+        "if [ -e \"$directory\" ] || [ -L \"$directory\" ]; then",
+        "  [ ! -L \"$directory\" ] && [ -d \"$directory\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-directory or symlink drop-in directory' >&2; exit 40; }",
+        "else /bin/mkdir \"$directory\"; fi",
+        "/usr/bin/chown root:root \"$directory\"",
+        "/bin/chmod 0755 \"$directory\"",
+        "[ \"$(/usr/bin/stat -c '%u:%g:%a' \"$directory\")\" = '0:0:755' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: drop-in directory owner or mode verification failed' >&2; exit 40; }",
         "tmp=$(/usr/bin/mktemp \"$directory/.ai-smartbar-fallback-guard.XXXXXX\")",
         "trap '/bin/rm -f \"$tmp\"' EXIT HUP INT TERM",
         "/usr/bin/printf '%s\\n' %s > \"$tmp\"" % ("%s", content),
-        "/usr/sbin/chown root:wheel \"$tmp\"",
+        "/usr/bin/chown root:root \"$tmp\"",
         "/bin/chmod 0644 \"$tmp\"",
+        "[ \"$(/usr/bin/stat -c '%u:%g:%a' \"$tmp\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: temporary policy owner or mode verification failed' >&2; exit 40; }",
         "if [ -e \"$target\" ] || [ -L \"$target\" ]; then",
         "  [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
         "  /usr/bin/cmp -s \"$tmp\" \"$target\" || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing modified policy' >&2; exit 41; }",
         "fi",
         "/bin/mv -f \"$tmp\" \"$target\"",
         "trap - EXIT HUP INT TERM",
+        "[ ! -L \"$target\" ] && [ -f \"$target\" ] && [ \"$(/usr/bin/stat -c '%u:%g:%a' \"$target\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: installed policy verification failed' >&2; exit 40; }",
     ))
-    return _osascript_plan("enable", script)
+    return _pkexec_plan("enable", script, pkexec_path)
 
 
-def remove_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand:
+def remove_command(*, managed_root: Optional[os.PathLike] = None,
+                   platform: Optional[str] = None,
+                   pkexec_path: Optional[os.PathLike] = None) -> RootCommand:
     """Build one confirmed administrator command with root-side revalidation."""
 
-    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    family = platform_family(platform)
+    if family == "unsupported":
+        raise ValueError("fallback guard is unsupported on %s" %
+                         (sys.platform if platform is None else platform))
+    root = (Path(managed_root) if managed_root is not None
+            else managed_root_for_platform(platform))
     directory = root / DROPIN_NAME
     target = _policy_path(root)
     qroot, qdir, qtarget = (shlex.quote(str(root)), shlex.quote(str(directory)),
                             shlex.quote(str(target)))
     content = shlex.quote(POLICY_BYTES.decode("ascii").rstrip("\n"))
+    if family == "darwin":
+        script = "\n".join((
+            "set -eu",
+            "root=%s" % qroot,
+            "directory=%s" % qdir,
+            "target=%s" % qtarget,
+            "if [ ! -e \"$target\" ] && [ ! -L \"$target\" ]; then exit 0; fi",
+            "[ ! -L \"$root\" ] && [ ! -L \"$directory\" ] && [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
+            "[ \"$(/usr/bin/stat -f '%u:%g:%Lp' \"$target\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing policy with changed owner or mode' >&2; exit 41; }",
+            "expected=$(/usr/bin/mktemp \"$directory/.ai-smartbar-remove-check.XXXXXX\")",
+            "trap '/bin/rm -f \"$expected\"' EXIT HUP INT TERM",
+            "/usr/bin/printf '%s\\n' %s > \"$expected\"" % ("%s", content),
+            "/usr/bin/cmp -s \"$expected\" \"$target\" || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing modified policy' >&2; exit 41; }",
+            "/bin/rm -f \"$target\"",
+            "/bin/rm -f \"$expected\"",
+            "trap - EXIT HUP INT TERM",
+        ))
+        return _osascript_plan("remove", script, confirm=True)
+
     script = "\n".join((
         "set -eu",
         "root=%s" % qroot,
         "directory=%s" % qdir,
         "target=%s" % qtarget,
         "if [ ! -e \"$target\" ] && [ ! -L \"$target\" ]; then exit 0; fi",
-        "[ ! -L \"$root\" ] && [ ! -L \"$directory\" ] && [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
-        "[ \"$(/usr/bin/stat -f '%u:%g:%Lp' \"$target\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing policy with changed owner or mode' >&2; exit 41; }",
+        "[ ! -L \"$root\" ] && [ -d \"$root\" ] && [ ! -L \"$directory\" ] && [ -d \"$directory\" ] && [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy path' >&2; exit 41; }",
+        "[ \"$(/usr/bin/stat -c '%u:%g:%a' \"$root\")\" = '0:0:755' ] && [ \"$(/usr/bin/stat -c '%u:%g:%a' \"$directory\")\" = '0:0:755' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing policy under changed directory owner or mode' >&2; exit 41; }",
+        "[ \"$(/usr/bin/stat -c '%u:%g:%a' \"$target\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing policy with changed owner or mode' >&2; exit 41; }",
         "expected=$(/usr/bin/mktemp \"$directory/.ai-smartbar-remove-check.XXXXXX\")",
         "trap '/bin/rm -f \"$expected\"' EXIT HUP INT TERM",
         "/usr/bin/printf '%s\\n' %s > \"$expected\"" % ("%s", content),
@@ -632,12 +776,14 @@ def remove_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand
         "/bin/rm -f \"$expected\"",
         "trap - EXIT HUP INT TERM",
     ))
-    return _osascript_plan("remove", script, confirm=True)
+    return _pkexec_plan("remove", script, pkexec_path)
 
 
 __all__ = [
-    "BLOCKED", "ENABLED", "UNKNOWN", "MANAGED_ROOT", "POLICY",
-    "POLICY_BYTES", "POLICY_NAME", "RootCommand", "default_mdm_paths",
-    "enable_allowed", "enable_command", "inspect_guard", "is_protected",
-    "policy_path", "removal_allowed", "remove_command",
+    "BLOCKED", "DARWIN_MANAGED_ROOT", "ENABLED", "LINUX_MANAGED_ROOT",
+    "MANAGED_ROOT", "PKEXEC_PATH", "UNKNOWN", "POLICY", "POLICY_BYTES",
+    "POLICY_NAME", "RootCommand", "default_mdm_paths", "enable_allowed",
+    "enable_command", "inspect_guard", "is_protected",
+    "managed_root_for_platform", "platform_family", "policy_path",
+    "removal_allowed", "remove_command", "scope_for_platform",
 ]
