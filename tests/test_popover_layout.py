@@ -321,7 +321,7 @@ class TestFallbackGuardLayout(unittest.TestCase):
         found = built.hit(action.x + action.w / 2, action.y + action.h / 2)
         self.assertEqual(found.name, "fallback-verify")
 
-    def test_provider_tabs_follow_the_guard_instead_of_overlapping_it(self):
+    def test_provider_tabs_are_evenly_spaced_between_guard_and_card(self):
         both = snap(account(active=True))
         both.openai = [model.Account(number=1, email="gpt@example.com",
                                      provider="openai", active=True)]
@@ -329,7 +329,16 @@ class TestFallbackGuardLayout(unittest.TestCase):
         guard_box = next(b for b in boxes(built)
                          if b.fill == t.CARD_BG and b.y < 100)
         tab = next(h for h in built.hits if h.name == "tab:claude")
-        self.assertGreaterEqual(tab.y, guard_box.y + guard_box.h)
+        account_box = next(b for b in boxes(built)
+                           if b.stroke == t.CARD_BORDER_ACTIVE)
+        guard_to_tab = tab.y - (guard_box.y + guard_box.h)
+        tab_to_card = account_box.y - (tab.y + tab.h)
+        self.assertAlmostEqual(guard_to_tab, tab_to_card)
+        # TAB_H reserves one extra point above and below the 18pt pill;
+        # both visible gaps therefore equal SECTION_GAP + 1pt.
+        self.assertAlmostEqual(
+            guard_to_tab,
+            t.SECTION_GAP + (t.TAB_H - t.BUTTON_H) / 2)
 
 
 class TestCardContent(unittest.TestCase):
@@ -599,6 +608,27 @@ class TestProviderTabs(unittest.TestCase):
         # section of its own.
         self.assertAlmostEqual(both.height - plain.height,
                                t.TAB_H + t.TAB_TOP_GAP)
+
+    def test_native_mac_guard_tabs_and_cards_share_one_section_stack(self):
+        """Do not reintroduce a tighter nested stack above the tabs.
+
+        SwiftUI has no inspectable geometry API in this package, so pin the
+        structural rule that creates the equality: header, guard, optional
+        tabs, and account content are direct children of one 8pt VStack.
+        """
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(repo, "macos-swift", "Sources", "AISmartbar",
+                            "PopoverView.swift")
+        with open(path, encoding="utf-8") as handle:
+            source = handle.read()
+        body = source.split("var body: some View {", 1)[1].split(
+            "private var hasClaudeAccounts", 1)[0]
+        self.assertIn("VStack(alignment: .leading, spacing: 8)", body)
+        self.assertEqual(body.count("VStack("), 1)
+        positions = [body.index(marker) for marker in (
+            "header", "FallbackGuardView()", "if showsTabs",
+            "if selectedProvider == \"openai\"", "footer")]
+        self.assertEqual(positions, sorted(positions))
 
     def test_default_selection_is_claude(self):
         built = layout.build(self.snap_both(), now=NOW)

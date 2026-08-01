@@ -13,17 +13,14 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // The tab row rides the header (TAB_TOP_GAP in the shared
-            // theme) rather than being a section of its own — spacing 2
-            // instead of the theme's 3 because the 28pt header controls
-            // already leave slack under the title that the 22pt cairo
-            // header does not.
-            VStack(alignment: .leading, spacing: 2) {
-                header
-                FallbackGuardView()
-                if showsTabs {
-                    providerTabs
-                }
+            header
+            FallbackGuardView()
+            // Keep the guard -> tabs and tabs -> first account-card gaps
+            // identical. Direct siblings in this one 8pt section stack
+            // make that equality structural instead of relying on nested
+            // VStack spacing that can drift independently.
+            if showsTabs {
+                providerTabs
             }
             // One error line for every card action — switching or removing,
             // whichever failed most recently.
