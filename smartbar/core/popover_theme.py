@@ -181,7 +181,8 @@ class Glyph:
 
     SF Symbols have no cross-platform equivalent and a font that happens to
     carry "⟳" cannot be assumed, so the icon buttons are drawn rather
-    than typeset. `kind` is "refresh", "power" or "close".
+    than typeset. `kind` is "refresh", "power", "close",
+    "chevron-right", or "chevron-down".
     """
     kind: str
     cx: float

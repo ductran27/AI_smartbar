@@ -222,6 +222,20 @@ class TestFallbackGuardLayout(unittest.TestCase):
                      if isinstance(s, t.Label) and s.text == "AI smartbar")
         self.assertGreater(guard_box.y, title.y)
 
+    def test_disclosures_use_path_glyphs_not_missing_font_symbols(self):
+        compact = layout.build(None, fallback_guard=None, now=NOW)
+        expanded = layout.build(
+            None, fallback_guard=None, fallback_expanded=True,
+            fallback_advanced=True, now=NOW)
+        self.assertIn("chevron-right", {
+            shape.kind for shape in compact.shapes
+            if isinstance(shape, t.Glyph)})
+        self.assertGreaterEqual(sum(
+            shape.kind == "chevron-down" for shape in expanded.shapes
+            if isinstance(shape, t.Glyph)), 2)
+        self.assertFalse(any("▸" in text or "▾" in text
+                             for text in labels(compact) + labels(expanded)))
+
     def test_omitting_guard_preserves_the_historical_layout(self):
         built = layout.build(None, now=NOW)
         self.assertNotIn("Auto fallback", labels(built))

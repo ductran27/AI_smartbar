@@ -201,10 +201,10 @@ def _fallback_guard(shapes, hits, report, top, hover, *, busy="", error="",
     status_y = top + 27.0
     shapes.append(t.Label(inner_l, title_y, "Auto fallback",
                           size=t.SIZE_CAPTION, bold=True, color=t.TEXT))
-    shapes.append(t.Label(
-        inner_l + t.text_width("Auto fallback", t.SIZE_CAPTION, bold=True) + 4,
-        title_y, "▾" if expanded else "▸", size=t.SIZE_CAPTION,
-        color=t.TEXT_TERTIARY))
+    shapes.append(t.Glyph(
+        "chevron-down" if expanded else "chevron-right",
+        inner_l + t.text_width("Auto fallback", t.SIZE_CAPTION, bold=True) + 8,
+        title_y, 8.0, t.TEXT_TERTIARY))
     dot_x = inner_l + t.DOT_R
     shapes.append(t.Dot(dot_x, status_y, t.DOT_R,
                         _fallback_tone_color(tone)))
@@ -237,11 +237,16 @@ def _fallback_guard(shapes, hits, report, top, hover, *, busy="", error="",
         cursor += row_h + t.FALLBACK_DETAIL_GAP
 
     advanced_name = "fallback-advanced"
-    shapes.append(t.Label(inner_l, cursor + t.BUTTON_H / 2,
-                          "Advanced %s" % ("▾" if advanced else "▸"),
+    advanced_y = cursor + t.BUTTON_H / 2
+    shapes.append(t.Label(inner_l, advanced_y, "Advanced",
                           size=t.SIZE_CAPTION, color=(
                               t.TEXT if hover == advanced_name
                               else t.TEXT_TERTIARY)))
+    shapes.append(t.Glyph(
+        "chevron-down" if advanced else "chevron-right",
+        inner_l + t.text_width("Advanced", t.SIZE_CAPTION) + 8,
+        advanced_y, 8.0,
+        t.TEXT if hover == advanced_name else t.TEXT_TERTIARY))
     hits.append(t.Hit(advanced_name, inner_l, cursor, detail_width,
                       t.BUTTON_H, tooltip=("Hide removal controls" if advanced
                                           else "Show removal controls")))

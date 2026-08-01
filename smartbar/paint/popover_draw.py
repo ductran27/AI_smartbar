@@ -120,7 +120,7 @@ def _draw_label(ctx, label) -> None:
 
 def _draw_glyph(ctx, glyph) -> None:
     """SF Symbols have no portable twin and no font can be assumed to carry
-    "⟳"/"⏻", so the two icon buttons are stroked from paths."""
+    "⟳"/"⏻"/disclosure triangles, so icons are stroked from paths."""
     radius = glyph.size / 2 * 0.72
     _set(ctx, glyph.color)
     ctx.set_line_width(1.5)
@@ -141,6 +141,17 @@ def _draw_glyph(ctx, glyph) -> None:
         ctx.line_to(glyph.cx + arm, glyph.cy + arm)
         ctx.move_to(glyph.cx + arm, glyph.cy - arm)
         ctx.line_to(glyph.cx - arm, glyph.cy + arm)
+        ctx.stroke()
+    elif glyph.kind in ("chevron-right", "chevron-down"):
+        arm = radius * 0.78
+        if glyph.kind == "chevron-right":
+            ctx.move_to(glyph.cx - arm * 0.45, glyph.cy - arm)
+            ctx.line_to(glyph.cx + arm * 0.45, glyph.cy)
+            ctx.line_to(glyph.cx - arm * 0.45, glyph.cy + arm)
+        else:
+            ctx.move_to(glyph.cx - arm, glyph.cy - arm * 0.45)
+            ctx.line_to(glyph.cx, glyph.cy + arm * 0.45)
+            ctx.line_to(glyph.cx + arm, glyph.cy - arm * 0.45)
         ctx.stroke()
     else:  # "power": ring open at the top, plus the stem
         ctx.arc(glyph.cx, glyph.cy, radius, -TAU / 4 + 0.62,
