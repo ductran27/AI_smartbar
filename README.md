@@ -123,6 +123,13 @@ The panel — identical on macOS, Linux and Windows:
   switches via `cswap switch`, registers/re-captures via `cswap add`,
   and warms via `cswap run` + the official claude CLI. It never touches
   credentials or Anthropic endpoints itself.
+- **Machine-wide automatic-fallback guard (macOS).** One protected action
+  blocks Claude Code's saved Fable safety handoff and availability fallback
+  for every local project while leaving deliberate `/model opus` and
+  `--model opus` choices available. The root-owned policy survives app exit,
+  account switches, and uninstall; the popover audits precedence and offers a
+  fail-closed three-probe live check. See
+  [`docs/fallback-guard.md`](docs/fallback-guard.md).
 
 ## Requirements
 
