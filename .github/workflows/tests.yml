@@ -45,6 +45,20 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
+      # Unit assertions inspect every generated command, but this Linux-only
+      # lifecycle also executes the fixed root shell plan on the runner. It
+      # catches distro path/stat differences and proves ownership, modes,
+      # idempotence, tamper refusal, and exact removal before a release tag can
+      # be published.
+      - name: Exercise privileged Linux fallback guard lifecycle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          sudo env AI_SMARTBAR_RUN_ROOT_TESTS=1 "$PYTHON_BIN" -m unittest \
+            tests.test_fallback_guard.TestLinuxRootIntegration.test_linux_root_scripts_are_idempotent_and_tamper_safe \
+            -v
+
       # `swift test` compiles the front-end and exercises its decoding/state
       # policy. A build-only gate previously let Swift regressions through.
       - name: Test the Swift front-end

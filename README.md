@@ -566,12 +566,17 @@ synced):
 ./install/release.sh patch      # or minor / major / 1.2.3
 ```
 
-That bumps the one canonical version (`smartbar/__init__.py`), propagates
-it into `Version.swift` and the app bundle's `Info.plist`, runs the unit
-suite plus `tests/e2e-update.sh`, then commits, tags `vX.Y.Z` and pushes.
-`--no-push` stops before pushing, `--full` also runs the slow e2e suites,
-`--gh` additionally creates a GitHub release. Devices on the release
-channel converge within 6 hours, or instantly from the popover button.
+That first requires green GitHub Actions for the current exact `main` SHA,
+bumps the one canonical version (`smartbar/__init__.py`), propagates it into
+`Version.swift` and the app bundle's `Info.plist`, and runs the local unit/e2e
+gates. It then pushes the version commit, waits for the cross-platform Actions
+matrix on that exact SHA, and only after success creates and pushes `vX.Y.Z`.
+A failed or missing CI run therefore leaves an untagged candidate that cannot
+reach release-channel devices. `--no-push` also leaves an untagged local
+candidate; resume it with the printed explicit-version command. `--full` adds
+the slow e2e suites, and `--gh` additionally creates a GitHub release. Devices
+on the release channel converge within 6 hours, or instantly from the popover
+button.
 
 **Bootstrapping a device.** A device running code from before this feature
 has no updater, so its first update is manual — `git pull` then re-run its
