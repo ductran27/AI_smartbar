@@ -100,6 +100,14 @@ class TestPolicyContract(GuardTree):
         self.assertEqual(self.inspect(last_live_check=live)["state"],
                          "protected_inconclusive")
 
+    def test_live_pass_without_current_version_is_inconclusive(self):
+        self.install()
+        live = {"status": "passed", "checkedAt": "2026-07-31T12:00:00Z",
+                "claudeVersion": "2.1.220", "probes": []}
+        self.assertEqual(self.inspect(last_live_check=live,
+                                      claude_version="")["state"],
+                         "protected_inconclusive")
+
     def test_symlink_fragment_is_never_followed_or_trusted(self):
         outside = self.write_bytes(Path(self.temp.name) / "outside.json",
                                    guard.POLICY_BYTES)
@@ -246,6 +254,15 @@ class TestMergeAndManagedSources(GuardTree):
         self.assertTrue(report["protected"])
         self.assertEqual(report["activeManagedSource"], "remote")
 
+    def test_good_remote_does_not_hide_malformed_visible_file_sibling(self):
+        self.install()
+        self.write_bytes(self.root / guard.BASE_NAME, b"{")
+        remote = self.write_bytes(Path(self.temp.name) / "remote.json",
+                                  json.dumps(guard.POLICY).encode())
+        report = self.inspect(remote_path=remote)
+        self.assertFalse(report["protected"])
+        self.assertEqual(report["state"], "action_needed")
+
     def test_empty_remote_object_is_not_a_source_indicator(self):
         self.install()
         remote = self.write_bytes(Path(self.temp.name) / "remote.json", b"{}")
@@ -266,6 +283,15 @@ class TestMergeAndManagedSources(GuardTree):
         remote = self.write_bytes(Path(self.temp.name) / "remote.json",
                                   json.dumps(guard.POLICY).encode())
         report = self.inspect(remote_path=remote)
+        self.assertFalse(report["protected"])
+        self.assertEqual(report["state"], "action_needed")
+
+    def test_corrupt_dormant_target_stays_action_needed_under_good_plist(self):
+        self.install(b"{")
+        plist_path = Path(self.temp.name) / "managed.plist"
+        with plist_path.open("wb") as handle:
+            plistlib.dump({"Settings": json.dumps(guard.POLICY)}, handle)
+        report = self.inspect(mdm_paths=(plist_path,))
         self.assertFalse(report["protected"])
         self.assertEqual(report["state"], "action_needed")
 
@@ -453,6 +479,19 @@ class TestCliSource(unittest.TestCase):
             "details", "lastLiveCheck",
         })
         self.assertEqual(body["state"], "error")
+
+    def test_no_pwd_module_still_builds_unsupported_report(self):
+        with mock.patch.object(guard, "pwd", None):
+            self.assertEqual(len(guard.default_mdm_paths()), 1)
+            report = guard.inspect_guard(platform="win32")
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["state"], "unsupported")
+        self.assertEqual(set(report), {
+            "ok", "state", "protected", "safetyAutoFallback",
+            "availabilityAutoFallback", "manualOpusRestrictedByGuard",
+            "scope", "claudeVersion", "activeManagedSource", "policyPath",
+            "details", "lastLiveCheck",
+        })
 
 
 if __name__ == "__main__":  # pragma: no cover
