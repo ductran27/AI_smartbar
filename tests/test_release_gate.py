@@ -1,5 +1,6 @@
 """Release-tag invariants that prevent an untested updater payload."""
 from pathlib import Path
+import re
 import unittest
 
 
@@ -45,6 +46,12 @@ class TestReleaseGate(unittest.TestCase):
         self.assertIn(
             'run_gh release create "v$NEW" --repo "$GH_REPO"', SOURCE)
         self.assertIn('--verify-tag --title "v$NEW"', SOURCE)
+
+    def test_bash_variables_are_braced_before_unicode_punctuation(self):
+        # macOS ships Bash 3.2, whose locale-dependent identifier parsing can
+        # absorb the first byte of an adjacent ellipsis under `set -u`.
+        self.assertIsNone(re.search(
+            r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", SOURCE))
 
 
 if __name__ == "__main__":
