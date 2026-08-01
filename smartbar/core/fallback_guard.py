@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import pwd
 import shlex
 import stat
 import sys
@@ -45,9 +46,21 @@ STATE_NOT_PROTECTED = "not_protected"
 STATE_UNSUPPORTED = "unsupported"
 STATE_ERROR = "error"
 
-DEFAULT_MDM_PATHS = (
-    Path("/Library/Managed Preferences/com.anthropic.claudecode.plist"),
-)
+MDM_DOMAIN = "com.anthropic.claudecode.plist"
+DEFAULT_REMOTE_PATH = Path.home() / ".claude" / "remote-settings.json"
+
+
+def default_mdm_paths() -> Tuple[Path, ...]:
+    """Documented device and per-user managed-preference candidates."""
+
+    paths = [Path("/Library/Managed Preferences") / MDM_DOMAIN]
+    try:
+        username = pwd.getpwuid(os.getuid()).pw_name
+    except (KeyError, OSError):
+        username = ""
+    if username:
+        paths.append(Path("/Library/Managed Preferences") / username / MDM_DOMAIN)
+    return tuple(paths)
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,13 @@ class _Source:
 
 def _policy_path(root: Path) -> Path:
     return root / DROPIN_NAME / POLICY_NAME
+
+
+def policy_path(managed_root: Optional[os.PathLike] = None) -> Path:
+    """The fixed app fragment path (``managed_root`` is test-only injection)."""
+
+    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    return _policy_path(root)
 
 
 def _mode_text(mode: Optional[int]) -> str:
@@ -216,7 +236,7 @@ def _extract_plist_settings(value: Any) -> Optional[Dict[str, Any]]:
     return raw if isinstance(raw, dict) else None
 
 
-def _read_plist(path: Path) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+def _read_plist(path: Path, required_uid: int) -> Tuple[bool, Optional[Dict[str, Any]], str]:
     try:
         info = os.lstat(str(path))
     except FileNotFoundError:
@@ -227,6 +247,11 @@ def _read_plist(path: Path) -> Tuple[bool, Optional[Dict[str, Any]], str]:
         return True, None, "managed plist %s is a symlink" % path
     if not stat.S_ISREG(info.st_mode):
         return True, None, "managed plist %s is not a regular file" % path
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid != required_uid or mode & 0o022:
+        return True, None, ("managed plist %s is not securely root-owned "
+                            "(owner=%s mode=%s)" %
+                            (path, info.st_uid, _mode_text(mode)))
     try:
         with open(path, "rb") as handle:
             settings = _extract_plist_settings(plistlib.load(handle))
@@ -252,6 +277,7 @@ def _live_status(last_live_check: Optional[Dict[str, Any]],
 
 def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
                   mdm_paths: Optional[Sequence[os.PathLike]] = None,
+                  remote_path: Optional[os.PathLike] = None,
                   required_uid: int = 0, required_gid: int = 0,
                   platform: Optional[str] = None, claude_version: str = "",
                   last_live_check: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -273,7 +299,7 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         "safetyAutoFallback": UNKNOWN,
         "availabilityAutoFallback": UNKNOWN,
         "manualOpusRestrictedByGuard": False,
-        "scope": "machine",
+        "scope": "local Claude Code sessions on this Mac",
         "claudeVersion": claude_version or "",
         "activeManagedSource": "unknown",
         "policyPath": str(target_path),
@@ -320,7 +346,7 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
 
     effective: Dict[str, Any] = {}
     providers: Dict[str, _Source] = {}
-    later_unknown = not scan_complete
+    source_unknown = not scan_complete
     conflicts: List[str] = []
     target_seen = False
     helper_present = False
@@ -329,11 +355,11 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
             target_seen = True
         if source.error:
             details.append(source.error)
-            if target_seen or source.path.name > POLICY_NAME:
-                later_unknown = True
+            # A malformed visible managed sibling can make Claude reject or
+            # partially load the file tier.  Never infer merge-through.
+            source_unknown = True
             continue
-        if source.path == root / BASE_NAME and source.data \
-                and source.data.get("policyHelper"):
+        if source.data and source.data.get("policyHelper"):
             helper_present = True
         if not source.data:
             continue
@@ -351,9 +377,9 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
     plist_settings: Optional[Dict[str, Any]] = None
     plist_present = False
     plist_unknown = False
-    plist_paths = DEFAULT_MDM_PATHS if mdm_paths is None else tuple(Path(p) for p in mdm_paths)
+    plist_paths = default_mdm_paths() if mdm_paths is None else tuple(Path(p) for p in mdm_paths)
     for path_value in plist_paths:
-        present, settings, error = _read_plist(Path(path_value))
+        present, settings, error = _read_plist(Path(path_value), required_uid)
         if not present:
             continue
         plist_present = True
@@ -366,10 +392,27 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
                 plist_unknown = True
             plist_settings = settings
 
+    # A non-empty remote cache is a documented higher managed source.  Empty
+    # `{}` means no server policy and is not an indicator.  The cache belongs
+    # to the logged-in user, so root ownership is neither expected nor useful;
+    # it still must be a regular non-symlink JSON object.
+    remote = _read_json_source(Path(remote_path) if remote_path is not None
+                               else DEFAULT_REMOTE_PATH)
+    remote_present = False
+    remote_unknown = False
+    remote_settings: Optional[Dict[str, Any]] = None
+    if remote.exists or remote.error:
+        if remote.error:
+            details.append(remote.error.replace("cannot parse", "cannot parse remote managed cache"))
+            remote_unknown = True
+        elif remote.data:
+            remote_present = True
+            remote_settings = remote.data
+
     active_source = "file" if sources else "unknown"
     chosen = effective
     chosen_providers = providers
-    higher_unknown = later_unknown
+    higher_unknown = source_unknown
     if plist_present:
         active_source = "plist"
         if plist_unknown or plist_settings is None:
@@ -379,7 +422,19 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         elif plist_settings:
             chosen = plist_settings
             chosen_providers = {}
-    if helper_present or (plist_settings and plist_settings.get("policyHelper")):
+    if remote_present or remote_unknown:
+        active_source = "remote"
+        if remote_unknown or remote_settings is None:
+            higher_unknown = True
+            chosen = {}
+        else:
+            chosen = remote_settings
+            higher_unknown = False
+        chosen_providers = {}
+    # policyHelper outranks all static sources and its output is intentionally
+    # not executed during an inspection.
+    if helper_present or (plist_settings and plist_settings.get("policyHelper")) \
+            or (remote_settings and remote_settings.get("policyHelper")):
         active_source = "policyHelper"
         higher_unknown = True
         chosen = {}
@@ -398,7 +453,7 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
                                         and provider.gid == required_gid
                                         and provider.mode == 0o644):
                 provider_secure = False
-    elif active_source not in ("plist",):
+    elif active_source not in ("plist", "remote"):
         provider_secure = False
 
     values_blocked = safety == BLOCKED and availability == BLOCKED
@@ -409,13 +464,20 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
     if app_supplies and (not target_exact or not target_secure
                          or root_problem or dropin_problem):
         protected = False
+    # A higher source may currently supply the right values, but a corrupt
+    # dormant app fragment would become active the instant that source is
+    # removed.  Do not let a remote/plist pass paint that latent failure green.
+    if target.exists and (not target_exact or not target_secure
+                          or root_problem or dropin_problem):
+        protected = False
 
     live_status = _live_status(live, claude_version or "")
     if protected and live_status == "passed":
         state_value = STATE_PROTECTED
     elif protected:
         state_value = STATE_PROTECTED_INCONCLUSIVE
-    elif target.exists or plist_present or helper_present or conflicts or higher_unknown:
+    elif (target.exists or plist_present or remote_present or remote_unknown
+          or helper_present or conflicts or higher_unknown):
         state_value = STATE_ACTION_NEEDED
     else:
         state_value = STATE_NOT_PROTECTED
@@ -468,6 +530,25 @@ def removal_allowed(*, managed_root: Optional[os.PathLike] = None,
     return True, ""
 
 
+def enable_allowed(*, managed_root: Optional[os.PathLike] = None) -> Tuple[bool, str]:
+    """Refuse to overwrite any existing target not byte-for-byte ours.
+
+    Canonical bytes with changed metadata are allowed: the atomic enable plan
+    repairs owner/mode.  Symlinks, non-regular files, and admin edits are not
+    silently replaced even though the filename belongs to this app.
+    """
+
+    root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
+    source = _read_json_source(_policy_path(root))
+    if not source.exists:
+        return True, ""
+    if source.symlink or not source.regular:
+        return False, "Refusing enable: the app policy target is not a regular non-symlink file."
+    if source.raw != POLICY_BYTES:
+        return False, "Refusing enable: the existing app policy was modified by an administrator."
+    return True, ""
+
+
 def _applescript_string(value: str) -> str:
     return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -508,7 +589,10 @@ def enable_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand
         "/usr/bin/printf '%s\\n' %s > \"$tmp\"" % ("%s", content),
         "/usr/sbin/chown root:wheel \"$tmp\"",
         "/bin/chmod 0644 \"$tmp\"",
-        "[ ! -d \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: policy target is a directory' >&2; exit 40; }",
+        "if [ -e \"$target\" ] || [ -L \"$target\" ]; then",
+        "  [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
+        "  /usr/bin/cmp -s \"$tmp\" \"$target\" || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing modified policy' >&2; exit 41; }",
+        "fi",
         "/bin/mv -f \"$tmp\" \"$target\"",
         "trap - EXIT HUP INT TERM",
     ))
@@ -521,14 +605,16 @@ def remove_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand
     root = Path(managed_root) if managed_root is not None else MANAGED_ROOT
     directory = root / DROPIN_NAME
     target = _policy_path(root)
-    qdir, qtarget = shlex.quote(str(directory)), shlex.quote(str(target))
+    qroot, qdir, qtarget = (shlex.quote(str(root)), shlex.quote(str(directory)),
+                            shlex.quote(str(target)))
     content = shlex.quote(POLICY_BYTES.decode("ascii").rstrip("\n"))
     script = "\n".join((
         "set -eu",
+        "root=%s" % qroot,
         "directory=%s" % qdir,
         "target=%s" % qtarget,
         "if [ ! -e \"$target\" ] && [ ! -L \"$target\" ]; then exit 0; fi",
-        "[ ! -L \"$directory\" ] && [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
+        "[ ! -L \"$root\" ] && [ ! -L \"$directory\" ] && [ ! -L \"$target\" ] && [ -f \"$target\" ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing non-regular or symlink policy' >&2; exit 41; }",
         "[ \"$(/usr/bin/stat -f '%u:%g:%Lp' \"$target\")\" = '0:0:644' ] || { /usr/bin/printf '%s\\n' 'ai-smartbar: refusing policy with changed owner or mode' >&2; exit 41; }",
         "expected=$(/usr/bin/mktemp \"$directory/.ai-smartbar-remove-check.XXXXXX\")",
         "trap '/bin/rm -f \"$expected\"' EXIT HUP INT TERM",
@@ -543,6 +629,7 @@ def remove_command(*, managed_root: Optional[os.PathLike] = None) -> RootCommand
 
 __all__ = [
     "BLOCKED", "ENABLED", "UNKNOWN", "MANAGED_ROOT", "POLICY",
-    "POLICY_BYTES", "POLICY_NAME", "RootCommand", "enable_command",
-    "inspect_guard", "is_protected", "removal_allowed", "remove_command",
+    "POLICY_BYTES", "POLICY_NAME", "RootCommand", "default_mdm_paths",
+    "enable_allowed", "enable_command", "inspect_guard", "is_protected",
+    "policy_path", "removal_allowed", "remove_command",
 ]
