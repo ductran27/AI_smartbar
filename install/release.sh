@@ -171,7 +171,7 @@ require_ci_success() {
       echo "no GitHub tests workflow run found for main HEAD $expected_sha" >&2
       return 1
     fi
-    echo "Waiting for GitHub to create the tests workflow for $expected_sha…"
+    echo "Waiting for GitHub to create the tests workflow for ${expected_sha}…"
     sleep "$CI_POLL_INTERVAL"
   done
 
