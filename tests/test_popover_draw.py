@@ -92,6 +92,28 @@ class TestPopoverPainter(unittest.TestCase):
         demo = _demo()
         self.render(layout.build(demo, refreshing=True))
 
+    def test_fallback_guard_compact_busy_and_confirm_states_render(self):
+        demo = _demo()
+        report = {
+            "state": "protected_inconclusive", "protected": True,
+            "safetyAutoFallback": "blocked",
+            "availabilityAutoFallback": "blocked",
+            "manualOpusRestrictedByGuard": False,
+            "scope": "local Claude Code sessions in this Linux environment",
+            "claudeVersion": "2.1.0", "policyPath": (
+                "/etc/claude-code/managed-settings.d/"
+                "99-ai-smartbar-auto-fallback-guard.json"),
+            "details": ["Static policy is complete; verify it live."],
+            "lastLiveCheck": None,
+        }
+        self.render(layout.build(demo, fallback_guard=report))
+        self.render(layout.build(demo, fallback_guard=report,
+                                 fallback_busy="verify"))
+        self.render(layout.build(
+            demo, fallback_guard=report, fallback_expanded=True,
+            fallback_advanced=True, fallback_remove_confirm=True,
+            hover="fallback-confirm-remove"))
+
     def test_stale_and_blocked_footer_render_with_their_reasons(self):
         # FINDING 7: stale_reason/blocked_reason don't change what's drawn
         # (the reason only ever shows via `tooltip`, never painted), but
