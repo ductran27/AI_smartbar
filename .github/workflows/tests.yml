@@ -12,14 +12,14 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Repo floor is 3.9 (see README.md "Layout" section and
       # smartbar/core/popover_layout.py). We pin one version above that
       # floor rather than a floor-to-ceiling matrix: the suite is plain
       # stdlib unittest with no version-conditional code paths, so testing
       # N Pythons buys nothing but CI minutes.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
