@@ -18,50 +18,35 @@ jobs:
       # smartbar/core/popover_layout.py). We pin one version above that
       # floor rather than a floor-to-ceiling matrix: the suite is plain
       # stdlib unittest with no version-conditional code paths, so testing
-      # N Pythons buys nothing but CI minutes. 3.12 was checked by hand
-      # against PyPI's pycairo wheel list (cp39-cp313 all present for
-      # win_amd64) so it is not the constraint -- see the note below on
-      # why pycairo isn't installed here at all.
+      # N Pythons buys nothing but CI minutes.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # Deliberately NOT installing pycairo or gi/GTK here.
-      #
-      # gi (PyGObject/GTK) is a Linux-only toolkit; smartbar/paint/ exists
-      # specifically so the render logic never imports it, and the tests
-      # skip when it's absent -- installing it on any runner, let alone
-      # windows-latest/macos-latest, would defeat that seam.
-      #
-      # pycairo was measured, not assumed. Measured on a dev Mac that HAS
-      # Homebrew's cairo: with pycairo installed the painter tests all run;
-      # without it they skip and nothing else changes. (An earlier version of
-      # this comment quoted a test count, which was stale by 150+ within a
-      # week -- the ratio is the durable part, the total is not.)
-      # So pycairo is worth those extra real assertions instead of skips --
-      # but only on this dev Mac, which already had Homebrew's cairo
-      # (headers + pkg-config) installed. Checked against PyPI directly:
-      # pycairo ships prebuilt wheels ONLY for win_amd64 (cp39 through
-      # cp313, i.e. no cp312 ceiling in practice today, though that could
-      # change release to release -- worth rechecking before ever adding a
-      # Windows-only install here). For Linux and macOS there are no
-      # wheels at all, only an sdist, so `pip install pycairo` on a bare
-      # ubuntu-latest/macos-latest runner would try to compile against a
-      # system cairo it does not ship with and fail the job for a reason
-      # that has nothing to do with this repo's code. Accepting the 13
-      # skips keeps the job identical and green on all three OSes without
-      # a per-OS system-package install step.
+      # Linux/macOS build pycairo from its sdist and therefore need cairo's
+      # headers plus pkg-config. Windows receives PyPI's cp312 win_amd64
+      # wheel and needs no system SDK. Keep GTK/PyGObject absent: the portable
+      # painter deliberately has no GTK dependency, while importing cairo is
+      # mandatory below so painter tests cannot quietly turn into skips.
+      - name: Install Cairo build dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
+
+      - name: Install Cairo build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cairo pkg-config
+
+      - name: Install pinned pycairo
+        run: python -m pip install --disable-pip-version-check pycairo==1.29.0
+
+      - name: Verify Cairo is importable
+        run: python -c "import cairo; print(cairo.cairo_version_string())"
+
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-      # macos-swift/ is a second, independent implementation of the model
-      # layer, and until now nothing in CI compiled it -- a plain Swift syntax
-      # error stayed invisible until a human ran install/macos-swift.sh by
-      # hand. Commit fa88a4c fixed a real codesign defect in that installer
-      # that this job still would not catch; compiling is the cheap half of
-      # that gap, and it is the half that fails loudly. macos-latest already
-      # ships the Xcode command line tools, so this adds one step on one leg
-      # and no new dependency. Measured locally: 4.9s from cold.
-      - name: Build the Swift front-end
+      # `swift test` compiles the front-end and exercises its decoding/state
+      # policy. A build-only gate previously let Swift regressions through.
+      - name: Test the Swift front-end
         if: runner.os == 'macOS'
-        run: swift build -c release --package-path macos-swift
+        run: swift test -c release --package-path macos-swift

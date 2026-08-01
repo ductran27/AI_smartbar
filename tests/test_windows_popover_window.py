@@ -285,11 +285,20 @@ class TestMaxPanelHeightPx(GuiStubbedTestCase):
         popover = mod.Popover(lambda hover: None, lambda name: None)
         popover.pointer = (500, 300)
         popover.screen = (1920, 1080)
-        # ctypes.windll does not exist on this host, so _work_area_at
-        # falls through to (0, 0, winfo_screenwidth(), winfo_screenheight())
-        # -- the exact fallback a real Windows lookup failure would hit.
-        cap = popover._max_panel_height_px()
+        # Force BOTH native lookup paths to fail. Relying on ctypes.windll
+        # being absent only exercised this fallback on non-Windows hosts, and
+        # made the assertion depend on a real Actions runner's monitor size.
+        user32 = types.SimpleNamespace(
+            MonitorFromPoint=mock.Mock(side_effect=OSError("forced failure")),
+            SystemParametersInfoW=mock.Mock(return_value=0),
+        )
+        with mock.patch.object(
+                mod.ctypes, "windll",
+                types.SimpleNamespace(user32=user32), create=True):
+            cap = popover._max_panel_height_px()
         self.assertEqual(cap, 1080 - 2 * mod.MAX_HEIGHT_MARGIN)
+        user32.MonitorFromPoint.assert_called_once()
+        user32.SystemParametersInfoW.assert_called_once()
 
     def test_returns_zero_when_the_pointer_lookup_itself_raises(self):
         mod = _reimport("smartbar.windows.popover_window")
