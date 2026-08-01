@@ -187,6 +187,12 @@ def main() -> int:
                              "(stored credential backup included), "
                              "openai:<email> forgets the remembered ChatGPT "
                              "card. The active account is always refused")
+    parser.add_argument("--fallback-guard",
+                        choices=("status", "enable", "verify", "remove"),
+                        metavar="ACTION",
+                        help="inspect or manage the machine-wide macOS Claude "
+                             "automatic-fallback guard; ACTION is status, "
+                             "enable, verify, or remove; output is always JSON")
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
@@ -266,6 +272,20 @@ def main() -> int:
         ok, error = account_removal.remove(args.remove_account)
         print(_json.dumps({"ok": ok, "error": error}))
         return 0 if ok else 1
+    if args.fallback_guard:
+        import json as _json
+        from smartbar import fallback_guard_runner
+        try:
+            report, exit_code = fallback_guard_runner.run(args.fallback_guard)
+        except Exception as exc:
+            # This command is consumed by the native UI.  Even an unexpected
+            # bug must preserve the full JSON contract rather than leak a
+            # traceback or leave Swift with no decodable answer.
+            report = fallback_guard_runner.error_report(
+                "Fallback guard failed unexpectedly: %s" % exc)
+            exit_code = fallback_guard_runner.EXIT_ERROR
+        print(_json.dumps(report, separators=(",", ":")))
+        return exit_code
     if sys.platform == "darwin":
         from smartbar.macos.menubar import main as ui_main
     elif sys.platform == "win32":
