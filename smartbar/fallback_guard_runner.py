@@ -1,8 +1,9 @@
-"""CLI orchestration for the macOS Claude automatic-fallback guard.
+"""CLI orchestration for the macOS and Linux/WSL fallback guard.
 
-The privileged surface is intentionally one list-form ``osascript`` process
-per mutation.  Root shell text comes only from :mod:`smartbar.core.fallback_guard`;
-this module never builds it from CLI input and never uses ``shell=True``.
+The privileged surface is intentionally one list-form ``osascript`` (macOS)
+or ``pkexec`` (Linux/WSL) process per mutation.  Root shell text comes only
+from :mod:`smartbar.core.fallback_guard`; this module never builds it from CLI
+input and never uses ``shell=True``.
 """
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ def _claude_version(*, claude_path: Optional[str] = None,
     return (getattr(completed, "stdout", "") or "").strip()
 
 
-def _blank_report(message: str, *, managed_root=None) -> Dict[str, Any]:
+def _blank_report(message: str, *, managed_root=None,
+                  platform: Optional[str] = None) -> Dict[str, Any]:
     return {
         "ok": False,
         "state": fallback_guard.STATE_ERROR,
@@ -48,10 +50,11 @@ def _blank_report(message: str, *, managed_root=None) -> Dict[str, Any]:
         "safetyAutoFallback": fallback_guard.UNKNOWN,
         "availabilityAutoFallback": fallback_guard.UNKNOWN,
         "manualOpusRestrictedByGuard": False,
-        "scope": "local Claude Code sessions on this Mac",
+        "scope": fallback_guard.scope_for_platform(platform),
         "claudeVersion": "",
         "activeManagedSource": "unknown",
-        "policyPath": str(fallback_guard.policy_path(managed_root)),
+        "policyPath": str(fallback_guard.policy_path(
+            managed_root, platform=platform)),
         "details": [message],
         "lastLiveCheck": None,
     }
@@ -79,7 +82,7 @@ def status(*, managed_root=None, mdm_paths=None, remote_path=None,
             claude_version=version, last_live_check=last_check or None)
     except Exception as exc:
         return _blank_report("Fallback guard inspection failed: %s" % exc,
-                             managed_root=managed_root)
+                             managed_root=managed_root, platform=platform)
 
 
 def _error_report(report: Dict[str, Any], message: str,
@@ -119,6 +122,32 @@ def _touch_user_settings(path_value=None) -> str:
     return ""
 
 
+def _linux_pkexec_path(path_value=None, *,
+                       required_uid: int = 0) -> Tuple[Optional[Path], str]:
+    """Resolve only the fixed PolicyKit binary and return an actionable error."""
+
+    path = (Path(path_value) if path_value is not None
+            else fallback_guard.PKEXEC_PATH)
+    try:
+        info = os.lstat(str(path))
+    except FileNotFoundError:
+        return None, (
+            "pkexec is unavailable at %s. Install PolicyKit (polkit) and run "
+            "from a session with an authentication agent." % path)
+    except OSError as exc:
+        return None, "Could not inspect pkexec at %s: %s" % (path, exc)
+    mode = stat.S_IMODE(info.st_mode)
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) \
+            or not (mode & 0o111):
+        return None, ("pkexec at %s is not a regular non-symlink executable."
+                      % path)
+    if info.st_uid != required_uid or mode & 0o022:
+        return None, (
+            "pkexec at %s is not securely root-owned and non-writable by "
+            "group/others." % path)
+    return path, ""
+
+
 def _run_admin(command: fallback_guard.RootCommand,
                run_process: Callable[..., Any]) -> Tuple[str, str]:
     try:
@@ -134,8 +163,12 @@ def _run_admin(command: fallback_guard.RootCommand,
     if int(getattr(completed, "returncode", 1)) == 0:
         return "ok", ""
     combined = "\n".join(part for part in (stderr, stdout) if part)
-    if "(-128)" in combined or "User canceled" in combined \
-            or "user canceled" in combined.lower():
+    returncode = int(getattr(completed, "returncode", 1))
+    lowered = combined.lower()
+    is_pkexec = Path(command.argv[0]).name == "pkexec"
+    if (is_pkexec and returncode == 126) or "(-128)" in combined \
+            or "user canceled" in lowered or "user cancelled" in lowered \
+            or "request dismissed" in lowered:
         return "cancelled", "Administrator authorization was cancelled."
     return "error", combined or "Administrator command failed."
 
@@ -152,11 +185,12 @@ def run(action: str, *, managed_root=None, mdm_paths=None, remote_path=None,
         platform: Optional[str] = None, state_path: Optional[str] = None,
         claude_path: Optional[str] = None,
         user_settings_path=None,
+        pkexec_path=None,
         run_process: Callable[..., Any] = subprocess.run) -> Tuple[Dict[str, Any], int]:
     """Run one CLI action and return ``(JSON report, exit code)``.
 
     Injection points are for contained tests.  The public CLI supplies none of
-    them, so its privileged target is always the fixed ``/Library`` fragment.
+    them, so its privileged target is always the fixed platform fragment.
     """
 
     current = status(
@@ -208,7 +242,8 @@ def run(action: str, *, managed_root=None, mdm_paths=None, remote_path=None,
         claude_version=current.get("claudeVersion", ""), last_live_check=None)
 
     if action == "enable":
-        allowed, reason = fallback_guard.enable_allowed(managed_root=managed_root)
+        allowed, reason = fallback_guard.enable_allowed(
+            managed_root=managed_root, platform=platform)
         if not allowed:
             return _error_report(current, reason,
                                  state=fallback_guard.STATE_ACTION_NEEDED), EXIT_INCONCLUSIVE
@@ -225,20 +260,37 @@ def run(action: str, *, managed_root=None, mdm_paths=None, remote_path=None,
                 run_process=run_process)
             refreshed["details"].extend(item for item in warnings if item)
             return refreshed, EXIT_OK
-        command = fallback_guard.enable_command(managed_root=managed_root)
+        resolved_pkexec = None
+        if fallback_guard.platform_family(platform) == "linux":
+            resolved_pkexec, problem = _linux_pkexec_path(
+                pkexec_path, required_uid=required_uid)
+            if problem:
+                return _error_report(current, problem), EXIT_ERROR
+        command = fallback_guard.enable_command(
+            managed_root=managed_root, platform=platform,
+            pkexec_path=resolved_pkexec)
     elif action == "remove":
         allowed, reason = fallback_guard.removal_allowed(
             managed_root=managed_root, required_uid=required_uid,
-            required_gid=required_gid)
+            required_gid=required_gid, platform=platform)
         if not allowed:
             return _error_report(current, reason,
                                  state=fallback_guard.STATE_ACTION_NEEDED), EXIT_INCONCLUSIVE
-        if not os.path.lexists(str(fallback_guard.policy_path(managed_root))):
-            warning = _clear_live_state(state_path)
-            if warning:
-                current["details"].append(warning)
+        if not os.path.lexists(str(fallback_guard.policy_path(
+                managed_root, platform=platform))):
+            warnings = [_clear_live_state(state_path),
+                        _touch_user_settings(user_settings_path)]
+            current["details"].extend(item for item in warnings if item)
             return current, EXIT_OK
-        command = fallback_guard.remove_command(managed_root=managed_root)
+        resolved_pkexec = None
+        if fallback_guard.platform_family(platform) == "linux":
+            resolved_pkexec, problem = _linux_pkexec_path(
+                pkexec_path, required_uid=required_uid)
+            if problem:
+                return _error_report(current, problem), EXIT_ERROR
+        command = fallback_guard.remove_command(
+            managed_root=managed_root, platform=platform,
+            pkexec_path=resolved_pkexec)
     else:
         return _error_report(current, "Unknown fallback-guard action %r." % action), EXIT_ERROR
 
@@ -253,9 +305,8 @@ def run(action: str, *, managed_root=None, mdm_paths=None, remote_path=None,
     if outcome == "error":
         return _error_report(current, message), EXIT_ERROR
 
-    warnings = [_clear_live_state(state_path)]
-    if action == "enable":
-        warnings.append(_touch_user_settings(user_settings_path))
+    warnings = [_clear_live_state(state_path),
+                _touch_user_settings(user_settings_path)]
     refreshed = status(
         managed_root=managed_root, mdm_paths=mdm_paths,
         remote_path=remote_path,
