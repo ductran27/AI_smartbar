@@ -42,7 +42,6 @@ own module globals).
 """
 from __future__ import annotations
 
-import importlib
 import sys
 import types
 import unittest
@@ -50,6 +49,7 @@ from unittest import mock
 
 from smartbar.core import model
 from smartbar.core import popover_layout as layout
+from tests.support import stubs
 
 
 class _FakeWidget:
@@ -191,72 +191,35 @@ class _FakeCanvas(_FakeWidget):
             self.y_offset = 0
 
 
-class _FakeImage:
-    @staticmethod
-    def open(buf):
-        return _FakeImage()
-
-    def load(self):
-        pass
-
-
 class _FakePhotoImage:
+    """Records the source image handed to it, unlike stubs.FakeWidget's
+    stand-in in test_windows_tray.py -- this file's tests assert on WHAT
+    was drawn, not just that drawing didn't crash."""
+
     def __init__(self, image):
         self.image = image
 
 
 def _install_gui_stubs():
-    tkinter = types.ModuleType("tkinter")
-    tkinter.Tk = _FakeWidget
-    tkinter.Toplevel = _FakeWidget
-    tkinter.Canvas = _FakeCanvas
-    tkinter.Label = _FakeWidget
-    sys.modules["tkinter"] = tkinter
-
-    pil = types.ModuleType("PIL")
-    pil_image = types.ModuleType("PIL.Image")
-    pil_image.open = _FakeImage.open
-    pil_image.Image = _FakeImage
-    pil_imagetk = types.ModuleType("PIL.ImageTk")
-    pil_imagetk.PhotoImage = _FakePhotoImage
-    pil.Image = pil_image
-    pil.ImageTk = pil_imagetk
-    sys.modules["PIL"] = pil
-    sys.modules["PIL.Image"] = pil_image
-    sys.modules["PIL.ImageTk"] = pil_imagetk
-
-    cairo = types.ModuleType("cairo")
-    cairo.ImageSurface = lambda *a, **k: mock.MagicMock()
-    cairo.Context = lambda *a, **k: mock.MagicMock()
-    cairo.FORMAT_ARGB32 = 0
-    cairo.FONT_SLANT_NORMAL = 0
-    cairo.FONT_WEIGHT_BOLD = 0
-    cairo.FONT_WEIGHT_NORMAL = 0
-    cairo.LINE_CAP_ROUND = 0
-    cairo.OPERATOR_SOURCE = 0
-    sys.modules["cairo"] = cairo
+    stubs.install_tk(tk_cls=_FakeWidget, canvas_cls=_FakeCanvas,
+                     label_cls=_FakeWidget)
+    stubs.install_pil(photoimage_cls=_FakePhotoImage)
+    stubs.install_cairo(extra={
+        "FONT_WEIGHT_NORMAL": 0, "LINE_CAP_ROUND": 0, "OPERATOR_SOURCE": 0})
 
 
-class GuiStubbedTestCase(unittest.TestCase):
-    """See tests/test_windows_tray.py's own class of the same name for why
-    the WHOLE of sys.modules is snapshotted/restored, not just the stub
-    keys: popover_draw's `import cairo` binds whatever sys.modules["cairo"]
-    holds at its first-ever import permanently into its own globals."""
+class GuiStubbedTestCase(stubs.GuiStubbedTestCase):
+    """See tests/support/stubs.py's own class of the same name for why the
+    WHOLE of sys.modules is snapshotted/restored, not just the stub keys:
+    popover_draw's `import cairo` binds whatever sys.modules["cairo"] holds
+    at its first-ever import permanently into its own globals."""
 
     def setUp(self):
-        self._sys_modules_snapshot = dict(sys.modules)
+        super().setUp()
         _install_gui_stubs()
 
-    def tearDown(self):
-        for name in list(sys.modules):
-            if name not in self._sys_modules_snapshot:
-                del sys.modules[name]
-        sys.modules.update(self._sys_modules_snapshot)
 
-
-def _reimport(dotted_name):
-    sys.modules.pop(dotted_name, None)
-    return importlib.import_module(dotted_name)
+_reimport = stubs.reimport
 
 
 def _layout(theme_mod, width=330.0, height=400.0, hits=None):

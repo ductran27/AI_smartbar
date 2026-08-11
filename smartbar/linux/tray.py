@@ -6,6 +6,19 @@ plus the actions, because an AppIndicator menu is serialised to the panel as
 dbusmenu and can carry nothing but labels, icons and checkmarks — never the
 cards and filled bars. If the window cannot be created the menu falls back to
 the old text rows so the tray still works.
+
+The fetch/apply/alert/recapture/check-update state machine itself lives in
+smartbar.core.tray_controller (TrayController) rather than here — see that
+module's own docstring for why. This class is TrayController's host: it owns
+GTK objects (the indicator, the menu, the popover) and implements the
+TrayHost contract (set_icon/set_title/rebuild_menu/call_on_ui_thread/
+schedule/notify/check_update_argv/the panel triad) as thin bindings onto
+AppIndicator/GLib/libnotify, plus whatever stays genuinely GTK-shaped and
+therefore platform-specific: building the actual Gtk.MenuItem objects, the
+pending-menu-until-hide swap dance, the popover window itself, and the
+optimistic-switch flip's own repaint (supplied to TrayController.on_switch
+as a callable, per the design's own divergence note on why that step cannot
+be shared).
 """
 import os
 
@@ -27,7 +40,6 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 
-import json
 import logging
 import subprocess
 import threading
@@ -37,11 +49,9 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
-from smartbar.core import codex, cswap, model, paths, plan
-from smartbar.core import popover_layout, portable, presence
+from smartbar.core import model, paths, popover_layout, portable, presence
 from smartbar.core import update as update_core
-from smartbar.core.alerts import Alert, AlertManager
-from smartbar.core.recapture import RecapturePolicy
+from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
 
 CACHE_DIR = paths.cache_dir()
@@ -50,11 +60,6 @@ LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
-# A manual check runs `git fetch`. Bounded so a stalled network leaves the row
-# saying "Check failed" rather than "Checking…" for ever.
-CHECK_TIMEOUT = 120
-# How long the outcome sits in the menu before the row goes back to normal.
-CHECK_RESULT_SECONDS = 20
 # Read-only status checks are cheap and never run the paid live probes.  Keep
 # them fresh when the user opens a surface without turning Verify into an
 # implicit background action.
@@ -70,27 +75,13 @@ class Tray:
         # the 60s urgent cadence near the limit); the store still paces the
         # real network, so faster polling adds no API traffic.
         self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
-        self.alerts = AlertManager()
-        self.snapshot = None
+        self.controller = TrayController(self)
         self.provider = ""   # panel tab; "" auto-resolves in the layout
         self.confirm = ""    # card awaiting remove confirmation, or ""
-        self.failures = 0
         self.flip = False
-        self.generation = 0  # stamps fetches so superseded results are dropped
         self.menu = None
         self.pending_menu = None  # rebuilt while open; swapped in on hide
-        self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
-        self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
-        self.last_error = ""
-        self.action_error = ""   # switch/remove failure; sticky until next
-                                  # attempt (mirrors UsageStore.swift:15-16)
-        self.refreshing = False  # true while a fetch is in flight
-        self.update_blocked = ""
-        self.presence_started = False  # first beat waits for the first fetch
         self.open_item = None
-        self.checking = False     # a manual update check is in flight
-        self.check_result = ""    # its outcome, shown in the row for a while
-        self.check_token = 0      # so a stale timer cannot clear a newer result
         self.fallback_guard_report = None
         self.fallback_guard_busy = ""
         self.fallback_guard_error = ""
@@ -98,7 +89,7 @@ class Tray:
         self.fallback_guard_advanced = False
         self.fallback_guard_remove_confirm = False
         self.fallback_guard_last_fetch = 0.0
-        self.update_pending = self._pending_update()  # "" or "X.Y.Z"
+        self.controller._pending_update()  # seeds update_pending/blocked
         self.pinned = model.panel_pinned()
         self.popover = self._make_popover()
         self.indicator = AppIndicator.Indicator.new(
@@ -106,13 +97,14 @@ class Tray:
             AppIndicator.IndicatorCategory.APPLICATION_STATUS)
         self.indicator.set_icon_theme_path(ICON_DIR)
         self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
-        self._set_icon([])  # hollow "?" pills until the first fetch lands
+        # Hollow "?" pills until the first fetch lands.
+        self.set_icon([], bool(self.controller.update_pending))
         self._install_menu(self._build_menu())
         self._init_notify()
-        if self.pinned and self.popover is not None:
+        if self.pinned and self.has_panel:
             # Up before the first fetch lands: the panel renders its own
             # loading/error state and refreshes in place once data arrives.
-            self.popover.show_panel()
+            self.show_panel()
         self._start_fallback_guard("status")
 
     def _make_popover(self):
@@ -131,16 +123,17 @@ class Tray:
 
     def _popover_layout(self, hover=""):
         """Fresh layout for the panel — same builder the macOS popover mirrors."""
+        c = self.controller
         return popover_layout.build(
-            self.snapshot, version=__version__,
-            pending_version=self.update_pending,
-            blocked_reason=self.update_blocked,
-            fetched_at=self.snapshot.fetched_at if self.snapshot else "",
-            stale=bool(self.failures and self.snapshot),
-            error=self.last_error if self.snapshot is None else "",
+            c.snapshot, version=__version__,
+            pending_version=c.update_pending,
+            blocked_reason=c.update_blocked,
+            fetched_at=c.snapshot.fetched_at if c.snapshot else "",
+            stale=bool(c.failures and c.snapshot),
+            error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
-            action_error=self.action_error, refreshing=self.refreshing,
-            stale_reason=self.last_error,
+            action_error=c.action_error, refreshing=c.refreshing,
+            stale_reason=c.last_error,
             fallback_guard=self.fallback_guard_report,
             fallback_busy=self.fallback_guard_busy,
             fallback_expanded=self.fallback_guard_expanded,
@@ -177,12 +170,13 @@ class Tray:
         elif name == "fallback-confirm-remove":
             self._start_fallback_guard("remove")
         elif name == "dismiss-error":
-            self.action_error = ""
+            self.controller.action_error = ""
         elif name.startswith("tab:"):
             self.provider = name.split(":", 1)[1]
             self.confirm = ""
         elif name.startswith("confirm-remove:"):
-            self._on_remove(name.split(":", 1)[1])
+            self.confirm = ""
+            self.controller.on_remove(name.split(":", 1)[1])
         elif name == "cancel-remove":
             self.confirm = ""
         elif name.startswith("remove:"):
@@ -203,44 +197,55 @@ class Tray:
         self.popover.show_panel()
         # Opening the panel is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic).
-        if time.monotonic() - self.last_fetch_at > 10:
-            self._start_fetch()
+        if time.monotonic() - self.controller.last_fetch_at > 10:
+            self.controller._start_fetch()
         self._refresh_fallback_guard_if_stale()
 
     def _init_notify(self):
-        self.notify = None
+        self._libnotify = None
         try:
             gi.require_version("Notify", "0.7")
             from gi.repository import Notify
             Notify.init("AI smartbar")
-            self.notify = Notify
+            self._libnotify = Notify
         except Exception:
             log.warning("libnotify unavailable; will fall back to notify-send")
 
-    def _send_alert(self, alert, urgency="critical", icon="dialog-warning"):
-        """Any object with .title/.body — a limit alert or an update check.
+    # --- TrayHost: notification -------------------------------------------
 
-        Urgency is a parameter because a limit alert should interrupt, while
-        "up to date" is a confirmation the user just asked for.
-        """
+    def notify(self, alert, urgency="critical"):
+        """Show a native notification. See TrayHost.notify's docstring for
+        why `urgency` is the only signal this gets — the icon name is
+        derived from it here rather than threaded through as its own
+        parameter, exactly reproducing the two icons the old _send_alert
+        callers picked by hand (dialog-warning for a limit alert, dialog-
+        information for a check-result confirmation)."""
+        icon = "dialog-information" if urgency == "normal" else "dialog-warning"
         try:
-            if self.notify is not None:
-                self.notify.Notification.new(alert.title, alert.body,
-                                             icon).show()
+            if self._libnotify is not None:
+                self._libnotify.Notification.new(alert.title, alert.body,
+                                                 icon).show()
             else:
                 subprocess.run(["notify-send", "-u", urgency,
                                 alert.title, alert.body], timeout=10, check=False)
         except Exception:
             log.exception("failed to send notification")
 
-    def _set_icon(self, states):
+    # --- TrayHost: icon / title --------------------------------------------
+
+    def set_icon(self, states, update_pending):
         # Alternate two icon names: AppIndicator ignores a set_icon_full call
         # with the current name, so a single name would never repaint.
         self.flip = not self.flip
         name = f"state-{'a' if self.flip else 'b'}"
         render_pills(states, os.path.join(ICON_DIR, name + ".png"),
-                     update_pending=bool(self.update_pending))
+                     update_pending=update_pending)
         self.indicator.set_icon_full(name, "AI smartbar usage")
+
+    def set_title(self, text):
+        self.indicator.set_title(text)
+
+    # --- menu construction (platform-specific: Gtk.Menu/Gtk.MenuItem) -----
 
     def _append_fallback_guard_menu(self, menu):
         """Native, accessible fallback-guard controls for every session.
@@ -287,6 +292,7 @@ class Tray:
         the popover window. When that window could not be created the old
         text rows come back, so the tray is still usable.
         """
+        c = self.controller
         menu = Gtk.Menu()
         self.open_item = None
         if self.popover is not None:
@@ -294,14 +300,14 @@ class Tray:
             item.connect("activate", self._on_open)
             menu.append(item)
             self.open_item = item
-        elif self.snapshot is None:
-            label = "Loading…" if self.failures == 0 else "cswap error — see tray.log"
+        elif c.snapshot is None:
+            label = "Loading…" if c.failures == 0 else "cswap error — see tray.log"
             item = Gtk.MenuItem(label=label)
             item.set_sensitive(False)
             menu.append(item)
         else:
-            stale = "  (stale)" if self.failures else ""
-            for acct in self.snapshot.accounts:
+            stale = "  (stale)" if c.failures else ""
+            for acct in c.snapshot.accounts:
                 item = Gtk.MenuItem(label=model.menu_row(acct)
                                     + (stale if acct.active else ""))
                 if acct.active or model.switch_blocked(acct):
@@ -311,21 +317,21 @@ class Tray:
                 else:
                     item.connect("activate", self._on_switch, acct.number)
                 menu.append(item)
-            if self.snapshot.openai:
+            if c.snapshot.openai:
                 # Read-only rows: no switcher exists for ChatGPT logins.
                 menu.append(Gtk.SeparatorMenuItem())
                 header = Gtk.MenuItem(label="OpenAI")
                 header.set_sensitive(False)
                 menu.append(header)
-                for acct in self.snapshot.openai:
+                for acct in c.snapshot.openai:
                     item = Gtk.MenuItem(label=model.menu_row(acct))
                     item.set_sensitive(False)
                     menu.append(item)
         menu.append(Gtk.SeparatorMenuItem())
         self._append_fallback_guard_menu(menu)
         menu.append(Gtk.SeparatorMenuItem())
-        if self.update_pending:
-            item = Gtk.MenuItem(label=f"⬆ Update to {self.update_pending}")
+        if c.update_pending:
+            item = Gtk.MenuItem(label=f"⬆ Update to {c.update_pending}")
             item.connect("activate", self._on_update)
             menu.append(item)
         # "Refresh now" re-reads usage; this asks the REMOTE whether a new
@@ -335,7 +341,8 @@ class Tray:
         # check button would promise something that cannot happen.
         rows = [("⟳ Refresh now", self._on_refresh, True)]
         if update_core.enabled():
-            rows.append(self._check_row())
+            label, clickable = c._check_row()
+            rows.append((label, self._on_check_update, clickable))
         rows += [("⚙ Open cswap TUI", self._on_tui, True),
                  ("⏻ Quit", self._on_quit, True)]
         for label, callback, clickable in rows:
@@ -362,7 +369,9 @@ class Tray:
             except Exception:
                 log.debug("middle-click activation unsupported here")
 
-    def _refresh_menu(self):
+    # --- TrayHost: rebuild_menu ---------------------------------------------
+
+    def rebuild_menu(self):
         new_menu = self._build_menu()
         if self.menu is not None and self.menu.get_mapped():
             # Swapping the menu out from under the pointer closes it on
@@ -374,13 +383,15 @@ class Tray:
     def _on_menu_show(self, _menu):
         # An opening menu is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic).
-        if time.monotonic() - self.last_fetch_at > 10:
-            self._start_fetch()
+        if time.monotonic() - self.controller.last_fetch_at > 10:
+            self.controller._start_fetch()
         self._refresh_fallback_guard_if_stale()
 
     def _on_menu_hide(self, _menu):
         if self.pending_menu is not None:
             self._install_menu(self.pending_menu)
+
+    # --- fallback guard ------------------------------------------------------
 
     def _on_fallback_guard_action(self, _item, action):
         self._start_fallback_guard(action)
@@ -389,11 +400,11 @@ class Tray:
         # First step only.  The native menu closes after activation; its next
         # open exposes the separately-labelled destructive confirmation.
         self.fallback_guard_remove_confirm = True
-        self._refresh_menu()
+        self.rebuild_menu()
 
     def _on_fallback_guard_cancel_remove(self, _item):
         self.fallback_guard_remove_confirm = False
-        self._refresh_menu()
+        self.rebuild_menu()
 
     def _refresh_fallback_guard_if_stale(self):
         if (not self.fallback_guard_busy
@@ -432,11 +443,11 @@ class Tray:
             log.exception("fallback guard %s failed", action)
             report, exit_code = None, 1
             error = "Fallback guard failed: %s" % exc
-        GLib.idle_add(self._apply_fallback_guard, action, report, exit_code,
-                      error)
+        self.call_on_ui_thread(self._apply_fallback_guard, action, report,
+                               exit_code, error)
 
     def _apply_fallback_guard(self, action, report, exit_code, error):
-        """GLib.idle_add target for all worker-produced guard state."""
+        """UI-thread target for all worker-produced guard state."""
         self.fallback_guard_busy = ""
         self.fallback_guard_last_fetch = time.monotonic()
         if isinstance(report, dict):
@@ -453,91 +464,42 @@ class Tray:
         return False
 
     def _refresh_fallback_guard_surfaces(self):
-        self._refresh_menu()
+        self.rebuild_menu()
         if self.popover is not None and self.popover.get_visible():
             self.popover.refresh_layout()
+
+    # --- switch --------------------------------------------------------------
 
     def _on_switch(self, _item, number):
-        self.action_error = ""
-        self._flip_active_optimistically(number)
-
-        def run():
-            try:
-                cswap.switch(number)
-            except cswap.CswapError as exc:
-                log.exception("switch failed")
-                GLib.idle_add(self._set_action_error, f"Switch failed: {exc}")
-            self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
+        self.controller.on_switch(number, self._flip_active_optimistically)
 
     def _flip_active_optimistically(self, number):
-        """ACTIVE chip/icon/title move now, matching UsageStore.swift:
-        159-166: bumping self.generation (like Swift's fetchGeneration +=
-        1) makes _apply_snapshot/_apply_error drop any pre-switch fetch
-        that lands after this guess, and the forced refetch _on_switch
-        starts next is the truth that confirms or corrects it."""
-        if self.snapshot is None:
+        """ACTIVE chip/icon/title move now, matching UsageStore.switchTo's
+        optimistic-flip block. The generation bump that makes
+        _apply_snapshot/_apply_error drop any pre-switch fetch landing after
+        this guess is NOT done here: TrayController.on_switch does it under
+        its own lock before this callable is ever marshalled, because a bare
+        `+=` on this side raced the switch's worker thread (see that bump's
+        comment). This callable is repaint-only. The forced refetch
+        on_switch starts next is the truth that confirms or corrects the
+        guess. Supplied to TrayController.on_switch as the flip_active
+        callable — see that method's own docstring for why the repaint
+        itself stays here rather than in the controller."""
+        c = self.controller
+        if c.snapshot is None:
             return
-        for acct in self.snapshot.accounts:
+        for acct in c.snapshot.accounts:
             acct.active = acct.number == number
-        self.generation += 1
-        self.refreshing = False
-        account = self.snapshot.active_account
-        self._set_icon(model.pill_states(account) if account else [])
-        self.indicator.set_title(model.title_line(account))
-        self._refresh_menu()
+        c.refreshing = False
+        account = c.snapshot.active_account
+        self.set_icon(model.pill_states(account) if account else [],
+                      bool(c.update_pending))
+        self.set_title(model.title_line(account))
+        self.rebuild_menu()
         if self.popover is not None and self.popover.get_visible():
             self.popover.refresh_layout()
 
-    def _set_action_error(self, message):
-        """GLib.idle_add target: a worker thread must never poke UI state
-        directly (that is a crash waiting to happen, not a cosmetic bug),
-        so a switch/remove failure lands here instead."""
-        self.action_error = message
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
-        return False
-
-    def _on_remove(self, token):
-        """Confirmed removal ("<provider>:<id>"): drop the card now, remove
-        in the background through the ONE core function per provider, then
-        refetch — the truth that resurrects the card if the removal failed."""
-        provider, _, ident = token.partition(":")
-        self.confirm = ""
-        self.action_error = ""
-        if self.snapshot is not None:
-            if provider == "claude":
-                self.snapshot.accounts = [
-                    a for a in self.snapshot.accounts
-                    if str(a.number) != ident]
-            else:
-                self.snapshot.openai = [
-                    a for a in self.snapshot.openai if a.email != ident]
-
-        def run():
-            try:
-                if provider == "claude":
-                    cswap.remove_account(int(ident))
-                else:
-                    codex.remove_account(ident)
-            except (cswap.CswapError, ValueError, OSError) as exc:
-                log.exception("remove failed")
-                GLib.idle_add(self._set_action_error, f"Remove failed: {exc}")
-            self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
-
-    def _pending_update(self) -> str:
-        """The release the updater found waiting, or "" — never raises.
-
-        Also records why an update is being held back (dirty checkout,
-        unpushed commits) so the panel footer can say so.
-        """
-        # update_runner stays a LAZY import: it pulls in the lock shims and
-        # the git layer, and a tray must not pay for those at import time.
-        # The reading itself is shared — see update_runner.pending_for_ui.
-        from smartbar import update_runner
-        pending, self.update_blocked = update_runner.pending_for_ui()
-        return pending
+    # --- update apply / check row --------------------------------------------
 
     def _on_update(self, _item):
         """Apply the waiting release. Detached on purpose: the updater
@@ -549,75 +511,16 @@ class Tray:
         except OSError:
             log.exception("could not start the updater")
 
-    def _check_row(self):
-        """(label, callback, clickable) for the manual update-check row."""
-        if self.checking:
-            return "⇅ Checking for updates…", None, False
-        if self.check_result:
-            return self.check_result, None, False
-        return "⇅ Check for updates", self._on_check_update, True
-
     def _on_check_update(self, _item):
-        if self.checking:
-            return
-        self.checking = True
-        self.check_result = ""
-        self.check_token += 1
-        self._refresh_menu()
-        threading.Thread(target=self._check_update, args=(self.check_token,),
-                         daemon=True).start()
+        self.controller._on_check_update()
 
-    def _check_update(self, token):
-        """Ask the remote, off the main loop — this does a network fetch.
+    # --- TrayHost: the manual check's subprocess -----------------------------
 
-        `--check-update --json` does the whole thing: it only reports (applying
-        stays the separate, deliberate "⬆ Update to …" row) and it decides what
-        to SAY, so the macOS popover and this menu cannot drift apart in either
-        the wording or the rules behind it.
-        """
-        try:
-            done = subprocess.run([LAUNCHER, "--check-update", "--json"],
-                                  capture_output=True, text=True,
-                                  timeout=CHECK_TIMEOUT,
-                                  **portable.no_window())
-            answer = json.loads(done.stdout)
-        except Exception:
-            log.exception("update check could not run")
-            answer = None
-        GLib.idle_add(self._checked, token, answer)
-
-    def _checked(self, token, answer):
-        if token != self.check_token:
-            return False  # superseded by a newer check
-        self.checking = False
-        self.update_pending = self._pending_update()   # also sets update_blocked
-        if not isinstance(answer, dict) or not answer.get("label"):
-            failure = update_core.check_outcome(failed=True)
-            answer = {"label": failure.label, "title": failure.title,
-                      "body": failure.body}
-        self.check_result = answer["label"]
-        # Clicking a row closes the menu, so the label alone would be invisible
-        # until the user opened it again — the notification is the real feedback.
-        self._send_alert(Alert(title=answer.get("title", "AI smartbar"),
-                               body=answer.get("body", "")),
-                         urgency="normal", icon="dialog-information")
-        # Repaint: the red dot on the tray icon is driven by update_pending, so
-        # a check that just found a release has to make the badge appear.
-        account = self.snapshot.active_account if self.snapshot else None
-        self._set_icon(model.pill_states(account) if account else [])
-        self._refresh_menu()
-        GLib.timeout_add_seconds(CHECK_RESULT_SECONDS,
-                                 self._clear_check_result, token)
-        return False
-
-    def _clear_check_result(self, token):
-        if token == self.check_token and self.check_result:
-            self.check_result = ""
-            self._refresh_menu()
-        return False
+    def check_update_argv(self):
+        return [LAUNCHER, "--check-update", "--json"]
 
     def _on_refresh(self, _item):
-        self._start_fetch()
+        self.controller._start_fetch()
         # Read-only and free: refresh the static/status report too.  Live
         # verification remains its own explicit button/menu action.
         if not self.fallback_guard_busy:
@@ -637,102 +540,38 @@ class Tray:
     def _on_quit(self, _item):
         self._quit()
 
-    def _start_fetch(self):
-        self.generation += 1
-        self.refreshing = True
-        self.last_fetch_at = time.monotonic()
-        threading.Thread(target=self._fetch, args=(self.generation,),
-                         daemon=True).start()
+    # --- TrayHost: thread -> UI handoff ---------------------------------------
 
-    def _fetch(self, generation):
-        try:
-            snap = cswap.fetch(fresh=True)
-        except cswap.CswapError as exc:
-            log.warning("fetch failed: %s", exc)
-            GLib.idle_add(self._apply_error, str(exc), generation)
-            return
-        GLib.idle_add(self._apply_snapshot, snap, generation)
+    def call_on_ui_thread(self, callback, *args):
+        GLib.idle_add(callback, *args)
 
-    def _apply_snapshot(self, snap, generation):
-        if generation != self.generation:
-            return False  # superseded (e.g. a pre-switch fetch landing late)
-        self.refreshing = False
-        self.failures = 0
-        self.last_error = ""
-        self.snapshot = snap
-        # Stamp the device counts and plan badges before anything renders:
-        # the menu rows and the panel both name accounts through
-        # model.account_label.
-        presence.apply_counts(snap, presence_client.counts())
-        plan.apply_plans(snap, plan.plans_by_email())
-        # ChatGPT accounts ride the snapshot's separate list (cheap local
-        # reads, mtime-cached); the panel's OpenAI tab renders them.
-        snap.openai = codex.accounts()
-        if not self.presence_started:
-            # First real snapshot: announce this device now rather than
-            # after a whole interval, and do it with accounts already in
-            # hand so the beat costs no cswap call.
-            self.presence_started = True
-            presence_client.beat(snap)
-        if snap.schema_warning:
-            log.warning("%s", snap.schema_warning)
-        account = snap.active_account
-        # Cheap local file read; keeps the badge and the menu row in step
-        # with whatever the update agent last decided.
-        self.update_pending = self._pending_update()
-        self._set_icon(model.pill_states(account))
-        self.indicator.set_title(model.title_line(account))
-        self._refresh_menu()
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
-        for alert in self.alerts.check(snap):
-            self._send_alert(alert)
-        self._maybe_recapture(snap)
-        return False
+    def schedule(self, seconds, callback, *args):
+        def _fire():
+            callback(*args)
+            return False  # never repeat: this is a one-shot delayed call
+        GLib.timeout_add_seconds(int(seconds), _fire)
 
-    def _maybe_recapture(self, snap):
-        # `cswap add` keeps stored credentials alive: it registers an
-        # unregistered /login, heals an active slot whose backup died
-        # (relogin_required), and periodically re-captures the live login
-        # so Claude Code's token rotations never orphan the backup. The
-        # policy paces all three; SMARTBAR_AUTO_ADD/SMARTBAR_RECAPTURE=off
-        # disable them.
-        action = self.recapture.action(snap, time.monotonic())
-        if action is None:
-            return
+    # --- TrayHost: the optional panel triad -----------------------------------
 
-        def run():
-            try:
-                cswap.add()
-            except cswap.CswapError as exc:
-                log.info("cswap add (%s) skipped: %s", action, exc)
-                return
-            log.info("cswap add ran (%s): current login re-captured", action)
-            if action != "refresh":  # registration/heal changes what we show
-                self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
+    @property
+    def has_panel(self):
+        return self.popover is not None
 
-    def _apply_error(self, message, generation):
-        if generation != self.generation:
-            return False  # superseded
-        self.refreshing = False
-        self.failures += 1
-        self.last_error = message
-        if self.failures >= 3:
-            self._set_icon([])
-            self.indicator.set_title(f"AI smartbar — cswap error: {message[:80]}")
-        self._refresh_menu()
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
-        return False
+    def show_panel(self):
+        self.popover.show_panel()
 
-    def _tick(self):
-        self._start_fetch()
-        return True
+    def hide_panel(self):
+        self.popover.hide_panel()
+
+    def panel_visible(self):
+        return self.popover.get_visible()
+
+    def refresh_panel(self):
+        self.popover.refresh_layout()
 
     def _presence_tick(self):
         """Re-announce this device; the counts land on the next poll."""
-        presence_client.beat(self.snapshot)
+        presence_client.beat(self.controller.snapshot)
         return True
 
 
@@ -748,8 +587,8 @@ def main():
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
              os.environ.get("SMARTBAR_INTERVAL", "60"))
     tray = Tray()
-    tray._start_fetch()
-    GLib.timeout_add_seconds(tray.interval, tray._tick)
+    tray.controller._start_fetch()
+    GLib.timeout_add_seconds(tray.interval, tray.controller._tick)
     if presence.enabled():
         GLib.timeout_add_seconds(int(presence.interval()), tray._presence_tick)
     Gtk.main()

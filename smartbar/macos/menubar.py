@@ -3,45 +3,82 @@
 NOT yet live-verified on a Mac — written to spec; run install/macos.sh on
 the Mac, then check the menu bar. Logic lives in smartbar.core (unit-tested).
 
+The fetch/apply/alert/recapture/check-update state machine itself lives in
+smartbar.core.tray_controller (TrayController) rather than here — see that
+module's own docstring for why. This class is TrayController's host: it
+owns the rumps.App object (the menu bar text, the menu) and implements the
+TrayHost contract (set_icon/set_title/rebuild_menu/call_on_ui_thread/
+schedule/notify/check_update_argv) as thin bindings onto rumps, plus
+whatever stays genuinely rumps-shaped: building the actual rumps.MenuItem
+rows and the worker -> UI queue+timer poll rumps' lack of an idle_add
+equivalent forces.
+
+Two divergences from Linux/Windows worth flagging up front, both preserved
+rather than flattened by this migration:
+
+  * set_icon(states, update_pending) is a no-op here. This file has never
+    rendered pixel icon state — the menu-bar TEXT is the only visual
+    surface — and the controller calls set_icon uniformly across all three
+    hosts regardless, per TrayHost's own contract. A documented,
+    pre-existing gap this refactor exposes rather than papers over (see
+    the migration design's per_platform note on set_icon), not a behavior
+    this file is dropping.
+  * set_title(text) ignores the generic `text` (model.title_line, a
+    tooltip-style line shared by the other two hosts) and instead renders
+    model.macos_title from the controller's own state — the short
+    glyph+text form the literal, only-visible menu-bar bar needs. See
+    set_title's own docstring for how it recovers which of the two old
+    titles ("⚪ ?" on repeated failure, macos_title otherwise) to show
+    without a third parameter the shared contract does not offer.
+
+One piece is DELIBERATELY NOT migrated onto the controller, reported as a
+blocker rather than silently flattened: the switch flow. TrayController.
+on_switch's failure path (_set_action_error) only sets a field and,
+optionally, refreshes an open panel — it does not notify or rebuild the
+menu, because Linux/Windows surface a switch failure through the popover
+alone. This front-end has no popover; the menu IS the whole UI, and its
+"✕ Switch failed: …" row (see _rebuild_menu) plus a notification are the
+ONLY way a failure is ever visible here. Routing through
+TrayController.on_switch/_set_action_error as-is would make a failed
+switch here silently invisible — no notification, no menu update — a real
+behavior regression, not a refactor. _make_switch/_apply_switch_error
+therefore stay host-owned, using TrayController._start_fetch() (documented
+safe to call from any thread) for the one piece that genuinely is shared:
+the post-attempt refetch.
+
 Three rules this file did not used to follow, each already settled in the
 Linux and Windows front-ends and each learned the same way:
 
-  * Nothing off the main thread touches AppKit. `_fetch` runs in a worker
-    and used to set self.title, rebuild self.menu and raise notifications
-    straight from there. Every UI mutation now goes through `_to_main`, the
-    analogue of GLib.idle_add (Linux) and root.after_idle (Windows).
-  * Fetches carry a generation, so one that started before an account switch
-    cannot land after it and quietly put the old account back on screen.
-  * Failures are logged. Every `except` here used to swallow in silence — on
-    the one front-end whose own header admits it has never run on real
+  * Nothing off the main thread touches AppKit. `_fetch` (now inside
+    TrayController) runs in a worker and used to set self.title, rebuild
+    self.menu and raise notifications straight from there. Every UI
+    mutation now goes through `call_on_ui_thread`, the analogue of
+    GLib.idle_add (Linux) and root.after_idle (Windows).
+  * Fetches carry a generation, so one that started before an account
+    switch cannot land after it and quietly put the old account back on
+    screen.
+  * Failures are logged. Every `except` here used to swallow in silence —
+    on the one front-end whose own header admits it has never run on real
     hardware, which is precisely where an invisible failure costs most.
 """
-import json
 import logging
 import os
 import queue
 import subprocess
 import threading
-import time
 
 import rumps
 
 from smartbar import __version__, presence_client
-from smartbar.core import codex, cswap, model, paths, plan, portable, presence
-from smartbar.core import update as update_core
-from smartbar.core.alerts import AlertManager
-from smartbar.core.recapture import RecapturePolicy
+from smartbar.core import cswap, model, paths, portable, presence
+from smartbar.core.alerts import Alert
+from smartbar.core.tray_controller import TrayController
 
 CACHE_DIR = paths.cache_dir()
 LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
-# A manual check runs `git fetch`. Bounded so a stalled network leaves the row
-# saying "Check failed" rather than "Checking…" for ever.
-CHECK_TIMEOUT = 120
-# How long the outcome sits in the menu before the row goes back to normal.
-CHECK_RESULT_SECONDS = 20
 # rumps has no idle_add. An NSTimer callback is the one place this app is
 # guaranteed to be on the main thread, so the worker -> UI queue is drained
 # by a short repeating timer instead.
@@ -53,23 +90,17 @@ log = logging.getLogger("ai-smartbar")
 class SmartBarApp(rumps.App):
     def __init__(self):
         super().__init__("⚪ …", quit_button=None)
-        self.alerts = AlertManager()
-        self.snapshot = None
-        self.failures = 0
-        self.generation = 0   # stamps fetches so superseded results are dropped
-        self.checking = False
-        self.check_result = ""
-        self.check_token = 0
-        self.update_pending = ""
-        self.update_blocked = ""
-        self.switch_error = ""  # sticky until the next switch attempt
-        self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
-        self.presence_started = False  # first beat waits for the first fetch
+        self.controller = TrayController(self)
+        # Sticky until the next switch attempt; menu-only surfacing (this
+        # front-end has no popover) — see module docstring for why this
+        # stays host-owned rather than moving to the controller's own
+        # action_error/on_switch.
+        self.switch_error = ""
         self._ui_queue = queue.Queue()
         # 60s harvests cswap's poll plans as they come due; no extra API
         # traffic (the store paces the network).
         interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
-        self.update_pending = self._pending_update()
+        self.controller._pending_update()
         self._rebuild_menu()
         # Started before the first fetch on purpose: the fetch hands its
         # result back through this queue, so nothing may be sitting in it
@@ -84,9 +115,9 @@ class SmartBarApp(rumps.App):
             self.presence_timer.start()
         self._tick(None)
 
-    # ------------------------------------------------ thread -> UI handoff
+    # ------------------------------------------------ TrayHost: thread -> UI
 
-    def _to_main(self, callback, *args):
+    def call_on_ui_thread(self, callback, *args):
         """Queue callback(*args) for the main thread. Worker -> UI handoff.
 
         AppKit is not thread-safe for UI mutation, and rumps offers no
@@ -94,6 +125,21 @@ class SmartBarApp(rumps.App):
         self.menu or rumps.notification itself.
         """
         self._ui_queue.put((callback, args))
+
+    def schedule(self, seconds, callback, *args):
+        """Run callback(*args) on the main thread after `seconds`.
+
+        rumps/AppKit has no delayed-idle primitive analogous to GLib.
+        timeout_add_seconds or tk's root.after. A plain daemon
+        threading.Timer fires call_on_ui_thread once its delay elapses,
+        reusing the same queue+_drain_ui poll every other UI touch goes
+        through — the same shape the old, now-controller-owned _checked's
+        expiry timer used, generalized to any delay/callback.
+        """
+        timer = threading.Timer(seconds, self.call_on_ui_thread,
+                                args=(callback,) + args)
+        timer.daemon = True  # must not hold a quit open
+        timer.start()
 
     def _drain_ui(self, _sender):
         """Main thread: run whatever the workers queued, one drain per tick."""
@@ -109,210 +155,115 @@ class SmartBarApp(rumps.App):
                 # queue would freeze every later fetch's result too.
                 log.exception("a queued UI update failed")
 
-    def _notify(self, title, subtitle, body):
+    # ------------------------------------------------------ TrayHost: notify
+
+    def notify(self, alert, urgency="critical"):
         """rumps.notification, guarded. Main thread only.
 
         Unguarded, a notification failure — no permission granted, or no
         bundle identifier, both entirely normal for a locally built app —
-        raised through the alert loop in _apply_snapshot and skipped the
-        _maybe_recapture below it, so something cosmetic silently stopped
-        account re-capture.
+        raised through TrayController._apply_snapshot's alert loop and
+        skipped the _maybe_recapture call right after it, so something
+        cosmetic silently stopped account re-capture. Since this guard
+        lives here rather than in the controller, that stays true
+        regardless of which caller (an alert, a check result, a switch
+        failure) reaches this.
+
+        rumps.notification takes 3 fields (title, subtitle, body); the
+        shared Alert the controller passes only carries title+body, so
+        subtitle is always "" here — see TrayHost.notify's own docstring
+        and the migration design's per-platform note on why a host with
+        no `urgency` concept of its own (rumps has none) is free to ignore
+        that parameter.
         """
         try:
-            rumps.notification(title, subtitle, body)
+            rumps.notification(alert.title, "", alert.body)
         except Exception:
             log.exception("could not post a notification")
 
-    # ------------------------------------------------------------- fetching
+    # -------------------------------------------------- TrayHost: icon/title
 
-    def _presence_tick(self, _sender):
-        presence_client.beat(self.snapshot)
+    def set_icon(self, states, update_pending):
+        """No-op — see the module docstring's divergences note. This file
+        has never rendered pixel icon state; the menu-bar TEXT (set_title,
+        below) is the only visual surface here."""
 
-    def _tick(self, _sender):
-        self.generation += 1
-        threading.Thread(target=self._fetch, args=(self.generation,),
-                         daemon=True).start()
+    def set_title(self, text):
+        """Ignore `text` (model.title_line, shared with Linux/Windows) and
+        render model.macos_title from the controller's own state instead —
+        see the module docstring's divergences note for why.
 
-    def _fetch(self, generation):
-        """Worker thread: does the I/O, touches no AppKit state."""
-        try:
-            snap = cswap.fetch(fresh=True)
-        except cswap.CswapError as exc:
-            log.warning("fetch failed: %s", exc)
-            self._to_main(self._apply_error, generation)
-            return
-        try:
-            # Device counts and plan badges ride along in model.account_label,
-            # so the menu rows pick them up with no further work here. All
-            # three are file/subprocess reads and belong off the main thread.
-            presence.apply_counts(snap, presence_client.counts())
-            plan.apply_plans(snap, plan.plans_by_email())
-            # ChatGPT accounts ride the snapshot's separate list; this text
-            # menu shows them as read-only rows under an OpenAI header.
-            snap.openai = codex.accounts()
-        except Exception:
-            log.exception("could not decorate the snapshot")
-        if not self.presence_started:
-            self.presence_started = True
-            presence_client.beat(snap)   # a spawn, not a UI touch
-        self._to_main(self._apply_snapshot, snap, generation)
-
-    def _apply_error(self, generation):
-        if generation != self.generation:
-            return
-        self.failures += 1
-        if self.failures >= 3:
+        The controller only ever calls this from two places: inside
+        _apply_snapshot (where self.controller.failures is always 0 by
+        the time this runs) and inside _apply_error's failures >= 3
+        branch. Branching on failures here recovers which of the two old
+        titles applies without needing a parameter the shared contract
+        does not offer.
+        """
+        c = self.controller
+        if c.failures >= 3:
             self.title = "⚪ ?"
-
-    def _apply_snapshot(self, snap, generation):
-        if generation != self.generation:
-            return  # superseded, e.g. a pre-switch fetch landing late
-        self.failures = 0
-        self.snapshot = snap
-        self.title = model.macos_title(snap.active_account)
-        self.update_pending = self._pending_update()
-        self._rebuild_menu()
-        for alert in self.alerts.check(snap):
-            self._notify("AI smartbar", alert.title, alert.body)
-        self._maybe_recapture(snap)
-
-    def _maybe_recapture(self, snap):
-        # Mirror of tray.py: `cswap add` registers an unregistered /login,
-        # heals a dead active backup and periodically re-captures the live
-        # login so token rotations never orphan the backup.
-        action = self.recapture.action(snap, time.monotonic())
-        if action is None:
             return
+        account = c.snapshot.active_account if c.snapshot else None
+        self.title = model.macos_title(account)
 
-        def run():
-            try:
-                cswap.add()
-            except cswap.CswapError as exc:
-                log.warning("cswap add (%s) failed: %s", action, exc)
-                return
-            if action != "refresh":  # registration/heal changes the display
-                self._to_main(self._tick, None)
-        threading.Thread(target=run, daemon=True).start()
+    # ---------------------------------------------------- TrayHost: the menu
 
-    # ------------------------------------------------------------- the menu
+    def rebuild_menu(self):
+        self._rebuild_menu()
 
     def _rebuild_menu(self):
+        c = self.controller
         self.menu.clear()
         items = []
         if self.switch_error:
             items.append(rumps.MenuItem(f"✕ {self.switch_error}"))
             items.append(None)  # separator
-        if self.snapshot is None:
+        if c.snapshot is None:
             items.append(rumps.MenuItem("Loading…"))
         else:
-            for acct in self.snapshot.accounts:
+            for acct in c.snapshot.accounts:
                 # No callback for the active row or a dead stored credential
                 # (switching to one restores a login Anthropic rejected).
                 blocked = acct.active or model.switch_blocked(acct)
                 callback = None if blocked else self._make_switch(acct.number)
                 items.append(rumps.MenuItem(model.menu_row(acct), callback=callback))
-            if self.snapshot.openai:
+            if c.snapshot.openai:
                 items.append(None)
                 items.append(rumps.MenuItem("OpenAI"))
-                for acct in self.snapshot.openai:
+                for acct in c.snapshot.openai:
                     # Read-only: no switcher exists for ChatGPT logins.
                     items.append(rumps.MenuItem(model.menu_row(acct)))
         items.append(None)  # separator
-        if self.update_pending:
-            items.append(rumps.MenuItem(f"⬆ Update to {self.update_pending}",
+        if c.update_pending:
+            items.append(rumps.MenuItem(f"⬆ Update to {c.update_pending}",
                                         callback=self._on_update))
-        elif self.update_blocked:
+        elif c.update_blocked:
             # No callback: there is nothing to apply, only something to say.
-            items.append(rumps.MenuItem(f"✕ Update held back: {self.update_blocked}"))
-        label, callback = self._check_row()
-        items.append(rumps.MenuItem(label, callback=callback))
+            items.append(rumps.MenuItem(f"✕ Update held back: {c.update_blocked}"))
+        label, clickable = c._check_row()
+        items.append(rumps.MenuItem(
+            label, callback=self._on_check_update if clickable else None))
         items.append(rumps.MenuItem("⟳ Refresh now", callback=self._tick))
         items.append(rumps.MenuItem("⚙ Open cswap TUI", callback=self._open_tui))
         items.append(rumps.MenuItem("⏻ Quit", callback=self._on_quit))
         self.menu = items
 
-    def _pending_update(self) -> str:
-        """The release the updater found waiting, or "" — never raises.
+    # --------------------------------------- TrayHost: the manual check row
 
-        Also records why an update is being held back (dirty checkout,
-        unpushed commits) so the row above can say so.
-        """
-        # update_runner stays a LAZY import: it pulls in the lock shims and
-        # the git layer, and a menu bar must not pay for those at import
-        # time. The reading itself is shared — see update_runner.pending_for_ui.
-        from smartbar import update_runner
-        pending, self.update_blocked = update_runner.pending_for_ui()
-        return pending
-
-    # ---------------------------------------------------- the manual check
-
-    def _check_row(self):
-        """(label, callback) for the manual update-check row.
-
-        Three states, matching linux/tray.py's row exactly: idle, in flight,
-        and a result that sits there for CHECK_RESULT_SECONDS. A callback of
-        None is how rumps renders a row as un-clickable.
-        """
-        if self.checking:
-            return "⇅ Checking for updates…", None
-        if self.check_result:
-            return self.check_result, None
-        return "⇅ Check for updates", self._on_check_update
+    def check_update_argv(self):
+        return [LAUNCHER, "--check-update", "--json"]
 
     def _on_check_update(self, _sender):
-        if self.checking:
-            return
-        self.checking = True
-        self.check_result = ""
-        self.check_token += 1
-        self._rebuild_menu()
-        threading.Thread(target=self._check_update, args=(self.check_token,),
-                         daemon=True).start()
+        self.controller._on_check_update()
 
-    def _check_update(self, token):
-        """Worker thread — this does a network fetch.
+    # ------------------------------------------------------------- fetching
 
-        `--check-update --json` does the whole thing: it only reports (applying
-        stays the separate, deliberate "⬆ Update to …" row) and it decides what
-        to SAY, so this menu, the Linux tray and the Swift popover cannot drift
-        apart in either the wording or the rules behind it.
-        """
-        try:
-            done = subprocess.run([LAUNCHER, "--check-update", "--json"],
-                                  capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace",
-                                  timeout=CHECK_TIMEOUT,
-                                  **portable.no_window())
-            answer = json.loads(done.stdout)
-        except Exception:
-            log.exception("update check could not run")
-            answer = None
-        self._to_main(self._checked, token, answer)
+    def _presence_tick(self, _sender):
+        presence_client.beat(self.controller.snapshot)
 
-    def _checked(self, token, answer):
-        if token != self.check_token:
-            return  # superseded by a newer check
-        self.checking = False
-        self.update_pending = self._pending_update()  # also sets update_blocked
-        if not isinstance(answer, dict) or not answer.get("label"):
-            failure = update_core.check_outcome(failed=True)
-            answer = {"label": failure.label, "title": failure.title,
-                      "body": failure.body}
-        self.check_result = answer["label"]
-        # Clicking a row closes the menu, so the label alone would be invisible
-        # until the user opened it again — the notification is the real feedback.
-        self._notify(answer.get("title", "AI smartbar"), "",
-                     answer.get("body", ""))
-        self._rebuild_menu()
-        expiry = threading.Timer(CHECK_RESULT_SECONDS, self._to_main,
-                                 args=(self._clear_check_result, token))
-        expiry.daemon = True  # must not hold a quit open for 20s
-        expiry.start()
-
-    def _clear_check_result(self, token):
-        if token == self.check_token and self.check_result:
-            self.check_result = ""
-            self._rebuild_menu()
+    def _tick(self, _sender):
+        self.controller._tick()
 
     # ------------------------------------------------------------- actions
 
@@ -335,20 +286,25 @@ class SmartBarApp(rumps.App):
                     cswap.switch(number)
                 except cswap.CswapError as exc:
                     log.warning("switch to #%s failed: %s", number, exc)
-                    self._to_main(self._apply_switch_error, str(exc))
-                self._to_main(self._tick, None)
+                    self.call_on_ui_thread(self._apply_switch_error, str(exc))
+                # Safe from any thread — see TrayController._start_fetch's
+                # own docstring. Runs whether the switch above succeeded or
+                # not: the truth of a failed switch is the very refetch
+                # that confirms nothing actually moved.
+                self.controller._start_fetch()
             threading.Thread(target=run, daemon=True).start()
         return callback
 
     def _apply_switch_error(self, message):
         """Worker -> main: the switch failed. Sticky until _make_switch's
         callback clears it on the next attempt, exactly like the Swift
-        store's switchError (UsageStore.swift:15, :156, :181) -- not on a
-        timer, and not on the next periodic _tick, so it survives long
+        store's switchError (its declaration, its switchTo switchBlocked-
+        guard assignment, and its switchTo async-failure assignment) --
+        not on a timer, and not on the next periodic _tick, so it survives long
         enough to actually be read.
         """
         self.switch_error = f"Switch failed: {message}"
-        self._notify("AI smartbar", "", self.switch_error)
+        self.notify(Alert(title="AI smartbar", body=self.switch_error))
         self._rebuild_menu()
 
     def _on_quit(self, _sender):

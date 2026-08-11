@@ -45,6 +45,34 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
+      # ruff check (not "ruff format --check"): nearly every file in this
+      # repo is DELIBERATELY hand-formatted -- aligned "# --- name ---"
+      # section markers, hand-wrapped comment blocks that read as prose,
+      # continuation lines lined up under the open paren by eye rather than
+      # by the formatter's rules. Turning the formatter loose here would be
+      # a ~5800-line cosmetic rewrite on every one of those files that
+      # destroys structure a reviewer put there on purpose, for a gain
+      # (consistent auto-formatting) this repo has explicitly opted out of.
+      # `ruff check` catches the things that were never a style choice --
+      # unused imports, unused locals, genuine defects -- without touching
+      # any of that layout, so it is the one half of "ruff" this job runs.
+      #
+      # One leg only: unlike the unittest step above, ruff check is pure
+      # static analysis over the checked-out source tree -- it never
+      # executes any of this repo's OS-conditional code paths (win32
+      # branches, gi/GTK on Linux, etc.), so its result cannot vary by
+      # runner OS. Running it on all three would just be the same verdict
+      # three times for three times the CI minutes. ubuntu-latest is
+      # picked as the one leg because it is the cheapest GitHub-hosted
+      # runner and needs no extra setup for this step.
+      - name: Install ruff
+        if: matrix.os == 'ubuntu-latest'
+        run: pip install ruff==0.15.16
+
+      - name: Lint (ruff check)
+        if: matrix.os == 'ubuntu-latest'
+        run: ruff check .
+
       # Unit assertions inspect every generated command, but this Linux-only
       # lifecycle also executes the fixed root shell plan on the runner. It
       # catches distro path/stat differences and proves ownership, modes,

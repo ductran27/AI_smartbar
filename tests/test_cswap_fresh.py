@@ -91,8 +91,9 @@ class TestVenvPythonWindows(Env):
 
     These fake HOME *and* USERPROFILE so the "~/.local/..." candidates
     resolve inside a throwaway tempdir rather than the real user profile,
-    and fake sys.platform the way tests/test_presence.py:74-104 already
-    does. Both env vars matter: os.path.expanduser() is bound to whatever
+    and fake sys.platform the way tests/test_presence.py's
+    TestPlatformInTheLabel's setUp/tearDown already does. Both env vars
+    matter: os.path.expanduser() is bound to whatever
     path module the REAL host OS provides, not the faked sys.platform --
     posixpath (reads HOME) when this suite runs on macOS/Linux, ntpath
     (reads USERPROFILE, never HOME) when it actually runs on Windows CI.
