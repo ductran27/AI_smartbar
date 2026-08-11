@@ -7,6 +7,18 @@ same limitation dbusmenu has on Linux -- so the cards live in the popover
 window (smartbar/windows/popover_window.py) and the menu falls back to text
 rows if that window could not be built, exactly as on Linux.
 
+The fetch/apply/alert/recapture/check-update state machine itself lives in
+smartbar.core.tray_controller (TrayController) rather than here -- see that
+module's own docstring for why. This class is TrayController's host: it
+owns pystray/tk objects (the icon, the menu, the popover) and implements the
+TrayHost contract (set_icon/set_title/rebuild_menu/call_on_ui_thread/
+schedule/notify/check_update_argv/the panel triad) as thin bindings onto
+pystray/tkinter, plus whatever stays genuinely Win32-shaped and therefore
+platform-specific: building the actual pystray.MenuItem objects, the
+signature-diffing reassignment dance, the popover window itself, and the
+optimistic-switch flip's own (deliberately partial -- see
+_flip_active_optimistically's own docstring) repaint.
+
 Two event loops, not one. GTK gave the Linux tray a single main loop that
 owned the AppIndicator menu, the popover window and every timer. pystray's
 Icon.run() is only main-thread-mandatory on macOS (confirmed against the
@@ -17,16 +29,9 @@ cross-thread boundary GTK never had: pystray dispatches its menu-item
 callbacks (_on_open, _on_switch, _on_refresh, _on_check_update, _on_update,
 _on_tui, _on_quit) on ITS OWN worker thread, not the tk thread, so any of
 them that touches self.popover or self.icon.menu/.icon/.title must marshal
-through `self._to_main(...)` (== root.after_idle), the exact analogue of
-GLib.idle_add. Every marshal site is commented "thread -> UI handoff" at
-its call. The three sites that existed on Linux (tray.py:332, 392, 394 --
-the update-check daemon and the usage-fetch daemon) are joined by three new
-ones this port must add (_on_open's popover.show_panel(), _on_check_
-update's _refresh_menu(), and _quit's root.quit()) purely because the
-pystray worker thread is a second caller that CONTRACT.md's own per-row
-table undercounts for the _on_open row specifically -- see the comment on
-`_to_main` below for why this module marshals more aggressively than a
-literal reading of that table would.
+through `self.call_on_ui_thread(...)` (== root.after_idle), the exact
+analogue of GLib.idle_add. Every marshal site is commented "thread -> UI
+handoff" at its call.
 
 Dropped, not ported (each is a Linux/AppIndicator-only workaround with no
 Windows analogue -- see CONTRACT.md decisions D4/D6/D7 and the tray study's
@@ -41,8 +46,9 @@ notify-send (replaced by `Icon.notify()`, whose Windows balloon-vs-toast
 rendering the API research could not confirm -- unverified-on-Windows);
 the pending-menu-swap-until-hidden dance (GTK-shell-specific; pystray's
 Menu is an immutable snapshot reassigned wholesale to `icon.menu`, so
-`_refresh_menu` just does that every time); and Linux's refresh-the-
-moment-the-menu-opens handler (linux/tray.py:222's `menu.connect('show',
+`rebuild_menu` just does that every time); and Linux's refresh-the-
+moment-the-menu-opens handler (linux/tray.py's _install_menu's
+`menu.connect('show',
 ...)`, which starts a fetch if the data is >10s stale). pystray exposes no
 "menu is about to open" hook the way GTK's Gtk.Menu 'show' signal did --
 `_on_notify`'s right-click handling goes straight into `TrackPopupMenuEx`
@@ -67,7 +73,6 @@ three; exercising _make_popover's success path needs all five plus a real
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
 import shutil
@@ -81,11 +86,9 @@ import tkinter as tk
 from PIL import Image
 
 from smartbar import __version__, presence_client
-from smartbar.core import codex, cswap, model, paths, plan
-from smartbar.core import popover_layout, portable, presence
+from smartbar.core import model, paths, popover_layout, portable, presence
 from smartbar.core import update as update_core
-from smartbar.core.alerts import Alert, AlertManager
-from smartbar.core.recapture import RecapturePolicy
+from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
 
 CACHE_DIR = paths.cache_dir()
@@ -93,11 +96,6 @@ LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
-# A manual check runs `git fetch`. Bounded so a stalled network leaves the row
-# saying "Check failed" rather than "Checking…" for ever.
-CHECK_TIMEOUT = 120
-# How long the outcome sits in the menu before the row goes back to normal.
-CHECK_RESULT_SECONDS = 20
 # Shell_NotifyIcon's tooltip field is a WCHAR szTip[128] INCLUDING the
 # terminating NUL (confirmed against pystray 0.19.5's own ctypes struct,
 # _util/win32.py: `('szTip', wintypes.WCHAR * 128)`), so 128 chars of real
@@ -115,8 +113,8 @@ MAX_TITLE_LEN = 127
 # same as szTip above, so the safe caps are one less than the buffer size.
 # Unlike the tray tooltip, nothing was truncating these before this fix — an
 # over-long alert.body/alert.title would make ctypes raise "string too long"
-# out of pystray's own _message(), which _send_alert already logs and
-# swallows, but the user never sees the notification at all.
+# out of pystray's own _message(), which notify already logs and swallows,
+# but the user never sees the notification at all.
 MAX_NOTIFY_BODY_LEN = 255
 MAX_NOTIFY_TITLE_LEN = 63
 # render_pills' reference geometry is a 96px-tall bitmap at scale=1.0; a
@@ -191,34 +189,18 @@ class Tray:
         # real network, so faster polling adds no API traffic.
         self.root = root
         self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
-        self.alerts = AlertManager()
-        self.snapshot = None
+        self.controller = TrayController(self)
         self.provider = ""   # panel tab; "" auto-resolves in the layout
         self.confirm = ""    # card awaiting remove confirmation, or ""
-        self.failures = 0
-        self.generation = 0  # stamps fetches so superseded results are dropped
-        self._generation_lock = threading.Lock()  # guards the += below (MINOR 7)
-        self.last_fetch_at = 0.0  # monotonic; guards menu-open refreshes
         self._shutdown = False  # set once _quit has scheduled root.quit
         self._last_menu_signature = None  # last (text, enabled) rows sent to pystray
-        self.recapture = RecapturePolicy()  # paces register/heal/refresh adds
-        self.last_error = ""
-        self.action_error = ""    # last switch/remove failure; sticky until
-                                   # the next attempt (mirrors UsageStore.swift's
-                                   # switchError/removeError)
-        self.refreshing = False   # a usage fetch is in flight; dims/disables
-                                   # the ⟳ glyph so a second click can't queue
-        self.update_blocked = ""
-        self.presence_started = False  # first beat waits for the first fetch
-        self.checking = False     # a manual update check is in flight
-        self.check_result = ""    # its outcome, shown in the row for a while
-        self.check_token = 0      # so a stale timer cannot clear a newer result
-        self.update_pending = self._pending_update()  # "" or "X.Y.Z"
+        self.controller._pending_update()  # seeds update_pending/blocked
         self.pinned = model.panel_pinned()
         self.popover = self._make_popover()
         self.icon = pystray.Icon("ai-smartbar", title="AI smartbar",
                                  menu=self._build_menu())
-        self._set_icon([])  # hollow "?" pills until the first fetch lands
+        # Hollow "?" pills until the first fetch lands.
+        self.set_icon([], bool(self.controller.update_pending))
         if self.pinned and self.popover is not None:
             # Up before the first fetch lands: the panel renders its own
             # loading/error state and refreshes in place once data arrives.
@@ -244,18 +226,21 @@ class Tray:
     def _popover_layout(self, hover=""):
         """Fresh layout for the panel — same builder the macOS/Linux popovers
         use, so the three platforms cannot drift apart in what a card says."""
+        c = self.controller
         return popover_layout.build(
-            self.snapshot, version=__version__,
-            pending_version=self.update_pending,
-            blocked_reason=self.update_blocked,
-            fetched_at=self.snapshot.fetched_at if self.snapshot else "",
-            stale=bool(self.failures and self.snapshot),
-            error=self.last_error if self.snapshot is None else "",
+            c.snapshot, version=__version__,
+            pending_version=c.update_pending,
+            blocked_reason=c.update_blocked,
+            fetched_at=c.snapshot.fetched_at if c.snapshot else "",
+            stale=bool(c.failures and c.snapshot),
+            error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
-            action_error=self.action_error, refreshing=self.refreshing,
-            stale_reason=self.last_error)
+            action_error=c.action_error, refreshing=c.refreshing,
+            stale_reason=c.last_error)
 
-    def _to_main(self, callback, *args):
+    # --- TrayHost: thread -> UI handoff --------------------------------
+
+    def call_on_ui_thread(self, callback, *args):
         """Marshal `callback(*args)` onto the tk main thread. thread -> UI handoff.
 
         The literal analogue of GLib.idle_add: whatever calls this is NOT
@@ -265,20 +250,18 @@ class Tray:
         worker thread ALSO dispatches every menu-item callback (_on_open,
         _on_switch, _on_refresh, _on_check_update, _on_update, _on_tui,
         _on_quit) off the tk thread (Decision D1), so this module routes any
-        of those that touch UI state through here too — see the module
-        docstring for why that is more sites than CONTRACT.md's per-row
-        table literally counts.
+        of those that touch UI state through here too.
 
-        Guarded by self._shutdown: the fetch/check daemons are plain
-        `daemon=True` threads with nothing joining them, so one can still be
-        mid-flight when the user quits (e.g. the 120s --check-update
-        subprocess in _check_update). Without this guard its late
-        `_to_main(...)` call reaches `root.after_idle` on a root that
-        `_quit` has already told to stop -- after_idle then blocks in
-        WaitForMainloop for about a second and raises RuntimeError, on
-        whatever daemon thread happened to call it. `_quit` sets
-        `_shutdown` only once its own root.quit() marshal is already
-        queued, so that one call always still goes through.
+        Guarded by self._shutdown: TrayController's fetch/check/switch/
+        remove worker threads are plain `daemon=True` threads with nothing
+        joining them, so one can still be mid-flight when the user quits
+        (e.g. the 120s --check-update subprocess). Without this guard its
+        late `call_on_ui_thread(...)` call reaches `root.after_idle` on a
+        root that `_quit` has already told to stop -- after_idle then
+        blocks in WaitForMainloop for about a second and raises
+        RuntimeError, on whatever daemon thread happened to call it.
+        `_quit` sets `_shutdown` only once its own root.quit() marshal is
+        already queued, so that one call always still goes through.
 
         Residual risk, deliberately left open: this is check-then-
         act. A daemon can read the flag as False, be descheduled,
@@ -295,6 +278,14 @@ class Tray:
             return
         self.root.after_idle(callback, *args)
 
+    def schedule(self, seconds, callback, *args):
+        """Run callback(*args) on the tk thread after `seconds`. tkinter's
+        `root.after(ms, func, *args)` natively forwards args -- unlike
+        linux/tray.py's schedule, which has to wrap the call because
+        GLib.timeout_add_seconds only invokes its callback with no
+        arguments of its own."""
+        self.root.after(int(seconds * 1000), callback, *args)
+
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel.
 
@@ -307,14 +298,15 @@ class Tray:
             self._quit()
             return
         if name == "refresh":
-            self._start_fetch()
+            self.controller._start_fetch()
         elif name == "update":
             self._on_update()
         elif name.startswith("tab:"):
             self.provider = name.split(":", 1)[1]
             self.confirm = ""
         elif name.startswith("confirm-remove:"):
-            self._on_remove(name.split(":", 1)[1])
+            self.confirm = ""
+            self.controller.on_remove(name.split(":", 1)[1])
         elif name == "cancel-remove":
             self.confirm = ""
         elif name.startswith("remove:"):
@@ -325,26 +317,27 @@ class Tray:
         elif name.startswith("switch:"):
             self._on_switch(int(name.split(":", 1)[1]))
         elif name == "dismiss-error":
-            self.action_error = ""
+            self.controller.action_error = ""
         if self.popover is not None:
             self.popover.refresh_layout()
 
     def _on_open(self):
         """pystray's default-action callback (primary click / the launcher
         menu row) — fires on the pystray worker thread, not the tk thread,
-        so touching the popover has to go through _to_main. thread -> UI
-        handoff. New relative to Linux: _on_open there ran on GTK's single
-        main loop and could call popover.show_panel() directly.
+        so touching the popover has to go through call_on_ui_thread. thread
+        -> UI handoff. New relative to Linux: _on_open there ran on GTK's
+        single main loop and could call popover.show_panel() directly.
         """
         if self.popover is None:
             return
         self.confirm = ""   # a fresh open never starts mid-question
-        self._to_main(self.popover.show_panel)  # thread -> UI handoff
+        self.call_on_ui_thread(self.popover.show_panel)  # thread -> UI handoff
         # Opening the panel is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic). Safe to
-        # call from any thread — see _start_fetch's own docstring.
-        if time.monotonic() - self.last_fetch_at > 10:
-            self._start_fetch()
+        # call from any thread — see TrayController._start_fetch's own
+        # docstring.
+        if time.monotonic() - self.controller.last_fetch_at > 10:
+            self.controller._start_fetch()
 
     def _build_menu(self):
         """The tray menu is the panel's launcher plus the actions.
@@ -353,19 +346,20 @@ class Tray:
         checkmarks, so the cards live in the popover window. When that
         window could not be created the old text rows come back, so the
         tray is still usable — the same fallback Linux's dbusmenu limit
-        forced (tray.py:169-175).
+        forced (linux/tray.py's _build_menu docstring).
         """
+        c = self.controller
         rows = []
         if self.popover is not None:
             open_kwargs = {"default": True} if _SUPPORTS_DEFAULT else {}
             rows.append(pystray.MenuItem("🔎 Open AI smartbar",
                                          self._menu_open, **open_kwargs))
-        elif self.snapshot is None:
-            label = "Loading…" if self.failures == 0 else "cswap error — see tray.log"
+        elif c.snapshot is None:
+            label = "Loading…" if c.failures == 0 else "cswap error — see tray.log"
             rows.append(pystray.MenuItem(label, _noop, enabled=False))
         else:
-            stale = "  (stale)" if self.failures else ""
-            for acct in self.snapshot.accounts:
+            stale = "  (stale)" if c.failures else ""
+            for acct in c.snapshot.accounts:
                 label = model.menu_row(acct) + (stale if acct.active else "")
                 # A dead stored credential must not be switched to: it would
                 # restore a login Anthropic already rejected.
@@ -375,8 +369,8 @@ class Tray:
                     action = _account_switch_action(self, acct.number)
                     rows.append(pystray.MenuItem(label, action))
         rows.append(pystray.Menu.SEPARATOR)
-        if self.update_pending:
-            rows.append(pystray.MenuItem(f"⬆ Update to {self.update_pending}",
+        if c.update_pending:
+            rows.append(pystray.MenuItem(f"⬆ Update to {c.update_pending}",
                                          self._menu_update))
         # "Refresh now" re-reads usage; this asks the REMOTE whether a new
         # release exists, which otherwise only happened on the updater's own
@@ -385,20 +379,23 @@ class Tray:
         # check button would promise something that cannot happen.
         rows.append(pystray.MenuItem("⟳ Refresh now", self._menu_refresh))
         if update_core.enabled():
-            check_label, check_cb, clickable = self._check_row()
-            action = _check_row_action(check_cb) if clickable else _noop
+            check_label, clickable = c._check_row()
+            action = (_check_row_action(self._on_check_update) if clickable
+                      else _noop)
             rows.append(pystray.MenuItem(check_label, action, enabled=clickable))
         rows.append(pystray.MenuItem("⚙ Open cswap TUI", self._menu_tui))
         rows.append(pystray.MenuItem("⏻ Quit", self._menu_quit))
         return pystray.Menu(*rows)
 
-    def _refresh_menu(self):
+    # --- TrayHost: rebuild_menu -----------------------------------------
+
+    def rebuild_menu(self):
         """Reassign the whole menu — pystray has no "currently open, defer
         the swap" signal the way GTK's Gtk.Menu show/hide did (Decision D7),
-        so unlike Linux's _refresh_menu/_install_menu split there is nothing
+        so unlike Linux's rebuild_menu/_install_menu split there is nothing
         to hold back: every rebuild goes straight to `icon.menu`. Must only
-        run on the tk main thread (every caller below already arranges
-        that, directly or via _to_main).
+        run on the tk main thread (every caller already arranges that,
+        directly or via call_on_ui_thread).
 
         CORRECTION to the D7 note above: "nothing to hold back" describes
         the API, not the risk. Reassigning `icon.menu` runs pystray's
@@ -419,10 +416,10 @@ class Tray:
         Mitigation actually applied: skip the reassignment (and therefore
         the DestroyMenu call) whenever the built menu's visible text/enabled
         state is identical to what was last sent, via `_last_menu_signature`.
-        Most `_refresh_menu` calls come from routine polling (`_tick` ->
-        `_apply_snapshot`) where nothing the menu shows has actually
-        changed, so this removes most of the reassignments a user could
-        collide with — it narrows the window, it does not close it. A
+        Most `rebuild_menu` calls come from routine polling (`_tick` ->
+        `TrayController._apply_snapshot`) where nothing the menu shows has
+        actually changed, so this removes most of the reassignments a user
+        could collide with — it narrows the window, it does not close it. A
         refresh that DOES carry new content (an account switch, a manual
         check finishing, an update becoming available) still reassigns and
         still carries the residual race described above.
@@ -433,14 +430,6 @@ class Tray:
             return
         self._last_menu_signature = signature
         self.icon.menu = menu
-
-    def _check_row(self):
-        """(label, callback, clickable) for the manual update-check row."""
-        if self.checking:
-            return "⇅ Checking for updates…", None, False
-        if self.check_result:
-            return self.check_result, None, False
-        return "⇅ Check for updates", self._on_check_update, True
 
     # -- pystray menu-item actions ------------------------------------
     # Thin (icon, item) -> None wrappers so the actual handlers below can
@@ -465,108 +454,50 @@ class Tray:
     def _menu_quit(self, icon, item):
         self._on_quit()
 
+    # --- switch ------------------------------------------------------
+
     def _on_switch(self, number):
-        """Optimistic ACTIVE flip (mirrors UsageStore.swift:152-187's
-        switchTo). Reached from BOTH the tk thread (_on_popover_action, a
-        card's "Make Active" hit) and the pystray worker thread (a
-        fallback-menu account row, via _account_switch_action) -- unlike
-        _on_remove, which only ever fires from the tk thread -- so the
-        actual state-touching work (_begin_switch) is marshaled through
-        _to_main unconditionally rather than assumed tk-thread-safe.
-        thread -> UI handoff either way; see _quit's docstring for why
-        calling _to_main from the tk thread itself is also safe.
-        """
-        self._to_main(self._begin_switch, number)  # thread -> UI handoff
+        """Reached from BOTH the tk thread (_on_popover_action, a card's
+        "Make Active" hit) and the pystray worker thread (a fallback-menu
+        account row, via _account_switch_action) -- unlike _on_remove,
+        which only ever fires from the tk thread. TrayController.on_switch
+        itself is safe to call from either: it only ever touches host state
+        through call_on_ui_thread (see that method's own docstring)."""
+        self.controller.on_switch(number, self._flip_active_optimistically)
 
-    def _begin_switch(self, number):
-        """Runs on the tk thread (always via _on_switch's _to_main call).
+    def _flip_active_optimistically(self, number):
+        """ACTIVE flip supplied to TrayController.on_switch as the
+        flip_active callable -- always reached through call_on_ui_thread
+        (see that method's docstring), so this only ever runs on the tk
+        thread.
 
-        A blocked account (dead stored credential) never reaches the real
-        switch -- the same belt as the disabled "Make Active" button and
-        UsageStore.swift:154-158's own guard. Otherwise the ACTIVE chip
-        flips immediately (the icon lags one _set_icon call behind, same
-        as macOS) and only then does the real switch start in the
-        background; the generation bump makes any pre-switch fetch still
-        in flight land as superseded once it completes.
+        Unlike Linux's _flip_active_optimistically, the icon/title/menu are
+        deliberately NOT repainted here -- only the account list itself
+        moves, plus the panel if one is open. The icon lags one
+        set_icon/set_title/rebuild_menu cycle behind (i.e. until the forced
+        refetch TrayController.on_switch starts next actually lands),
+        exactly as before this extraction and the same as macOS today; see
+        the design's per_platform note on set_icon for why the two front-
+        ends were never required to repaint at the same point.
+
+        This callable is repaint-only. It used to bump `generation` under
+        the controller's private _generation_lock, which was correct here
+        but wrong on Linux, where the same step was a bare `+=` -- three
+        hosts, three different treatments of one controller invariant.
+        TrayController.on_switch now owns that bump for every host, so no
+        front-end reaches into the controller's lock at all.
         """
-        account = None
-        if self.snapshot is not None:
-            account = next((a for a in self.snapshot.accounts
-                            if a.number == number), None)
-        if account is not None and model.switch_blocked(account):
-            self._set_action_error(
-                f"Cannot switch: {model.state_text(account)}")
+        c = self.controller
+        if c.snapshot is None:
             return
-        self.action_error = ""   # a new attempt clears the last one's error
-        if self.snapshot is not None:
-            for acct in self.snapshot.accounts:
-                acct.active = acct.number == number
-            if self.popover is not None:
-                self.popover.refresh_layout()
-        with self._generation_lock:
-            self.generation += 1  # an in-flight pre-switch fetch is now stale
-
-        def run():
-            try:
-                cswap.switch(number)
-            except cswap.CswapError as exc:
-                log.exception("switch failed")
-                self._to_main(self._set_action_error,
-                              f"Switch failed: {exc}")  # thread -> UI handoff
-            self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
-
-    def _set_action_error(self, message):
-        """Runs on the tk thread (via _to_main from a worker, or directly
-        from _begin_switch, which got there through _to_main itself)."""
-        self.action_error = message
-        if self.popover is not None and self.popover.get_visible():
+        for acct in c.snapshot.accounts:
+            acct.active = acct.number == number
+        if self.popover is not None:
             self.popover.refresh_layout()
 
-    def _on_remove(self, token):
-        """Confirmed removal ("<provider>:<id>"): drop the card now, remove
-        in the background through the ONE core function per provider, then
-        refetch — the truth that resurrects the card if the removal failed."""
-        provider, _, ident = token.partition(":")
-        self.confirm = ""
-        self.action_error = ""   # a new attempt clears the last one's error
-        if self.snapshot is not None:
-            if provider == "claude":
-                self.snapshot.accounts = [
-                    a for a in self.snapshot.accounts
-                    if str(a.number) != ident]
-            else:
-                self.snapshot.openai = [
-                    a for a in self.snapshot.openai if a.email != ident]
+    # --- update apply / check row --------------------------------------
 
-        def run():
-            try:
-                if provider == "claude":
-                    cswap.remove_account(int(ident))
-                else:
-                    codex.remove_account(ident)
-            except (cswap.CswapError, ValueError, OSError) as exc:
-                log.exception("remove failed")
-                self._to_main(self._set_action_error,
-                              f"Remove failed: {exc}")  # thread -> UI handoff
-            self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
-
-    def _pending_update(self) -> str:
-        """The release the updater found waiting, or "" — never raises.
-
-        Also records why an update is being held back (dirty checkout,
-        unpushed commits) so the panel footer can say so.
-        """
-        # update_runner stays a LAZY import: it pulls in the lock shims
-        # (fcntl on POSIX, msvcrt here) and the git layer, and a tray must
-        # not pay for those at import time. The reading itself is shared —
-        # see update_runner.pending_for_ui.
-        from smartbar import update_runner
-        pending, self.update_blocked = update_runner.pending_for_ui()
-        return pending
-
-    def _on_update(self, _item=None):
+    def _on_update(self):
         """Apply the waiting release. Detached on purpose: the updater
         restarts this very tray, so it must not be our child."""
         try:
@@ -577,78 +508,23 @@ class Tray:
             log.exception("could not start the updater")
 
     def _on_check_update(self):
-        """The "⇅ Check for updates" row's click handler.
+        """Fires on the pystray worker thread (via _check_row_action's
+        wrapper in _build_menu, or _menu_open-style dispatch); the rebuild
+        this triggers is marshaled by TrayController itself through
+        call_on_ui_thread, so nothing further is needed here."""
+        self.controller._on_check_update()
 
-        Fires on the pystray worker thread (via _check_row_action's wrapper
-        in _build_menu), so the menu rebuild below must marshal — one of
-        the three NEW thread -> UI handoff points this port adds beyond
-        Linux's three GLib.idle_add sites; see the module docstring.
-        """
-        if self.checking:
-            return
-        self.checking = True
-        self.check_result = ""
-        self.check_token += 1
-        self._to_main(self._refresh_menu)  # thread -> UI handoff
-        threading.Thread(target=self._check_update, args=(self.check_token,),
-                         daemon=True).start()
+    # --- TrayHost: the manual check's subprocess ------------------------
 
-    def _check_update(self, token):
-        """Ask the remote, off the main loop — this does a network fetch.
-
-        `--check-update --json` does the whole thing: it only reports
-        (applying stays the separate, deliberate "⬆ Update to …" row) and
-        it decides what to SAY, so the macOS popover, the Linux menu, and
-        this menu cannot drift apart in either the wording or the rules
-        behind it. `sys.executable` prefixes LAUNCHER because Windows has
-        no shebang-based execution the way POSIX does (presence_client.py
-        already does the same for its own beat()/leave() subprocess calls).
-        """
-        try:
-            done = subprocess.run([sys.executable, LAUNCHER,
-                                   "--check-update", "--json"],
-                                  capture_output=True, text=True,
-                                  timeout=CHECK_TIMEOUT,
-                                  **portable.no_window())
-            answer = json.loads(done.stdout)
-        except Exception:
-            log.exception("update check could not run")
-            answer = None
-        self._to_main(self._checked, token, answer)  # thread -> UI handoff
-        # (mirrors tray.py:332's GLib.idle_add(self._checked, token, answer))
-
-    def _checked(self, token, answer):
-        if token != self.check_token:
-            return  # superseded by a newer check
-        self.checking = False
-        self.update_pending = self._pending_update()   # also sets update_blocked
-        if not isinstance(answer, dict) or not answer.get("label"):
-            failure = update_core.check_outcome(failed=True)
-            answer = {"label": failure.label, "title": failure.title,
-                      "body": failure.body}
-        self.check_result = answer["label"]
-        # Clicking a row closes the menu, so the label alone would be invisible
-        # until the user opened it again — the notification is the real feedback.
-        self._send_alert(Alert(title=answer.get("title", "AI smartbar"),
-                               body=answer.get("body", "")))
-        # Repaint: the update-pending dot is driven by update_pending, so a
-        # check that just found a release has to make the badge appear.
-        account = self.snapshot.active_account if self.snapshot else None
-        self._set_icon(model.pill_states(account) if account else [])
-        self._refresh_menu()
-        self.root.after(CHECK_RESULT_SECONDS * 1000,
-                        self._clear_check_result, token)
-
-    def _clear_check_result(self, token):
-        # Scheduled via root.after (tray.py:354's GLib.timeout_add_seconds
-        # analogue), which always fires on the tk main thread — no marshal
-        # needed here, unlike _checked/_apply_snapshot/_apply_error above.
-        if token == self.check_token and self.check_result:
-            self.check_result = ""
-            self._refresh_menu()
+    def check_update_argv(self):
+        """`sys.executable` prefixes LAUNCHER because Windows has no
+        shebang-based execution the way POSIX does (presence_client.py
+        already does the same for its own beat()/leave() subprocess
+        calls)."""
+        return [sys.executable, LAUNCHER, "--check-update", "--json"]
 
     def _on_refresh(self):
-        self._start_fetch()
+        self.controller._start_fetch()
 
     def _on_tui(self):
         """Open a console running the cswap TUI.
@@ -683,19 +559,21 @@ class Tray:
         except OSError:
             log.exception("could not open terminal")
 
-    def _send_alert(self, alert):
-        """Any object with .title/.body — a limit alert or an update check.
+    # --- TrayHost: notification ------------------------------------------
 
-        Uses pystray's Icon.notify() (Decision D6) rather than a hand-rolled
-        Win32 toast/balloon: it is the one notification path needing zero
-        new Windows-specific code. Unverified-on-Windows: whether this
+    def notify(self, alert, urgency="critical"):
+        """Uses pystray's Icon.notify() (Decision D6) rather than a hand-
+        rolled Win32 toast/balloon: it is the one notification path needing
+        zero new Windows-specific code. Unverified-on-Windows: whether this
         renders as a legacy balloon or a modern action-center toast — the
         API research could not confirm either way. The length limits ARE
         known (confirmed against pystray 0.19.5's ctypes struct): body and
         title are truncated to MAX_NOTIFY_BODY_LEN/MAX_NOTIFY_TITLE_LEN so
         an over-long alert degrades to a clipped notification instead of
         pystray's `_message()` raising "string too long" and this except
-        swallowing the notification entirely.
+        swallowing the notification entirely. `urgency` has no pystray
+        equivalent -- see TrayHost.notify's own docstring for why hosts
+        without one are free to ignore the parameter.
         """
         try:
             self.icon.notify(
@@ -704,20 +582,25 @@ class Tray:
         except Exception:
             log.exception("failed to send notification")
 
-    def _set_icon(self, states):
+    # --- TrayHost: icon / title -------------------------------------------
+
+    def set_icon(self, states, update_pending):
         """Render straight into an in-memory PIL.Image — no alternating-
-        filename cache-bust dance (tray.py:160-167 on Linux): pystray's
+        filename cache-bust dance (linux/tray.py's set_icon): pystray's
         Windows backend repaints immediately on `icon.icon = image`, with
         no icon-name cache to defeat (see the tray study's finding 7). The
         BytesIO buffer never touches disk.
         """
         buf = io.BytesIO()
-        render_pills(states, buf, update_pending=bool(self.update_pending),
+        render_pills(states, buf, update_pending=update_pending,
                      scale=TRAY_ICON_SCALE)
         buf.seek(0)
         image = Image.open(buf)
         image.load()  # decode now, while buf is still alive
         self.icon.icon = image
+
+    def set_title(self, text):
+        self.icon.title = _fit_wchars(text, MAX_TITLE_LEN)
 
     def _quit(self):
         """Deliberate quit: stop being counted before going away.
@@ -728,155 +611,59 @@ class Tray:
         running it — this is pystray's own idiom, not a marshal case).
         `root.quit()` unblocks root.mainloop() on the tk thread, which is
         NOT the thread _quit() runs on when reached via the "⏻ Quit" menu
-        row (that fires on the pystray worker thread), so it is one of the
-        three NEW thread -> UI handoff points this port adds; see the
-        module docstring. Reached from _on_popover_action("quit") too,
-        which already runs on the tk thread — after_idle from the tk
-        thread just runs on the very next idle tick, so this is safe either
-        way, not just from the worker thread.
+        row (that fires on the pystray worker thread). Reached from
+        _on_popover_action("quit") too, which already runs on the tk
+        thread — after_idle from the tk thread just runs on the very next
+        idle tick, so this is safe either way, not just from the worker
+        thread.
 
         `_shutdown` is set only AFTER the root.quit() marshal above is
         already queued, and never before: setting it earlier would make
-        _to_main silently drop that very call. Once set, any callback still
-        arriving afterwards (e.g. a --check-update subprocess finishing
-        after Quit was already clicked) is a no-op instead of reaching
-        after_idle on a root that is being/has been destroyed — see
-        _to_main's own docstring for the failure that guards against.
+        call_on_ui_thread silently drop that very call. Once set, any
+        callback still arriving afterwards (e.g. a --check-update
+        subprocess finishing after Quit was already clicked) is a no-op
+        instead of reaching after_idle on a root that is being/has been
+        destroyed — see call_on_ui_thread's own docstring for the failure
+        that guards against.
         """
         presence_client.leave()
         self.icon.stop()
-        self._to_main(self.root.quit)  # thread -> UI handoff
+        self.call_on_ui_thread(self.root.quit)  # thread -> UI handoff
         self._shutdown = True
 
     def _on_quit(self):
         self._quit()
 
-    def _start_fetch(self):
-        """Safe to call from any thread: only plain-attribute writes plus
-        Thread.start(), no widget/icon touch — mirrors tray.py:381-385,
-        confirmed there by two worker-thread call sites that already do
-        this (the end of _on_switch's run() and _maybe_recapture's run()).
-
-        `self.generation += 1` is a read-modify-write, not a single atomic
-        op, and this port (unlike Linux) has genuinely concurrent callers:
-        menu-item callbacks now run on the pystray worker thread (Decision
-        D1) while `_tick` still fires on the tk thread, so two calls can
-        interleave their read of the old value and both compute the same
-        "new" one — two fetches would then share a stamp and neither would
-        look superseded to `_apply_snapshot`/`_apply_error`. The lock scopes
-        strictly to the increment-and-capture; everything after it (the
-        Thread.start() call) still needs no lock.
-        """
-        with self._generation_lock:
-            self.generation += 1
-            generation = self.generation
-        self.last_fetch_at = time.monotonic()
-        self.refreshing = True   # plain attribute write -- see the class
-                                  # docstring's note on self.generation above
-        threading.Thread(target=self._fetch, args=(generation,),
-                         daemon=True).start()
-
-    def _fetch(self, generation):
-        try:
-            snap = cswap.fetch(fresh=True)
-        except cswap.CswapError as exc:
-            log.warning("fetch failed: %s", exc)
-            self._to_main(self._apply_error, str(exc), generation)  # thread -> UI handoff
-            # (mirrors tray.py:392's GLib.idle_add(self._apply_error, ...))
-            return
-        self._to_main(self._apply_snapshot, snap, generation)  # thread -> UI handoff
-        # (mirrors tray.py:394's GLib.idle_add(self._apply_snapshot, ...))
-
-    def _apply_snapshot(self, snap, generation):
-        """Runs on the tk main thread — reached only via _to_main from
-        _fetch's daemon thread (thread -> UI handoff already happened in
-        the caller), so every popover/icon/menu touch below is safe."""
-        if generation != self.generation:
-            return  # superseded (e.g. a pre-switch fetch landing late)
-        self.failures = 0
-        self.last_error = ""
-        self.refreshing = False
-        self.snapshot = snap
-        # Stamp the device counts and plan badges before anything renders:
-        # the menu rows and the panel both name accounts through
-        # model.account_label.
-        presence.apply_counts(snap, presence_client.counts())
-        plan.apply_plans(snap, plan.plans_by_email())
-        # ChatGPT accounts ride the snapshot's separate list (cheap local
-        # reads, mtime-cached); the panel's OpenAI tab renders them.
-        snap.openai = codex.accounts()
-        if not self.presence_started:
-            # First real snapshot: announce this device now rather than
-            # after a whole interval, and do it with accounts already in
-            # hand so the beat costs no cswap call.
-            self.presence_started = True
-            presence_client.beat(snap)
-        if snap.schema_warning:
-            log.warning("%s", snap.schema_warning)
-        account = snap.active_account
-        # Cheap local file read; keeps the badge and the menu row in step
-        # with whatever the update agent last decided.
-        self.update_pending = self._pending_update()
-        self._set_icon(model.pill_states(account))
-        self.icon.title = _fit_wchars(model.title_line(account),
-                                      MAX_TITLE_LEN)
-        self._refresh_menu()
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
-        for alert in self.alerts.check(snap):
-            self._send_alert(alert)
-        self._maybe_recapture(snap)
-
-    def _maybe_recapture(self, snap):
-        # `cswap add` keeps stored credentials alive: it registers an
-        # unregistered /login, heals an active slot whose backup died
-        # (relogin_required), and periodically re-captures the live login
-        # so Claude Code's token rotations never orphan the backup. The
-        # policy paces all three; SMARTBAR_AUTO_ADD/SMARTBAR_RECAPTURE=off
-        # disable them.
-        action = self.recapture.action(snap, time.monotonic())
-        if action is None:
-            return
-
-        def run():
-            try:
-                cswap.add()
-            except cswap.CswapError as exc:
-                log.info("cswap add (%s) skipped: %s", action, exc)
-                return
-            log.info("cswap add ran (%s): current login re-captured", action)
-            if action != "refresh":  # registration/heal changes what we show
-                self._start_fetch()
-        threading.Thread(target=run, daemon=True).start()
-
-    def _apply_error(self, message, generation):
-        """Runs on the tk main thread — see _apply_snapshot's docstring."""
-        if generation != self.generation:
-            return  # superseded
-        self.failures += 1
-        self.last_error = message
-        self.refreshing = False
-        if self.failures >= 3:
-            self._set_icon([])
-            self.icon.title = _fit_wchars(
-                f"AI smartbar — cswap error: {message[:80]}",
-                MAX_TITLE_LEN)
-        self._refresh_menu()
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
-
     def _tick(self):
         """Recurring usage poll. tkinter's `after` has no GLib-style "return
         True to repeat", so each firing re-arms its own next one — always
         from the tk thread, since `after` callbacks run there."""
-        self._start_fetch()
+        self.controller._tick()
         self.root.after(self.interval * 1000, self._tick)
 
     def _presence_tick(self):
         """Re-announce this device; the counts land on the next poll. Same
         self-rescheduling shape as _tick, for the same reason."""
-        presence_client.beat(self.snapshot)
+        presence_client.beat(self.controller.snapshot)
         self.root.after(int(presence.interval()) * 1000, self._presence_tick)
+
+    # --- TrayHost: the optional panel triad -------------------------------
+
+    @property
+    def has_panel(self):
+        return self.popover is not None
+
+    def show_panel(self):
+        self.popover.show_panel()
+
+    def hide_panel(self):
+        self.popover.hide_panel()
+
+    def panel_visible(self):
+        return self.popover.get_visible()
+
+    def refresh_panel(self):
+        self.popover.refresh_layout()
 
 
 def _noop(icon, item):
@@ -907,7 +694,7 @@ def _account_switch_action(tray, number):
 def _check_row_action(callback):
     """Adapts a Tray method (Linux-style, no args) to pystray's (icon, item)
     action signature — `callback` is `self._on_check_update` from
-    `_check_row`, and this is the only place that needs the adaptation."""
+    `_build_menu`, and this is the only place that needs the adaptation."""
     def action(icon, item):
         callback()
     return action
@@ -958,7 +745,7 @@ def main():
     root = tk.Tk()
     root.withdraw()  # no real main window: the popover is its own Toplevel
     tray = Tray(root)
-    tray._start_fetch()
+    tray.controller._start_fetch()
     root.after(tray.interval * 1000, tray._tick)
     if presence.enabled():
         root.after(int(presence.interval()) * 1000, tray._presence_tick)

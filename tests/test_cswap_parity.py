@@ -7,9 +7,10 @@ handed to a Python interpreter to drive claude_swap's internals, so a drift
 between them means the Mac app and every other front-end freshen the usage
 store differently, silently, and only one of them is right.
 
-tests/test_presence.py:521 already proves this source-scraping pattern earns
-its keep: its own comment records that one of the four constants it pins HAD
-drifted. Same approach here, and for the same reason — it runs in the
+tests/test_presence.py's TestMacAndLinuxAgree already proves this
+source-scraping pattern earns its keep: its own comment records that one of
+the four constants it pins HAD drifted. Same approach here, and for the
+same reason — it runs in the
 ordinary unit suite with no Swift toolchain, so a contributor who never opens
 Xcode still cannot break the Mac.
 
@@ -22,7 +23,6 @@ from __future__ import annotations
 
 import os
 import re
-import textwrap
 import unittest
 
 import smartbar

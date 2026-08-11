@@ -6,6 +6,8 @@ never touches the real ~/.codex and never handles real tokens.
 import base64
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -308,9 +310,6 @@ class TestAccounts(_CodexHome):
         self.assertEqual(acct["updatedAt"], "2026-07-25T10:00:00Z")
 
 
-import subprocess
-import sys
-
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -360,9 +359,21 @@ class TestOpenAIParity(unittest.TestCase):
         # must not borrow the Claude plan badge or device count for it.
         self.assertIn('account.provider == "openai"', self.card)
 
-    def test_both_python_uis_stamp_openai_accounts(self):
-        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
-            self.assertIn("codex.accounts", (REPO / path).read_text(encoding="utf-8"), path)
+    def test_every_python_ui_stamps_openai_accounts_through_the_controller(self):
+        """OpenAI stamping used to be copy-pasted into each front-end, and
+        the older form of this test scraped both copies to keep them in
+        step. TrayController._fetch now does it once for every Python UI, so
+        the guarantee got stronger and the assertion has to move with it:
+        the stamp lives in the controller, and each front-end really does
+        route through the controller rather than keeping a private fetch
+        path that would quietly skip it. Windows is checked here too — it
+        was missing from the older two-UI form of this test."""
+        ctrl = REPO / "smartbar/core/tray_controller.py"
+        self.assertIn("codex.accounts", ctrl.read_text(encoding="utf-8"))
+        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py",
+                     "smartbar/windows/tray.py"):
+            self.assertIn("TrayController", (REPO / path).read_text(encoding="utf-8"),
+                          path)
 
 
 if __name__ == "__main__":  # pragma: no cover

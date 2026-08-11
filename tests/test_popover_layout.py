@@ -909,7 +909,7 @@ class TestActionFeedback(unittest.TestCase):
         self.assertEqual(dismiss.tooltip, "Dismiss")
 
     def test_action_error_sits_above_the_account_list(self):
-        # Mirrors PopoverView.swift:28 — under the header/tabs, above
+        # Mirrors PopoverView.body's actionError banner — under the header/tabs, above
         # whichever provider's cards are showing.
         built = layout.build(snap(account(number=2)),
                              action_error="Remove failed: in use", now=NOW)

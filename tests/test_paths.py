@@ -9,7 +9,6 @@ that got this right already did, and what tests/e2e-warmup.sh relies on.
 """
 
 import os
-import sys
 import unittest
 
 from smartbar.core import paths

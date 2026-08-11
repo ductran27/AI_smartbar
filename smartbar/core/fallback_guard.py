@@ -21,7 +21,7 @@ import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:  # pwd does not exist on Windows; import must still reach unsupported JSON.
     import pwd
@@ -423,7 +423,6 @@ def inspect_guard(*, managed_root: Optional[os.PathLike] = None,
         for key in ("switchModelsOnFlag", "fallbackModel"):
             if key not in source.data:
                 continue
-            previous = providers.get(key)
             if source.path != target_path:
                 relation = "overrides" if target_seen else "is overridden by"
                 conflicts.append("%s sets %s and %s the app policy." %

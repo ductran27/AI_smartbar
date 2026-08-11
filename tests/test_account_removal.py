@@ -16,7 +16,6 @@ from pathlib import Path
 from unittest import mock
 
 from smartbar.core import account_removal, codex, cswap
-from smartbar.core.model import Account, Snapshot
 
 REPO = Path(__file__).resolve().parent.parent
 
