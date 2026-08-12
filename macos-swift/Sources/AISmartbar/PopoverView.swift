@@ -8,17 +8,11 @@ struct PopoverView: View {
     @EnvironmentObject private var store: UsageStore
     @EnvironmentObject private var updates: UpdateStatus
     @EnvironmentObject private var openai: OpenAIStatus
-    @EnvironmentObject private var fallbackGuard: FallbackGuardStatus
     @AppStorage("providerTab") private var providerTab = "claude"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            FallbackGuardView()
-            // Keep the guard -> tabs and tabs -> first account-card gaps
-            // identical. Direct siblings in this one 8pt section stack
-            // make that equality structural instead of relying on nested
-            // VStack spacing that can drift independently.
             if showsTabs {
                 providerTabs
             }
@@ -61,7 +55,6 @@ struct PopoverView: View {
             store.refresh()
             updates.reload()
             openai.refresh()
-            fallbackGuard.refresh()
         }
     }
 
@@ -208,7 +201,6 @@ struct PopoverView: View {
             Spacer()
             Button {
                 store.refresh(force: true)
-                fallbackGuard.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12.5, weight: .semibold))

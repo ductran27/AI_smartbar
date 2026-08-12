@@ -20,258 +20,6 @@ from smartbar.core.reset_countdown_format import prefers_24_hour_clock
 NO_ACCOUNTS = ("No accounts yet — sign in to Claude Code and it will be "
                "registered automatically")
 UNREGISTERED = "Current login isn't registered — adding it automatically"
-_FALLBACK_GUARD_UNSET = object()
-
-
-def fallback_guard_presentation(report=None, *, busy="", error=""):
-    """Return ``(status label, tone, action)`` from runner-owned JSON.
-
-    This is deliberately presentation-only.  It never reads managed settings
-    or decides whether a policy is effective; the fallback-guard runner owns
-    those decisions and publishes the stable ``state`` field consumed here.
-    ``action`` is ``enable``, ``verify`` or ``""`` while an operation is busy.
-    A failed live check is the one state where the static route fields matter:
-    when both remain blocked, the useful retry is Verify, not reinstalling the
-    already-effective fragment.
-    """
-    if busy:
-        return ({
-            "status": "Checking…",
-            "enable": "Installing…",
-            "verify": "Verifying…",
-            "remove": "Removing…",
-        }.get(busy, "Working…"), "neutral", "")
-    static_routes_blocked = (
-        isinstance(report, dict)
-        and report.get("safetyAutoFallback") == "blocked"
-        and report.get("availabilityAutoFallback") == "blocked")
-    if error:
-        return ("Action needed", "warning",
-                "verify" if static_routes_blocked else "enable")
-    if not isinstance(report, dict):
-        return "Checking…", "neutral", ""
-
-    state = report.get("state")
-    if state == "protected":
-        return "Protected", "good", "verify"
-    if state == "protected_inconclusive":
-        return "Protected + inconclusive", "caution", "verify"
-    if state == "not_protected":
-        return "Not protected", "neutral", "enable"
-
-    # ``action_needed`` can mean either a broken/conflicting static policy or
-    # a failed live probe.  The runner's route verdicts distinguish those
-    # without recreating any precedence or filesystem logic in the UI.
-    action = "verify" if static_routes_blocked else "enable"
-    return "Action needed", "warning", action
-
-
-def _fallback_tone_color(tone):
-    return {
-        "good": t.status_rgba("green"),
-        "caution": t.status_rgba("yellow"),
-        "warning": t.WARNING,
-        "danger": t.DANGER,
-    }.get(tone, t.TEXT_TERTIARY)
-
-
-def _fallback_value(value):
-    return {"blocked": "Blocked", "enabled": "Enabled",
-            "unknown": "Unknown"}.get(value, "Unknown")
-
-
-def _fallback_detail_rows(report):
-    """Human-readable detail rows sourced only from the runner report."""
-    if not isinstance(report, dict):
-        return [("Status check has not completed.", t.TEXT_SECONDARY)]
-
-    rows = [
-        ("Safety handoff: %s" % _fallback_value(
-            report.get("safetyAutoFallback")), t.TEXT_SECONDARY),
-        ("Availability chain: %s" % _fallback_value(
-            report.get("availabilityAutoFallback")), t.TEXT_SECONDARY),
-    ]
-    live = report.get("lastLiveCheck")
-    probes = live.get("probes") if isinstance(live, dict) else []
-    manual_verified = any(
-        isinstance(probe, dict)
-        and probe.get("name") == "manual_opus"
-        and probe.get("outcome") == "OPUS_OK"
-        for probe in (probes or []))
-    manual_restricted = report.get("manualOpusRestrictedByGuard")
-    if manual_restricted is True:
-        manual = "Restricted by guard"
-        manual_color = t.DANGER
-    elif manual_verified:
-        manual = "Available (live verified)"
-        manual_color = t.status_rgba("green")
-    elif manual_restricted is False:
-        # False means only that this guard does not restrict manual Opus.  It
-        # is not proof that the service was available, so do not overclaim it.
-        manual = "Not restricted by guard"
-        manual_color = t.TEXT_SECONDARY
-    else:
-        manual = "Unknown"
-        manual_color = t.TEXT_TERTIARY
-    rows.append(("Manual Opus: %s" % manual, manual_color))
-
-    if isinstance(live, dict):
-        parts = [str(live.get("status") or "unknown").capitalize()]
-        cost = live.get("totalCostUsd")
-        if isinstance(cost, (int, float)):
-            parts.append("$%.3f" % cost)
-        limit = live.get("budgetLimitUsd")
-        if isinstance(limit, (int, float)):
-            parts.append("$%.2f limit" % limit)
-        if live.get("checkedAt"):
-            parts.append(str(live["checkedAt"]))
-        rows.append(("Live check: " + " · ".join(parts), t.TEXT_SECONDARY))
-        for probe in (probes or []):
-            if not isinstance(probe, dict):
-                continue
-            models = probe.get("observedModels")
-            if isinstance(models, list) and models:
-                observed = ", ".join(str(value) for value in models)
-            elif isinstance(models, str) and models:
-                observed = models
-            else:
-                observed = "no model reported"
-            rows.append(("%s: %s · %s" % (
-                probe.get("name") or "probe",
-                probe.get("outcome") or "unknown", observed),
-                t.TEXT_SECONDARY))
-    else:
-        rows.append(("Live check: Not run", t.TEXT_SECONDARY))
-
-    if report.get("claudeVersion"):
-        rows.append(("Claude Code: %s" % report["claudeVersion"],
-                     t.TEXT_SECONDARY))
-    if report.get("activeManagedSource"):
-        rows.append(("Managed source: %s" % report["activeManagedSource"],
-                     t.TEXT_SECONDARY))
-    if report.get("scope"):
-        rows.append(("Scope: %s" % report["scope"], t.TEXT_SECONDARY))
-    if report.get("policyPath"):
-        rows.append(("Policy: %s" % report["policyPath"], t.TEXT_TERTIARY))
-    details = report.get("details")
-    if isinstance(details, list) and details:
-        rows.append((str(details[0]), t.WARNING))
-    return rows
-
-
-def _fallback_guard(shapes, hits, report, top, hover, *, busy="", error="",
-                    expanded=False, advanced=False, remove_confirm=False):
-    """Paint the Auto fallback card and return its exact height."""
-    status, tone, action = fallback_guard_presentation(
-        report, busy=busy, error=error)
-    inner_l = t.PAD + t.FALLBACK_PAD_H
-    inner_r = t.WIDTH - t.PAD - t.FALLBACK_PAD_H
-    detail_width = inner_r - inner_l
-    detail_specs = []
-    if expanded:
-        rows = _fallback_detail_rows(report)
-        if error:
-            rows = [(error, t.WARNING)] + rows
-        for text, color in rows:
-            lines = _lines_for_width(text, detail_width, cap=2)
-            height = t.FALLBACK_LINE_H + (lines - 1) * t.STATE_LINE_H
-            detail_specs.append((text, color, lines, height))
-
-    height = t.FALLBACK_ROW_H
-    if expanded:
-        height += t.FALLBACK_PAD_V
-        height += sum(spec[3] + t.FALLBACK_DETAIL_GAP
-                      for spec in detail_specs)
-        height += t.BUTTON_H + t.FALLBACK_DETAIL_GAP
-        if advanced:
-            height += t.BUTTON_H + t.FALLBACK_DETAIL_GAP
-            if remove_confirm:
-                height += t.FALLBACK_LINE_H + t.FALLBACK_DETAIL_GAP
-
-    shapes.append(t.Box(t.PAD, top, t.WIDTH - 2 * t.PAD, height,
-                        radius=t.FALLBACK_RADIUS, fill=t.CARD_BG,
-                        stroke=t.CARD_BORDER))
-    # Appended before the real buttons so those win reverse-order hit testing.
-    hits.append(t.Hit("fallback-details", t.PAD, top,
-                      t.WIDTH - 2 * t.PAD, t.FALLBACK_ROW_H,
-                      tooltip=("Hide fallback details" if expanded
-                               else "Show fallback details")))
-
-    title_y = top + 11.0
-    status_y = top + 27.0
-    shapes.append(t.Label(inner_l, title_y, "Auto fallback",
-                          size=t.SIZE_CAPTION, bold=True, color=t.TEXT))
-    shapes.append(t.Glyph(
-        "chevron-down" if expanded else "chevron-right",
-        inner_l + t.text_width("Auto fallback", t.SIZE_CAPTION, bold=True) + 8,
-        title_y, 8.0, t.TEXT_TERTIARY))
-    dot_x = inner_l + t.DOT_R
-    shapes.append(t.Dot(dot_x, status_y, t.DOT_R,
-                        _fallback_tone_color(tone)))
-    action_text = "Verify" if action == "verify" else "Protect"
-    action_width = (t.text_width(action_text, t.SIZE_CAPTION,
-                                 bold=action == "enable")
-                    + t.BUTTON_PAD_H * 2) if action else 0
-    status_max = max(20.0, inner_r - (dot_x + t.DOT_R + 6)
-                     - (action_width + 8 if action else 0))
-    shapes.append(t.Label(dot_x + t.DOT_R + 6, status_y, status,
-                          size=t.SIZE_CAPTION,
-                          color=_fallback_tone_color(tone),
-                          max_width=status_max))
-    if action:
-        _button(shapes, hits, "fallback-" + action, inner_r,
-                top + t.FALLBACK_ROW_H / 2, action_text,
-                accent=action == "enable", hover=hover,
-                tooltip=("Install machine-wide automatic-fallback protection"
-                         if action == "enable" else
-                         "Run the explicit, cost-bounded live verification"))
-
-    if not expanded:
-        return height
-
-    cursor = top + t.FALLBACK_ROW_H + t.FALLBACK_PAD_V
-    for text, color, lines, row_h in detail_specs:
-        shapes.append(t.Label(inner_l, cursor + row_h / 2, text,
-                              size=t.SIZE_CAPTION, color=color,
-                              max_width=detail_width, max_lines=lines))
-        cursor += row_h + t.FALLBACK_DETAIL_GAP
-
-    advanced_name = "fallback-advanced"
-    advanced_y = cursor + t.BUTTON_H / 2
-    shapes.append(t.Label(inner_l, advanced_y, "Advanced",
-                          size=t.SIZE_CAPTION, color=(
-                              t.TEXT if hover == advanced_name
-                              else t.TEXT_TERTIARY)))
-    shapes.append(t.Glyph(
-        "chevron-down" if advanced else "chevron-right",
-        inner_l + t.text_width("Advanced", t.SIZE_CAPTION) + 8,
-        advanced_y, 8.0,
-        t.TEXT if hover == advanced_name else t.TEXT_TERTIARY))
-    hits.append(t.Hit(advanced_name, inner_l, cursor, detail_width,
-                      t.BUTTON_H, tooltip=("Hide removal controls" if advanced
-                                          else "Show removal controls")))
-    cursor += t.BUTTON_H + t.FALLBACK_DETAIL_GAP
-
-    if advanced:
-        if remove_confirm:
-            warning_y = cursor + t.FALLBACK_LINE_H / 2
-            shapes.append(t.Label(inner_l, warning_y,
-                                  "Remove machine-wide protection?",
-                                  size=t.SIZE_CAPTION, color=t.WARNING))
-            cursor += t.FALLBACK_LINE_H + t.FALLBACK_DETAIL_GAP
-            keep_l = _button(shapes, hits, "fallback-cancel-remove", inner_r,
-                             cursor + t.BUTTON_H / 2, "Keep", hover=hover,
-                             tooltip="Keep automatic-fallback protection")
-            _button(shapes, hits, "fallback-confirm-remove", keep_l - 6,
-                    cursor + t.BUTTON_H / 2, "Remove", danger=True,
-                    hover=hover,
-                    tooltip="Authorize removal of AI smartbar's policy")
-        else:
-            _button(shapes, hits, "fallback-remove", inner_r,
-                    cursor + t.BUTTON_H / 2, "Remove protection…",
-                    hover=hover,
-                    tooltip="Begin the two-step protection removal")
-    return height
 
 
 def pin_origin(workareas, size, margin):
@@ -612,10 +360,7 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
           provider="", confirm="", action_error="", refreshing=False,
-          stale_reason="", fallback_guard=_FALLBACK_GUARD_UNSET,
-          fallback_busy="", fallback_expanded=False,
-          fallback_advanced=False, fallback_remove_confirm=False,
-          fallback_error="") -> t.Layout:
+          stale_reason="") -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
     `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
@@ -640,12 +385,6 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     likewise surfaced on hover of the footer's "update held" label
     (mirrors `.help("Update held back: …")`). Both were previously
     computed and then thrown away (FINDING 7).
-
-    ``fallback_guard`` is intentionally opt-in. Linux passes the runner's
-    report (including ``None`` while its first asynchronous status call is in
-    flight), while callers that omit it retain their historical geometry.
-    This keeps the shared Windows painter stable until that platform gains a
-    supported policy backend.
     """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
@@ -697,13 +436,6 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                           enabled=not busy, tooltip=tip))
 
     cursor = t.PAD + t.HEADER_H + t.SECTION_GAP
-    guard_visible = fallback_guard is not _FALLBACK_GUARD_UNSET
-    if guard_visible:
-        cursor += _fallback_guard(
-            shapes, hits, fallback_guard, cursor, hover,
-            busy=fallback_busy, error=fallback_error,
-            expanded=fallback_expanded, advanced=fallback_advanced,
-            remove_confirm=fallback_remove_confirm) + t.SECTION_GAP
     accounts = list(snapshot.accounts) if snapshot is not None else []
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
     selected = provider or ("openai" if openai and not accounts else "claude")
@@ -711,8 +443,7 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         # The tab row is part of the header block, not a section of its
         # own, so it sits TAB_TOP_GAP under the title instead of a full
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
-        if not guard_visible:
-            cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
+        cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
         for name, text in (("claude", "Claude"), ("openai", "OpenAI")):

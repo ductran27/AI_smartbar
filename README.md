@@ -123,14 +123,6 @@ The panel — identical on macOS, Linux and Windows:
   switches via `cswap switch`, registers/re-captures via `cswap add`,
   and warms via `cswap run` + the official claude CLI. It never touches
   credentials or Anthropic endpoints itself.
-- **Machine-wide automatic-fallback guard (macOS and Linux/WSL).** One protected action
-  blocks Claude Code's saved Fable safety handoff and availability fallback
-  for every local project while leaving deliberate `/model opus` and
-  `--model opus` choices available. The root-owned policy survives app exit,
-  account switches, and uninstall; the popover audits precedence and offers an
-  explicit, cost-bounded, fail-closed three-probe live check. Linux also keeps
-  status and actions in the native tray menu if the painted panel is
-  unavailable. See [`docs/fallback-guard.md`](docs/fallback-guard.md).
 
 ## Requirements
 
@@ -141,8 +133,6 @@ The panel — identical on macOS, Linux and Windows:
 - Linux: Python 3 with GTK3 bindings (`python3-gi`), AyatanaAppIndicator3
   (`gir1.2-ayatanaappindicator3-0.1`), pycairo — preinstalled on most
   XFCE/GNOME distros. X11 or Wayland with a StatusNotifier-capable tray.
-  Protect/Remove additionally need `/usr/bin/pkexec` and a graphical PolicyKit
-  authentication agent; headless and many WSL sessions cannot show that prompt.
 - macOS: Python 3; `install/macos.sh` creates a venv with
   [rumps](https://github.com/jaredks/rumps).
 - Windows: Python 3.9+ (pycairo ships `win_amd64` wheels for
@@ -176,8 +166,6 @@ Both macOS installers share the `com.ductran.ai-smartbar` LaunchAgent
 label — installing one replaces the other at login (single instance).
 Uninstall with `./install/linux.sh --uninstall`,
 `./install/macos.sh --uninstall`, or `.\install\windows.ps1 -Uninstall`.
-Uninstalling does not remove an installed automatic-fallback policy; use the
-guard's confirmed **Remove protection** action first if you want it removed.
 
 Every installer also turns on [self-updating](#updating-and-releases).
 Add `--no-auto-update` to opt a device out, or `--channel main` to follow
@@ -384,11 +372,6 @@ The menu-bar pills stay Claude-only; the tab is the OpenAI surface.
 The Linux UI is the same panel as the macOS popover, not a reduced menu.
 Open it with **⟳ Open AI smartbar** in the tray menu, or **middle-click**
 the tray icon. Hovering the icon shows the same numbers as a tooltip.
-Its **Auto fallback** row remains visible below the header even while usage is
-loading or no account exists. **Verify** is always deliberate because it runs
-bounded paid probes, and removal lives behind a two-step advanced confirmation.
-If the panel cannot be created, the native tray menu still exposes the status,
-Protect/Verify, and confirmed removal controls.
 
 Windows hosts the identical panel in a borderless tkinter window instead
 of GTK — see [`docs/windows-bring-up.md`](docs/windows-bring-up.md) for
