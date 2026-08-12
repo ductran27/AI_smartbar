@@ -42,7 +42,6 @@ gi.require_version("AyatanaAppIndicator3", "0.1")
 
 import logging
 import subprocess
-import threading
 import time
 
 from gi.repository import AyatanaAppIndicator3 as AppIndicator
@@ -60,10 +59,6 @@ LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
-# Read-only status checks are cheap and never run the paid live probes.  Keep
-# them fresh when the user opens a surface without turning Verify into an
-# implicit background action.
-FALLBACK_GUARD_REFRESH_SECONDS = 30
 
 log = logging.getLogger("ai-smartbar")
 
@@ -82,13 +77,6 @@ class Tray:
         self.menu = None
         self.pending_menu = None  # rebuilt while open; swapped in on hide
         self.open_item = None
-        self.fallback_guard_report = None
-        self.fallback_guard_busy = ""
-        self.fallback_guard_error = ""
-        self.fallback_guard_expanded = False
-        self.fallback_guard_advanced = False
-        self.fallback_guard_remove_confirm = False
-        self.fallback_guard_last_fetch = 0.0
         self.controller._pending_update()  # seeds update_pending/blocked
         self.pinned = model.panel_pinned()
         self.popover = self._make_popover()
@@ -105,7 +93,6 @@ class Tray:
             # Up before the first fetch lands: the panel renders its own
             # loading/error state and refreshes in place once data arrives.
             self.show_panel()
-        self._start_fallback_guard("status")
 
     def _make_popover(self):
         """The card panel, or None if this session cannot host a window.
@@ -133,13 +120,7 @@ class Tray:
             error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
             action_error=c.action_error, refreshing=c.refreshing,
-            stale_reason=c.last_error,
-            fallback_guard=self.fallback_guard_report,
-            fallback_busy=self.fallback_guard_busy,
-            fallback_expanded=self.fallback_guard_expanded,
-            fallback_advanced=self.fallback_guard_advanced,
-            fallback_remove_confirm=self.fallback_guard_remove_confirm,
-            fallback_error=self.fallback_guard_error)
+            stale_reason=c.last_error)
 
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel."""
@@ -150,25 +131,6 @@ class Tray:
             self._on_refresh(None)
         elif name == "update":
             self._on_update(None)
-        elif name == "fallback-details":
-            self.fallback_guard_expanded = not self.fallback_guard_expanded
-            if not self.fallback_guard_expanded:
-                self.fallback_guard_advanced = False
-                self.fallback_guard_remove_confirm = False
-        elif name == "fallback-enable":
-            self._start_fallback_guard("enable")
-        elif name == "fallback-verify":
-            self._start_fallback_guard("verify")
-        elif name == "fallback-advanced":
-            self.fallback_guard_advanced = not self.fallback_guard_advanced
-            if not self.fallback_guard_advanced:
-                self.fallback_guard_remove_confirm = False
-        elif name == "fallback-remove":
-            self.fallback_guard_remove_confirm = True
-        elif name == "fallback-cancel-remove":
-            self.fallback_guard_remove_confirm = False
-        elif name == "fallback-confirm-remove":
-            self._start_fallback_guard("remove")
         elif name == "dismiss-error":
             self.controller.action_error = ""
         elif name.startswith("tab:"):
@@ -193,13 +155,11 @@ class Tray:
         if self.popover is None:
             return
         self.confirm = ""   # a fresh open never starts mid-question
-        self.fallback_guard_remove_confirm = False
         self.popover.show_panel()
         # Opening the panel is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic).
         if time.monotonic() - self.controller.last_fetch_at > 10:
             self.controller._start_fetch()
-        self._refresh_fallback_guard_if_stale()
 
     def _init_notify(self):
         self._libnotify = None
@@ -247,44 +207,6 @@ class Tray:
 
     # --- menu construction (platform-specific: Gtk.Menu/Gtk.MenuItem) -----
 
-    def _append_fallback_guard_menu(self, menu):
-        """Native, accessible fallback-guard controls for every session.
-
-        This section exists even when the painted popover cannot be created.
-        It consumes the same presentation mapper as the card so the two
-        surfaces cannot disagree about status or the next safe action.
-        """
-        status, _tone, action = popover_layout.fallback_guard_presentation(
-            self.fallback_guard_report, busy=self.fallback_guard_busy,
-            error=self.fallback_guard_error)
-        item = Gtk.MenuItem(label="Auto fallback · %s" % status)
-        item.set_sensitive(False)
-        menu.append(item)
-
-        if action:
-            text = "Verify protection…" if action == "verify" \
-                else "Protect automatic fallback…"
-            item = Gtk.MenuItem(label=text)
-            item.connect("activate", self._on_fallback_guard_action, action)
-            menu.append(item)
-
-        report = self.fallback_guard_report
-        state = report.get("state") if isinstance(report, dict) else ""
-        can_remove = state not in ("", "not_protected", "unsupported")
-        if not can_remove or self.fallback_guard_busy:
-            return
-        if self.fallback_guard_remove_confirm:
-            item = Gtk.MenuItem(label="⚠ Confirm remove protection")
-            item.connect("activate", self._on_fallback_guard_action, "remove")
-            menu.append(item)
-            item = Gtk.MenuItem(label="Keep protection")
-            item.connect("activate", self._on_fallback_guard_cancel_remove)
-            menu.append(item)
-        else:
-            item = Gtk.MenuItem(label="Advanced: Remove protection…")
-            item.connect("activate", self._on_fallback_guard_arm_remove)
-            menu.append(item)
-
     def _build_menu(self):
         """The tray menu is the panel's launcher plus the actions.
 
@@ -327,8 +249,6 @@ class Tray:
                     item = Gtk.MenuItem(label=model.menu_row(acct))
                     item.set_sensitive(False)
                     menu.append(item)
-        menu.append(Gtk.SeparatorMenuItem())
-        self._append_fallback_guard_menu(menu)
         menu.append(Gtk.SeparatorMenuItem())
         if c.update_pending:
             item = Gtk.MenuItem(label=f"⬆ Update to {c.update_pending}")
@@ -385,88 +305,10 @@ class Tray:
         # current (cswap's store paces the real network traffic).
         if time.monotonic() - self.controller.last_fetch_at > 10:
             self.controller._start_fetch()
-        self._refresh_fallback_guard_if_stale()
 
     def _on_menu_hide(self, _menu):
         if self.pending_menu is not None:
             self._install_menu(self.pending_menu)
-
-    # --- fallback guard ------------------------------------------------------
-
-    def _on_fallback_guard_action(self, _item, action):
-        self._start_fallback_guard(action)
-
-    def _on_fallback_guard_arm_remove(self, _item):
-        # First step only.  The native menu closes after activation; its next
-        # open exposes the separately-labelled destructive confirmation.
-        self.fallback_guard_remove_confirm = True
-        self.rebuild_menu()
-
-    def _on_fallback_guard_cancel_remove(self, _item):
-        self.fallback_guard_remove_confirm = False
-        self.rebuild_menu()
-
-    def _refresh_fallback_guard_if_stale(self):
-        if (not self.fallback_guard_busy
-                and time.monotonic() - self.fallback_guard_last_fetch
-                > FALLBACK_GUARD_REFRESH_SECONDS):
-            self._start_fallback_guard("status")
-
-    def _start_fallback_guard(self, action):
-        """Start exactly one runner action without blocking GTK.
-
-        ``status`` is the only action started automatically.  ``verify`` is
-        intentionally reachable only from the explicit Verify controls because
-        it launches live Claude probes with a bounded but non-zero cost.
-        """
-        if action not in ("status", "enable", "verify", "remove"):
-            return
-        if self.fallback_guard_busy:
-            return
-        self.fallback_guard_busy = action
-        self.fallback_guard_error = ""
-        if action in ("enable", "verify"):
-            self.fallback_guard_remove_confirm = False
-        self._refresh_fallback_guard_surfaces()
-        threading.Thread(target=self._run_fallback_guard, args=(action,),
-                         daemon=True).start()
-
-    def _run_fallback_guard(self, action):
-        """Worker entry: compute locally; queue every state/UI write."""
-        try:
-            # Lazy so a tray that never reaches this feature does not pull the
-            # verifier and privileged command builder into module import.
-            from smartbar import fallback_guard_runner
-            report, exit_code = fallback_guard_runner.run(action)
-            error = ""
-        except Exception as exc:
-            log.exception("fallback guard %s failed", action)
-            report, exit_code = None, 1
-            error = "Fallback guard failed: %s" % exc
-        self.call_on_ui_thread(self._apply_fallback_guard, action, report,
-                               exit_code, error)
-
-    def _apply_fallback_guard(self, action, report, exit_code, error):
-        """UI-thread target for all worker-produced guard state."""
-        self.fallback_guard_busy = ""
-        self.fallback_guard_last_fetch = time.monotonic()
-        if isinstance(report, dict):
-            self.fallback_guard_report = report
-        self.fallback_guard_error = error
-        if action == "remove":
-            self.fallback_guard_remove_confirm = False
-            self.fallback_guard_advanced = False
-        # A nonzero runner exit is a semantic report (inconclusive/not
-        # protected), not a transport exception. The report state/detail owns
-        # its wording, so do not replace it with a generic error here.
-        _ = exit_code
-        self._refresh_fallback_guard_surfaces()
-        return False
-
-    def _refresh_fallback_guard_surfaces(self):
-        self.rebuild_menu()
-        if self.popover is not None and self.popover.get_visible():
-            self.popover.refresh_layout()
 
     # --- switch --------------------------------------------------------------
 
@@ -521,10 +363,6 @@ class Tray:
 
     def _on_refresh(self, _item):
         self.controller._start_fetch()
-        # Read-only and free: refresh the static/status report too.  Live
-        # verification remains its own explicit button/menu action.
-        if not self.fallback_guard_busy:
-            self._start_fallback_guard("status")
 
     def _on_tui(self, _item):
         try:

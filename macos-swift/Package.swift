@@ -13,11 +13,6 @@ let package = Package(
         .executableTarget(
             name: "AISmartbar",
             path: "Sources/AISmartbar"
-        ),
-        .testTarget(
-            name: "AISmartbarTests",
-            dependencies: ["AISmartbar"],
-            path: "Tests/AISmartbarTests"
         )
     ]
 )

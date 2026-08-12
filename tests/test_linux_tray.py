@@ -188,16 +188,6 @@ def _bare_tray(mod, snapshot=None):
     tray.menu = None
     tray.pending_menu = None
     tray.open_item = None
-    # Fetch/error/update/check state now belongs to the controller built
-    # above; the fallback guard stays host-side on the Tray, so its fields
-    # are still seeded here.
-    tray.fallback_guard_report = None
-    tray.fallback_guard_busy = ""
-    tray.fallback_guard_error = ""
-    tray.fallback_guard_expanded = False
-    tray.fallback_guard_advanced = False
-    tray.fallback_guard_remove_confirm = False
-    tray.fallback_guard_last_fetch = 0.0
     tray.popover = mock.MagicMock(name="popover")
     tray.popover.get_visible.return_value = True
     tray.indicator = mock.MagicMock(name="indicator")
@@ -210,20 +200,6 @@ def _account(number, email, active=False, status="ok"):
                          status=status, ok=(status == "ok"))
 
 
-def _guard_report(state="protected", **changes):
-    report = {
-        "state": state,
-        "protected": state in ("protected", "protected_inconclusive"),
-        "safetyAutoFallback": "blocked",
-        "availabilityAutoFallback": "blocked",
-        "manualOpusRestrictedByGuard": False,
-        "details": [],
-        "lastLiveCheck": None,
-    }
-    report.update(changes)
-    return report
-
-
 class TestPopoverLayoutWiring(GuiStubbedTestCase):
     """_popover_layout() must hand action_error/refreshing/stale_reason to
     popover_layout.build() -- the three keyword-only parameters that let
@@ -231,30 +207,18 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
     and a dismissible action-error banner. All three now live on
     self.controller rather than on the Tray instance directly."""
 
-    def test_forwards_action_error_refreshing_stale_reason_and_guard_state(self):
+    def test_forwards_action_error_refreshing_and_stale_reason(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         tray.controller.action_error = "Switch failed: boom"
         tray.controller.refreshing = True
         tray.controller.last_error = "connection reset"
-        tray.fallback_guard_report = {"state": "protected"}
-        tray.fallback_guard_busy = "verify"
-        tray.fallback_guard_expanded = True
-        tray.fallback_guard_advanced = True
-        tray.fallback_guard_remove_confirm = True
-        tray.fallback_guard_error = "guard error"
         with mock.patch.object(mod.popover_layout, "build") as build:
             mod.Tray._popover_layout(tray, hover="refresh")
         _args, kwargs = build.call_args
         self.assertEqual(kwargs["action_error"], "Switch failed: boom")
         self.assertIs(kwargs["refreshing"], True)
         self.assertEqual(kwargs["stale_reason"], "connection reset")
-        self.assertEqual(kwargs["fallback_guard"], {"state": "protected"})
-        self.assertEqual(kwargs["fallback_busy"], "verify")
-        self.assertIs(kwargs["fallback_expanded"], True)
-        self.assertIs(kwargs["fallback_advanced"], True)
-        self.assertIs(kwargs["fallback_remove_confirm"], True)
-        self.assertEqual(kwargs["fallback_error"], "guard error")
 
     def test_stale_reason_is_empty_once_a_fetch_has_succeeded(self):
         # last_error is cleared by the controller's _apply_snapshot on
@@ -266,166 +230,6 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
         with mock.patch.object(mod.popover_layout, "build") as build:
             mod.Tray._popover_layout(tray)
         self.assertEqual(build.call_args.kwargs["stale_reason"], "")
-
-
-class TestFallbackGuardTray(GuiStubbedTestCase):
-    def _labels(self, menu):
-        return [item.label for item in menu.items
-                if not isinstance(item, self.gi.Gtk.SeparatorMenuItem)]
-
-    def _run_thread(self, thread):
-        args, kwargs = thread.call_args
-        kwargs["target"](*kwargs.get("args", ()))
-
-    def test_runner_result_mutates_state_only_after_glib_idle_callback(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        report = _guard_report("protected_inconclusive")
-        from smartbar import fallback_guard_runner
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(
-                tray, "_refresh_fallback_guard_surfaces"))
-            thread = stack.enter_context(
-                mock.patch.object(mod.threading, "Thread"))
-            idle_add = stack.enter_context(
-                mock.patch.object(mod.GLib, "idle_add"))
-            stack.enter_context(mock.patch.object(
-                fallback_guard_runner, "run", return_value=(report, 2)))
-            mod.Tray._start_fallback_guard(tray, "verify")
-            self.assertEqual(tray.fallback_guard_busy, "verify")
-            self.assertIsNone(tray.fallback_guard_report)
-            self._run_thread(thread)
-        # Worker computed the result but did not write report/busy/UI state.
-        self.assertEqual(tray.fallback_guard_busy, "verify")
-        self.assertIsNone(tray.fallback_guard_report)
-        callback, *args = idle_add.call_args.args
-        self.assertEqual(callback, tray._apply_fallback_guard)
-        callback(*args)
-        self.assertEqual(tray.fallback_guard_report, report)
-        self.assertEqual(tray.fallback_guard_busy, "")
-        self.assertEqual(tray.fallback_guard_error, "")
-
-    def test_worker_exception_is_also_marshaled_through_idle_add(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        from smartbar import fallback_guard_runner
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(
-                tray, "_refresh_fallback_guard_surfaces"))
-            thread = stack.enter_context(
-                mock.patch.object(mod.threading, "Thread"))
-            idle_add = stack.enter_context(
-                mock.patch.object(mod.GLib, "idle_add"))
-            stack.enter_context(mock.patch.object(
-                fallback_guard_runner, "run", side_effect=RuntimeError("boom")))
-            stack.enter_context(mock.patch.object(mod.log, "exception"))
-            mod.Tray._start_fallback_guard(tray, "status")
-            self._run_thread(thread)
-        self.assertEqual(tray.fallback_guard_error, "")
-        callback, *args = idle_add.call_args.args
-        callback(*args)
-        self.assertIn("boom", tray.fallback_guard_error)
-
-    def test_popover_hits_toggle_details_and_keep_remove_two_step(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        mod.Tray._on_popover_action(tray, "fallback-details")
-        self.assertTrue(tray.fallback_guard_expanded)
-        mod.Tray._on_popover_action(tray, "fallback-advanced")
-        self.assertTrue(tray.fallback_guard_advanced)
-        mod.Tray._on_popover_action(tray, "fallback-remove")
-        self.assertTrue(tray.fallback_guard_remove_confirm)
-        with mock.patch.object(tray, "_start_fallback_guard") as start:
-            mod.Tray._on_popover_action(tray, "fallback-confirm-remove")
-        start.assert_called_once_with("remove")
-
-    def test_verify_hit_is_an_explicit_runner_action(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        with mock.patch.object(tray, "_start_fallback_guard") as start:
-            mod.Tray._on_popover_action(tray, "fallback-verify")
-        start.assert_called_once_with("verify")
-
-    def test_native_menu_exposes_status_and_action_without_popover(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.popover = None
-        tray.fallback_guard_report = _guard_report("not_protected")
-        with mock.patch.object(mod.update_core, "enabled", return_value=False):
-            menu = mod.Tray._build_menu(tray)
-        shown = self._labels(menu)
-        self.assertIn("Auto fallback · Not protected", shown)
-        self.assertIn("Protect automatic fallback…", shown)
-        status = next(item for item in menu.items
-                      if item.label == "Auto fallback · Not protected")
-        self.assertFalse(status.sensitive)
-
-    def test_native_menu_protected_state_offers_explicit_verify(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.fallback_guard_report = _guard_report("protected")
-        with mock.patch.object(mod.update_core, "enabled", return_value=False):
-            menu = mod.Tray._build_menu(tray)
-        shown = self._labels(menu)
-        self.assertIn("Auto fallback · Protected", shown)
-        self.assertIn("Verify protection…", shown)
-        self.assertNotIn("Protect automatic fallback…", shown)
-
-    def test_native_menu_remove_requires_arm_then_confirm(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.fallback_guard_report = _guard_report("protected")
-        with mock.patch.object(mod.update_core, "enabled", return_value=False):
-            first = mod.Tray._build_menu(tray)
-        arm = next(item for item in first.items
-                   if item.label == "Advanced: Remove protection…")
-        with mock.patch.object(tray, "rebuild_menu"):
-            arm.activate()
-        self.assertTrue(tray.fallback_guard_remove_confirm)
-
-        with mock.patch.object(mod.update_core, "enabled", return_value=False):
-            second = mod.Tray._build_menu(tray)
-        shown = self._labels(second)
-        self.assertIn("⚠ Confirm remove protection", shown)
-        self.assertIn("Keep protection", shown)
-        confirm = next(item for item in second.items
-                       if item.label == "⚠ Confirm remove protection")
-        with mock.patch.object(tray, "_start_fallback_guard") as start:
-            confirm.activate()
-        start.assert_called_once_with("remove")
-
-    def test_open_refreshes_read_only_status_never_live_verify(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(tray.controller,
-                                                  "_start_fetch"))
-            start = stack.enter_context(mock.patch.object(
-                tray, "_start_fallback_guard"))
-            stack.enter_context(mock.patch.object(
-                mod.time, "monotonic", return_value=100.0))
-            mod.Tray._on_menu_show(tray, None)
-        self.assertEqual(start.call_args_list, [mock.call("status")])
-        self.assertNotIn(mock.call("verify"), start.call_args_list)
-
-    def test_background_status_does_not_cancel_an_armed_menu_removal(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.fallback_guard_remove_confirm = True
-        with mock.patch.object(
-                tray, "_refresh_fallback_guard_surfaces"), \
-             mock.patch.object(mod.threading, "Thread"):
-            mod.Tray._start_fallback_guard(tray, "status")
-        self.assertTrue(tray.fallback_guard_remove_confirm)
-
-    def test_manual_refresh_runs_status_but_not_verify(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        with mock.patch.object(tray.controller, "_start_fetch") as fetch, \
-             mock.patch.object(tray, "_start_fallback_guard") as start:
-            mod.Tray._on_refresh(tray, None)
-        fetch.assert_called_once()
-        start.assert_called_once_with("status")
 
 
 class TestDismissErrorHit(GuiStubbedTestCase):
@@ -706,18 +510,14 @@ class TestControllerDelegation(GuiStubbedTestCase):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         tray.controller = mock.MagicMock(name="controller")
-        # The guard kick _on_refresh also fires is its own concern (see
-        # TestFallbackGuardTray); stub it so this asserts delegation only.
-        with mock.patch.object(tray, "_start_fallback_guard"):
-            mod.Tray._on_refresh(tray, None)
+        mod.Tray._on_refresh(tray, None)
         tray.controller._start_fetch.assert_called_once_with()
 
     def test_refresh_popover_action_delegates(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         tray.controller = mock.MagicMock(name="controller")
-        with mock.patch.object(tray, "_start_fallback_guard"):
-            mod.Tray._on_popover_action(tray, "refresh")
+        mod.Tray._on_popover_action(tray, "refresh")
         tray.controller._start_fetch.assert_called_once_with()
 
     def test_confirm_remove_action_delegates_to_on_remove(self):

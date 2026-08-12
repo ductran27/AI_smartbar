@@ -22,12 +22,6 @@ WIDTH = 330.0
 PAD = 11.0                 # PopoverView .padding(11)
 SECTION_GAP = 8.0          # VStack(spacing: 8)
 HEADER_H = 22.0            # equal-size refresh/quit buttons
-FALLBACK_ROW_H = 38.0       # always-visible compact Auto fallback summary
-FALLBACK_RADIUS = 10.0
-FALLBACK_PAD_H = 10.0
-FALLBACK_PAD_V = 8.0
-FALLBACK_LINE_H = 14.0
-FALLBACK_DETAIL_GAP = 3.0
 CARD_GAP = 7.0             # VStack(spacing: 7)
 CARD_RADIUS = 12.0
 CARD_PAD_V = 9.0
@@ -181,8 +175,7 @@ class Glyph:
 
     SF Symbols have no cross-platform equivalent and a font that happens to
     carry "⟳" cannot be assumed, so the icon buttons are drawn rather
-    than typeset. `kind` is "refresh", "power", "close",
-    "chevron-right", or "chevron-down".
+    than typeset. `kind` is "refresh", "power" or "close".
     """
     kind: str
     cx: float
@@ -211,7 +204,7 @@ class Hit:
                              # | "tab:<p>" | "card:<p>:<id>"
                              # | "remove:<p>:<id>" | "confirm-remove:<p>:<id>"
                              # | "cancel-remove" | "stale" | "update-held"
-                             # | "dismiss-error" | "fallback-*"
+                             # | "dismiss-error"
     x: float
     y: float
     w: float
