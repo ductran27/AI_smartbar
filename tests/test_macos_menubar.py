@@ -1,29 +1,50 @@
 """Tests for smartbar/macos/menubar.py, with rumps stubbed out.
 
-This module had no tests at all, which is how it ended up as the outlier
-among the three Python front-ends: no logging, no worker -> UI marshal, no
-generation guard on fetches, and an unguarded rumps.notification() sitting
-directly above the recapture call it could skip. It cannot be imported on the
-machine this suite normally runs on (rumps is macOS-only and not installed),
-so a fake rumps goes into sys.modules first — the same approach
-tests/test_windows_tray.py uses for pystray/tkinter.
+The fetch/apply/alert/recapture/check-update STATE MACHINE this file used
+to own directly now lives in smartbar.core.tray_controller (TrayController)
+and is pinned once, for all three front-ends, in
+tests/test_tray_controller.py. What is left here is the TOOLKIT BINDING:
+does a click route to the right controller call, does a menu row carry the
+right label/callback, does SmartBarApp's own implementation of the
+TrayHost contract (set_icon/set_title/rebuild_menu/call_on_ui_thread/
+schedule/notify/check_update_argv) do the rumps-specific thing it claims
+to. It cannot be imported on the machine this suite normally runs on
+(rumps is macOS-only and not installed), so a fake rumps goes into
+sys.modules first — the same approach tests/test_windows_tray.py uses for
+pystray/tkinter.
 
 What is pinned here, and why:
 
   1. The module imports at all under a fake rumps.
-  2. The generation guard: a snapshot from a fetch that started before an
-     account switch must be DROPPED, not applied. Without it a slow
-     pre-switch fetch silently puts the old account back on screen.
-  3. _fetch (worker thread) hands its result to _to_main rather than
-     touching self.title/self.menu itself. Asserted by calling _fetch with
-     the UI methods replaced by tripwires.
-  4. _drain_ui keeps draining after one queued callback raises — otherwise a
-     single bad update would strand every later fetch's result behind it.
-  5. A failing notification does not stop the work after it.
-  6. The _check_row three-state label, and that its wording matches
-     linux/tray.py's — read from that file's source at test time, never
-     retyped, so a row reworded in one file and forgotten in the other fails
-     a test instead of drifting.
+  2. call_on_ui_thread/schedule/_drain_ui: the worker -> UI queue+timer poll
+     rumps' lack of an idle_add equivalent forces, including that
+     _drain_ui keeps draining after one queued callback raises — otherwise
+     a single bad update would strand every later fetch's result behind
+     it.
+  3. set_icon is a genuine no-op (this file has never rendered pixel icon
+     state) and set_title ignores the generic text it is handed and
+     renders model.macos_title from the controller's own state instead —
+     see menubar.py's own module docstring for why.
+  4. notify maps a shared Alert(title, body) onto rumps.notification's
+     3-field (title, subtitle, body) call with subtitle always "", and
+     swallows a failing call so it can never abort whatever the caller
+     does next.
+  5. _rebuild_menu turns controller state (accounts, openai, update_pending
+     /update_blocked, the check row, a sticky switch_error) into the right
+     rumps.MenuItem rows with the right callback-or-None.
+  6. The switch flow (_make_switch/_apply_switch_error) is DELIBERATELY
+     NOT routed through TrayController.on_switch/_set_action_error — see
+     menubar.py's own module docstring for the blocker this hits (that
+     shared path neither notifies nor rebuilds the menu, which this
+     front-end's panel-less UI depends on for a failure to be visible at
+     all). Covered here in full, since nothing in test_tray_controller.py
+     exercises it.
+
+Deliberately NOT covered here (pinned once in tests/test_tray_controller.py
+instead): the generation guard, _apply_snapshot/_apply_error's field
+mutations and call ordering, the check-update three-state stickiness and
+its stale-token guards, RecapturePolicy pacing, and _pending_update's
+delegation to update_runner.
 
 Deliberately NOT covered: anything about a real NSStatusBar, real menu
 rendering, or NSTimer scheduling. A test built on the fake rumps would be
@@ -33,16 +54,13 @@ from __future__ import annotations
 
 import importlib
 import os
-import queue
 import sys
-import types
 import unittest
 from unittest import mock
 
 import smartbar
+from tests.support import stubs
 
-LINUX_TRAY_PATH = os.path.join(os.path.dirname(smartbar.__file__), "linux",
-                               "tray.py")
 SWIFT_STORE_PATH = os.path.join(os.path.dirname(os.path.dirname(smartbar.__file__)),
                                 "macos-swift", "Sources", "AISmartbar", "UsageStore.swift")
 
@@ -79,14 +97,8 @@ class _FakeMenuItem:
 
 
 def _install_fake_rumps():
-    fake = types.ModuleType("rumps")
-    fake.App = _FakeApp
-    fake.Timer = _FakeTimer
-    fake.MenuItem = _FakeMenuItem
-    fake.notification = mock.Mock()
-    fake.quit_application = mock.Mock()
-    sys.modules["rumps"] = fake
-    return fake
+    return stubs.install_rumps(app_cls=_FakeApp, timer_cls=_FakeTimer,
+                               menuitem_cls=_FakeMenuItem)
 
 
 class MenubarTestCase(unittest.TestCase):
@@ -113,7 +125,6 @@ class MenubarTestCase(unittest.TestCase):
     def build(self):
         """A SmartBarApp whose constructor starts no threads and reads no state."""
         with mock.patch.object(self.menubar.threading, "Thread") as thread, \
-             mock.patch.object(self.menubar, "_noop_marker", create=True), \
              mock.patch("smartbar.update_runner.pending_for_ui",
                         return_value=("", "")):
             app = self.menubar.SmartBarApp()
@@ -123,12 +134,17 @@ class MenubarTestCase(unittest.TestCase):
         return app
 
 
-def snapshot(active_email="a@x.com"):
+def account(number, email="a@x.com", active=False, status="ok", metrics=None):
     from smartbar.core import model
-    acct = model.Account(number=1, email=active_email, ok=True, status="ok",
-                         active=True)
+    return model.Account(number=number, email=email, active=active, status=status,
+                         ok=(status == "ok"),
+                         metrics=metrics if metrics is not None else [])
+
+
+def snapshot(*accounts):
+    from smartbar.core import model
     snap = model.Snapshot()
-    snap.accounts.append(acct)
+    snap.accounts = list(accounts) or [account(1, "a@x.com", active=True)]
     return snap
 
 
@@ -148,162 +164,248 @@ class TestImportsAndBuilds(MenubarTestCase):
         self.assertIsInstance(self.menubar.log, logging.Logger)
         self.assertTrue(self.menubar.LOG_FILE.endswith("tray.log"))
 
-
-class TestGenerationGuard(MenubarTestCase):
-    """A slow pre-switch fetch must not land after the switch."""
-
-    def test_a_superseded_snapshot_is_dropped(self):
+    def test_building_wires_a_tray_controller_as_its_own_host(self):
+        from smartbar.core.tray_controller import TrayController
         app = self.build()
-        app.generation = 7
-        app.title = "kept"
-        app._apply_snapshot(snapshot("stale@x.com"), 6)
-        self.assertIsNone(app.snapshot)
-        self.assertEqual(app.title, "kept")
+        self.assertIsInstance(app.controller, TrayController)
+        self.assertIs(app.controller.host, app)
 
-    def test_the_current_snapshot_is_applied(self):
+
+# --- TrayHost: thread -> UI handoff -----------------------------------------
+
+class TestThreadHandoff(MenubarTestCase):
+    def test_call_on_ui_thread_queues_rather_than_runs_inline(self):
         app = self.build()
-        app.generation = 7
-        with mock.patch("smartbar.update_runner.pending_for_ui",
-                        return_value=("", "")):
-            app._apply_snapshot(snapshot("fresh@x.com"), 7)
-        self.assertIsNotNone(app.snapshot)
-        self.assertEqual(app.snapshot.accounts[0].email, "fresh@x.com")
+        seen = []
+        app.call_on_ui_thread(seen.append, "queued")
+        self.assertEqual(seen, [])
+        app._drain_ui(None)
+        self.assertEqual(seen, ["queued"])
 
-    def test_a_superseded_error_does_not_bump_the_failure_count(self):
-        app = self.build()
-        app.generation = 4
-        app._apply_error(3)
-        self.assertEqual(app.failures, 0)
-
-    def test_each_tick_takes_a_new_generation(self):
-        app = self.build()
-        before = app.generation
-        with mock.patch.object(self.menubar.threading, "Thread"):
-            app._tick(None)
-        self.assertEqual(app.generation, before + 1)
-
-
-class TestWorkerNeverTouchesAppKit(MenubarTestCase):
-    """_fetch runs on a daemon thread. AppKit is not thread-safe for UI
-    mutation, so the result has to go through _to_main."""
-
-    def test_fetch_hands_the_snapshot_to_the_main_thread(self):
-        app = self.build()
-        snap = snapshot()
-        tripwire = mock.Mock(side_effect=AssertionError("touched UI directly"))
-        with mock.patch.object(self.menubar.cswap, "fetch", return_value=snap), \
-             mock.patch.object(self.menubar.presence, "apply_counts"), \
-             mock.patch.object(self.menubar.plan, "apply_plans"), \
-             mock.patch.object(self.menubar.codex, "accounts", return_value=[]), \
-             mock.patch.object(self.menubar.presence_client, "beat"), \
-             mock.patch.object(type(app), "_rebuild_menu", tripwire):
-            app._fetch(app.generation)
-        queued = app._ui_queue.get_nowait()
-        # __func__, not the bound method: attribute access builds a NEW bound
-        # method object every time, so `is` can never hold on one.
-        self.assertIs(queued[0].__func__, type(app)._apply_snapshot)
-        self.assertIs(queued[1][0], snap)
-
-    def test_a_failed_fetch_also_goes_through_the_queue(self):
-        app = self.build()
-        with mock.patch.object(self.menubar.cswap, "fetch",
-                               side_effect=self.menubar.cswap.CswapError("nope")):
-            app._fetch(app.generation)
-        queued = app._ui_queue.get_nowait()
-        self.assertIs(queued[0].__func__, type(app)._apply_error)
-
-
-class TestDrainSurvivesABadCallback(MenubarTestCase):
     def test_one_raising_callback_does_not_strand_the_rest(self):
         """Otherwise a single bad update freezes every later fetch's result."""
         app = self.build()
         seen = []
-        app._to_main(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-        app._to_main(seen.append, "second")
+        app.call_on_ui_thread(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        app.call_on_ui_thread(seen.append, "second")
         app._drain_ui(None)
         self.assertEqual(seen, ["second"])
         self.assertTrue(app._ui_queue.empty())
 
-
-class TestNotificationsAreGuarded(MenubarTestCase):
-    def test_a_failing_notification_does_not_stop_the_work_after_it(self):
-        """rumps.notification raises with no bundle id or no permission —
-        both normal for a locally built app. Unguarded it skipped the
-        _maybe_recapture call directly below it in _apply_snapshot."""
+    def test_schedule_fires_call_on_ui_thread_after_a_real_delay(self):
+        """schedule() has to reach the UI thread through the same queued
+        path as everything else — a bare threading.Timer target would
+        touch app state straight from the timer thread."""
         app = self.build()
-        app.generation = 1
+        with mock.patch.object(self.menubar.threading, "Timer") as timer_cls:
+            app.schedule(20, app.call_on_ui_thread, "unused")
+        timer_cls.assert_called_once()
+        args, kwargs = timer_cls.call_args
+        self.assertEqual(args[0], 20)
+        self.assertEqual(kwargs["args"][0], app.call_on_ui_thread)
+        self.assertTrue(timer_cls.return_value.daemon)
+        timer_cls.return_value.start.assert_called_once()
+
+
+# --- TrayHost: notify --------------------------------------------------------
+
+class TestNotify(MenubarTestCase):
+    def test_maps_a_shared_alert_onto_the_three_field_rumps_call(self):
+        from smartbar.core.alerts import Alert
+        app = self.build()
+        app.notify(Alert(title="AI smartbar update", body="1.2.3 is ready."))
+        self.rumps.notification.assert_called_once_with(
+            "AI smartbar update", "", "1.2.3 is ready.")
+
+    def test_a_failing_notification_is_caught_and_logged_not_raised(self):
+        from smartbar.core.alerts import Alert
+        app = self.build()
         self.rumps.notification.side_effect = RuntimeError("no bundle id")
-        alert = types.SimpleNamespace(title="t", body="b")
-        with mock.patch.object(app.alerts, "check", return_value=[alert]), \
-             mock.patch.object(type(app), "_maybe_recapture") as recapture, \
-             mock.patch("smartbar.update_runner.pending_for_ui",
-                        return_value=("", "")):
-            app._apply_snapshot(snapshot(), 1)
-        recapture.assert_called_once()
+        app.notify(Alert(title="t", body="b"))   # must not raise
 
 
-class TestCheckUpdateRow(MenubarTestCase):
-    """macOS had no manual update-check row at all; Linux and Windows both
-    do, so a rumps device sat up to 6h behind with no way to ask."""
+# --- TrayHost: icon / title ---------------------------------------------------
 
-    def test_the_row_has_three_states(self):
+class TestSetIcon(MenubarTestCase):
+    def test_set_icon_is_a_documented_no_op(self):
+        """This file has never rendered pixel icon state; the controller
+        still calls this uniformly across all three hosts."""
         app = self.build()
-        label, callback = app._check_row()
-        self.assertEqual(label, "⇅ Check for updates")
-        self.assertIsNotNone(callback)
+        before = app.title
+        app.set_icon([(0.5, "green")], True)   # must not raise
+        self.assertEqual(app.title, before)
 
-        app.checking = True
-        label, callback = app._check_row()
-        self.assertEqual(label, "⇅ Checking for updates…")
-        self.assertIsNone(callback)   # un-clickable while in flight
 
-        app.checking = False
-        app.check_result = "✓ Up to date"
-        label, callback = app._check_row()
-        self.assertEqual(label, "✓ Up to date")
-        self.assertIsNone(callback)
+class TestSetTitle(MenubarTestCase):
+    """set_title ignores the generic `text` it is handed and renders
+    model.macos_title from the controller's own state instead -- the
+    short glyph+text form the menu bar (the only visible surface here)
+    needs, unlike Linux's tooltip or Windows' szTip."""
 
-    def test_its_labels_match_the_linux_tray_word_for_word(self):
-        """Source-scraped, not retyped: a reworded row on one front-end and
-        not the other is drift a reader would never notice."""
-        with open(LINUX_TRAY_PATH, encoding="utf-8") as handle:
-            linux = handle.read()
-        for label in ("⇅ Check for updates", "⇅ Checking for updates…"):
-            self.assertIn(label, linux)
-        with open(self.menubar.__file__, encoding="utf-8") as handle:
-            mac = handle.read()
-        for label in ("⇅ Check for updates", "⇅ Checking for updates…"):
-            self.assertIn(label, mac)
-
-    def test_a_stale_check_result_is_ignored(self):
+    def test_below_the_failure_threshold_it_renders_macos_title(self):
+        from smartbar.core import model
         app = self.build()
-        app.check_token = 3
-        app.checking = True
-        app._checked(2, {"label": "✓ Up to date"})
-        self.assertTrue(app.checking)      # untouched by the superseded reply
-        self.assertEqual(app.check_result, "")
+        app.controller.failures = 0
+        app.controller.snapshot = snapshot(account(1, "a@x.com", active=True))
+        app.set_title("ignored generic text")
+        self.assertEqual(app.title, model.macos_title(
+            app.controller.snapshot.active_account))
 
-    def test_a_broken_reply_becomes_the_check_failed_row(self):
+    def test_no_snapshot_yet_renders_macos_title_of_none(self):
+        from smartbar.core import model
         app = self.build()
-        app.check_token = 1
-        with mock.patch("smartbar.update_runner.pending_for_ui",
-                        return_value=("", "")), \
-             mock.patch.object(self.menubar.threading, "Timer"):
-            app._checked(1, None)
-        self.assertEqual(app.check_result, "✕ Check failed")
-        self.assertFalse(app.checking)
+        app.controller.failures = 0
+        app.controller.snapshot = None
+        app.set_title("ignored")
+        self.assertEqual(app.title, model.macos_title(None))
 
+    def test_at_the_failure_threshold_it_shows_the_unknown_glyph_instead(self):
+        app = self.build()
+        app.controller.failures = 3
+        app.controller.snapshot = snapshot(account(1, "a@x.com", active=True))
+        app.set_title("AI smartbar — cswap error: boom")
+        self.assertEqual(app.title, "⚪ ?")
+
+
+class TestRebuildMenuDelegates(MenubarTestCase):
+    def test_rebuild_menu_calls_the_same_builder_the_constructor_used(self):
+        app = self.build()
+        with mock.patch.object(type(app), "_rebuild_menu") as inner:
+            app.rebuild_menu()
+        inner.assert_called_once_with()
+
+
+# --- TrayHost: the manual check row -----------------------------------------
+
+class TestCheckUpdateArgv(MenubarTestCase):
+    def test_no_sys_executable_prefix_unlike_windows(self):
+        """POSIX shebang execution needs no interpreter prefix, unlike
+        windows/tray.py's check_update_argv."""
+        app = self.build()
+        self.assertEqual(app.check_update_argv(),
+                         [self.menubar.LAUNCHER, "--check-update", "--json"])
+
+    def test_the_check_row_click_delegates_to_the_controller(self):
+        app = self.build()
+        with mock.patch.object(app.controller, "_on_check_update") as on_check:
+            app._on_check_update(None)
+        on_check.assert_called_once_with()
+
+
+class TestTicksDelegateToController(MenubarTestCase):
+    def test_the_recurring_tick_delegates(self):
+        app = self.build()
+        with mock.patch.object(app.controller, "_tick") as tick:
+            app._tick(None)
+        tick.assert_called_once_with()
+
+    def test_the_presence_tick_beats_with_the_controllers_snapshot(self):
+        app = self.build()
+        app.controller.snapshot = "sentinel-snapshot"
+        with mock.patch.object(self.menubar.presence_client, "beat") as beat:
+            app._presence_tick(None)
+        beat.assert_called_once_with("sentinel-snapshot")
+
+
+# --- menu construction --------------------------------------------------------
+
+class TestMenuConstruction(MenubarTestCase):
+    def test_loading_state_with_no_snapshot_yet(self):
+        app = self.build()
+        app.controller.snapshot = None
+        app._rebuild_menu()
+        self.assertEqual(app.menu[0].title, "Loading…")
+
+    def test_the_active_row_and_a_dead_credential_are_not_clickable(self):
+        from smartbar.core import model
+        app = self.build()
+        app.controller.snapshot = snapshot(
+            account(1, "active@x.com", active=True),
+            account(2, "dead@x.com", status="relogin_required"),
+            account(3, "healthy@x.com"))
+        app._rebuild_menu()
+        rows = {item.title: item.callback for item in app.menu
+               if isinstance(item, self.menubar.rumps.MenuItem)}
+        active_row = model.menu_row(app.controller.snapshot.accounts[0])
+        dead_row = model.menu_row(app.controller.snapshot.accounts[1])
+        healthy_row = model.menu_row(app.controller.snapshot.accounts[2])
+        self.assertIsNone(rows[active_row])
+        self.assertIsNone(rows[dead_row])
+        self.assertIsNotNone(rows[healthy_row])
+
+    def test_openai_accounts_render_as_a_read_only_section(self):
+        from smartbar.core import model
+        app = self.build()
+        snap = snapshot(account(1, "a@x.com", active=True))
+        snap.openai = [model.Account(number=0, email="b@x.com", provider="openai")]
+        app.controller.snapshot = snap
+        app._rebuild_menu()
+        titles = [item.title for item in app.menu if item is not None]
+        self.assertIn("OpenAI", titles)
+        openai_row = next(item for item in app.menu
+                          if item is not None and "b@x.com" in item.title)
+        self.assertIsNone(openai_row.callback)
+
+    def test_update_pending_row_is_clickable_and_triggers_apply(self):
+        app = self.build()
+        app.controller.snapshot = snapshot()
+        app.controller.update_pending = "9.9.9"
+        app._rebuild_menu()
+        row = next(i for i in app.menu if i is not None and "9.9.9" in i.title)
+        self.assertEqual(row.callback, app._on_update)
+
+    def test_update_blocked_row_has_no_callback(self):
+        app = self.build()
+        app.controller.snapshot = snapshot()
+        app.controller.update_pending = ""
+        app.controller.update_blocked = "dirty checkout"
+        app._rebuild_menu()
+        row = next(i for i in app.menu
+                  if i is not None and "dirty checkout" in i.title)
+        self.assertIsNone(row.callback)
+
+    def test_the_check_row_reflects_the_controllers_three_states(self):
+        app = self.build()
+        app.controller.snapshot = snapshot()
+
+        app.controller.checking = False
+        app.controller.check_result = ""
+        app._rebuild_menu()
+        row = next(i for i in app.menu if i is not None and "Check for updates" in i.title)
+        self.assertEqual(row.callback, app._on_check_update)
+
+        app.controller.checking = True
+        app._rebuild_menu()
+        row = next(i for i in app.menu if i is not None and "Checking" in i.title)
+        self.assertIsNone(row.callback)
+
+        app.controller.checking = False
+        app.controller.check_result = "✓ Up to date"
+        app._rebuild_menu()
+        row = next(i for i in app.menu if i is not None and i.title == "✓ Up to date")
+        self.assertIsNone(row.callback)
+
+    def test_the_trailing_rows_are_always_present(self):
+        app = self.build()
+        app.controller.snapshot = snapshot()
+        app._rebuild_menu()
+        titles = [i.title for i in app.menu if i is not None]
+        self.assertIn("⟳ Refresh now", titles)
+        self.assertIn("⚙ Open cswap TUI", titles)
+        self.assertIn("⏻ Quit", titles)
+
+
+# --- the switch flow: deliberately host-owned, not on TrayController ---------
 
 class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
-    """_make_switch used to do
-
-        except cswap.CswapError as exc: log.warning(...)
-
-    and then just refetch: the click closed the menu, the switch failed,
-    and the redraw looked identical to success. Mirrors UsageStore.swift's
-    sticky switchError -- cleared only when a switch is attempted again,
-    not by the next periodic refresh -- because that refresh is the one
-    thing that must NOT erase the very error it is about to redraw around.
+    """_make_switch/_apply_switch_error stay host-owned rather than routing
+    through TrayController.on_switch/_set_action_error -- see menubar.py's
+    own module docstring for why (that shared path neither notifies nor
+    rebuilds the menu, which this front-end's panel-less UI needs for a
+    failure to be visible at all). Mirrors UsageStore.swift's sticky
+    switchError -- cleared only when a switch is attempted again, not by
+    the next periodic refresh -- because that refresh is the one thing
+    that must NOT erase the very error it is about to redraw around.
     """
 
     def _run_switch(self, app, number, thread):
@@ -315,15 +417,17 @@ class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
         app = self.build()
         with mock.patch.object(self.menubar.threading, "Thread") as thread, \
              mock.patch.object(self.menubar.cswap, "switch",
-                               side_effect=self.menubar.cswap.CswapError("in use")):
+                               side_effect=self.menubar.cswap.CswapError("in use")), \
+             mock.patch.object(app.controller, "_start_fetch"):
             self._run_switch(app, 2, thread)
-            # Not applied yet: the failure crossed back through _to_main,
-            # same as every other worker -> UI handoff in this file.
+            # Not applied yet: the failure crossed back through
+            # call_on_ui_thread, same as every other worker -> UI handoff.
             self.assertEqual(app.switch_error, "")
             app._drain_ui(None)
         self.assertEqual(app.switch_error, "Switch failed: in use")
         self.rumps.notification.assert_called_once()
-        _, _, body = self.rumps.notification.call_args.args
+        title, subtitle, body = self.rumps.notification.call_args.args
+        self.assertEqual(title, "AI smartbar")
         self.assertIn("in use", body)
 
     def test_the_sticky_row_sits_above_the_account_list(self):
@@ -332,14 +436,14 @@ class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
         row to place it under."""
         app = self.build()
         app.switch_error = "Switch failed: in use"
-        app.snapshot = snapshot()
+        app.controller.snapshot = snapshot()
         app._rebuild_menu()
         self.assertEqual(app.menu[0].title, "✕ Switch failed: in use")
 
     def test_a_new_switch_attempt_clears_the_previous_sticky_error(self):
         """The clear happens the instant the row is clicked (main thread),
         before the worker even starts -- the optimistic clear UsageStore
-        does at UsageStore.swift:161, ahead of its own Task."""
+        does in switchTo's `switchError = nil`, ahead of its own Task."""
         app = self.build()
         app.switch_error = "Switch failed: in use"
         with mock.patch.object(self.menubar.threading, "Thread"), \
@@ -350,15 +454,28 @@ class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
     def test_a_successful_switch_never_notifies(self):
         app = self.build()
         with mock.patch.object(self.menubar.threading, "Thread") as thread, \
-             mock.patch.object(self.menubar.cswap, "switch"):
+             mock.patch.object(self.menubar.cswap, "switch"), \
+             mock.patch.object(app.controller, "_start_fetch"):
             self._run_switch(app, 2, thread)
             app._drain_ui(None)
         self.assertEqual(app.switch_error, "")
         self.rumps.notification.assert_not_called()
 
+    def test_every_attempt_refetches_win_or_lose(self):
+        """TrayController._start_fetch is safe from any thread (see its
+        own docstring) -- called directly from the worker, unlike the old
+        code's marshal-then-_tick indirection, with the same end result:
+        a new fetch generation either way."""
+        app = self.build()
+        with mock.patch.object(self.menubar.threading, "Thread") as thread, \
+             mock.patch.object(self.menubar.cswap, "switch",
+                               side_effect=self.menubar.cswap.CswapError("in use")), \
+             mock.patch.object(app.controller, "_start_fetch") as start_fetch:
+            self._run_switch(app, 2, thread)
+        start_fetch.assert_called_once_with()
+
     def test_the_failure_wording_matches_the_swift_store_word_for_word(self):
-        """Source-scraped like TestCheckUpdateRow's Linux comparison: a
-        reworded message in one front-end and not the other is drift a
+        """A reworded message in one front-end and not the other is drift a
         reader would never notice."""
         with open(SWIFT_STORE_PATH, encoding="utf-8") as handle:
             swift = handle.read()
@@ -366,18 +483,6 @@ class TestSwitchFailureIsNoLongerSilent(MenubarTestCase):
         with open(self.menubar.__file__, encoding="utf-8") as handle:
             mac = handle.read()
         self.assertIn('f"Switch failed: {message}"', mac)
-
-
-class TestPendingUpdateIsShared(MenubarTestCase):
-    def test_it_delegates_to_the_one_shared_reader(self):
-        """All three front-ends had their own copy of this; the macOS one had
-        already lost the blocked half."""
-        app = self.build()
-        with mock.patch("smartbar.update_runner.pending_for_ui",
-                        return_value=("9.9.9", "dirty checkout")) as reader:
-            self.assertEqual(app._pending_update(), "9.9.9")
-        reader.assert_called_once_with()
-        self.assertEqual(app.update_blocked, "dirty checkout")
 
 
 if __name__ == "__main__":

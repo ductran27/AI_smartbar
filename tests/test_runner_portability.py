@@ -27,8 +27,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from smartbar import presence_client, presence_runner, update_runner
+from smartbar import presence_client, update_runner
 from smartbar.core import paths
+from tests.support import stubs
 
 
 @contextlib.contextmanager
@@ -46,11 +47,16 @@ def _reloaded(module_name, *, platform=None, env=None, fcntl_missing=False):
     exactly the kind of cross-test leak `python3 -m unittest discover`
     would only reveal by file-order flakiness, not by this file failing on
     its own.
+
+    `fcntl_missing` goes through tests/support/stubs.py's missing_module()
+    -- the same "mark this sys.modules entry as a known-absent import"
+    idiom the GUI-stubbed test files use to fake out a toolkit, just
+    applied to stdlib fcntl instead of a third-party GUI library. See that
+    function's own docstring for exactly what it pins.
     """
     saved_module = sys.modules.pop(module_name, None)
     saved_platform = paths.sys.platform
     saved_env = {name: os.environ.get(name) for name in (env or {})}
-    saved_fcntl = sys.modules.get("fcntl", "not-set")
     if platform is not None:
         paths.sys.platform = platform
     for name, value in (env or {}).items():
@@ -58,30 +64,21 @@ def _reloaded(module_name, *, platform=None, env=None, fcntl_missing=False):
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
-    if fcntl_missing:
-        # The documented CPython mechanism for marking a module "known
-        # missing": any `import fcntl` anywhere sees sys.modules["fcntl"]
-        # is None and raises ImportError immediately, instead of Python
-        # re-running the real (present-on-this-dev-machine) fcntl
-        # extension. It is the only way to prove a module-scope import was
-        # actually removed rather than merely unexercised by this test.
-        sys.modules["fcntl"] = None
-    try:
-        yield importlib.import_module(module_name)
-    finally:
-        paths.sys.platform = saved_platform
-        for name, value in saved_env.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-        if saved_fcntl == "not-set":
-            sys.modules.pop("fcntl", None)
-        else:
-            sys.modules["fcntl"] = saved_fcntl
-        sys.modules.pop(module_name, None)
-        if saved_module is not None:
-            sys.modules[module_name] = saved_module
+    with contextlib.ExitStack() as stack:
+        if fcntl_missing:
+            stack.enter_context(stubs.missing_module("fcntl"))
+        try:
+            yield importlib.import_module(module_name)
+        finally:
+            paths.sys.platform = saved_platform
+            for name, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            sys.modules.pop(module_name, None)
+            if saved_module is not None:
+                sys.modules[module_name] = saved_module
 
 
 class TestImportSurvivesWithoutFcntl(unittest.TestCase):
@@ -391,7 +388,7 @@ class TestRunInstallerForPowerShell(unittest.TestCase):
 
     def test_argv_is_the_powershell_invocation_and_apply_env_is_set(self):
         with mock.patch.object(update_runner.shutil, "which",
-                               return_value="/usr/bin/pwsh") as fake_run, \
+                               return_value="/usr/bin/pwsh"), \
              self._ok_run() as fake_subprocess_run:
             update_runner.run_installer("windows")
         argv = fake_subprocess_run.call_args.args[0]

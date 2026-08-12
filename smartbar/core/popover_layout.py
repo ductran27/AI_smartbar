@@ -479,8 +479,9 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
                      + t.BUTTON_H / 2)
         keep_l = _button(shapes, hits, "cancel-remove", inner_r, button_cy,
                          "Keep", hover=hover, tooltip="Keep this account")
-        # Wording from AccountCardView.swift:184-186's .help(), which
-        # differs by provider: an OpenAI card has no re-registration story.
+        # Wording from AccountCardView.confirmHeader's Remove button's
+        # .help(), which differs by provider: an OpenAI card has no
+        # re-registration story.
         confirm_tip = (
             "Forget this card (labels and last numbers). Signing in with "
             "Codex brings it back" if provider == "openai" else
@@ -516,7 +517,8 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         # A dead stored credential must not be switchable: activating it
         # would restore a login Anthropic already rejected.
         blocked = model.switch_blocked(account)
-        # Wording from AccountCardView.swift:159-161's .help().
+        # Wording from AccountCardView.cardHeader's "Make Active" button's
+        # .help().
         switch_tip = (
             f"Stored credential is dead — switching would log Claude Code "
             f"out. {model.state_text(account)}." if blocked else
@@ -541,7 +543,8 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
                               t.TEXT if hover == f"remove:{pid}"
                               else t.TEXT_TERTIARY))
-        # Wording from AccountCardView.swift:139's .help().
+        # Wording from AccountCardView.cardHeader's remove (✕) button's
+        # .help().
         hits.append(t.Hit(f"remove:{pid}", cx - t.REMOVE_HIT / 2,
                           head_cy - t.REMOVE_HIT / 2,
                           t.REMOVE_HIT, t.REMOVE_HIT,
@@ -627,7 +630,7 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
 
     `action_error` renders a dismissible one-line banner (hit
     "dismiss-error") under the header/tabs for the most recent switch or
-    remove failure — mirrors PopoverView.swift:28's `switchError ??
+    remove failure — mirrors PopoverView.body's `switchError ??
     removeError`. `refreshing` dims the ⟳ glyph and disables its hit so a
     second click cannot queue a second fetch while one is in flight
     (mirrors `.disabled(store.isRefreshing)`).
@@ -670,7 +673,8 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         shapes.append(t.Label(stale_x, head_cy, "stale", size=t.SIZE_CAPTION,
                               color=t.WARNING))
         # Non-action hit (see t.Hit) purely so a front-end can show WHY on
-        # hover — mirrors store.lastError on PopoverView.swift:206.
+        # hover — mirrors store.lastError on PopoverView.header's
+        # stale-icon .help().
         stale_w = t.text_width("stale", t.SIZE_CAPTION)
         hits.append(t.Hit("stale", stale_x, head_cy - t.ICON_BUTTON_W / 2,
                           stale_w, t.ICON_BUTTON_W,
@@ -679,8 +683,9 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     for name, offset in (("quit", 0.0), ("refresh", t.ICON_BUTTON_W)):
         cx = right - offset - t.ICON_BUTTON_W / 2
         # Refreshing dims the glyph AND disables its hit (mirrors
-        # .disabled(store.isRefreshing), PopoverView.swift:220) so a
-        # second click while a fetch is in flight cannot queue another.
+        # .disabled(store.isRefreshing) on PopoverView.header's refresh
+        # button) so a second click while a fetch is in flight cannot
+        # queue another.
         busy = refreshing and name == "refresh"
         color = (t.TEXT_TERTIARY if busy
                  else (1, 1, 1, 1) if hover == name else t.TEXT)
@@ -735,7 +740,7 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         cursor += t.TAB_H + t.SECTION_GAP
     if action_error:
         # One error line for whichever card action failed most recently —
-        # mirrors PopoverView.swift:28's `switchError ?? removeError`, in
+        # mirrors PopoverView.body's `switchError ?? removeError`, in
         # the same spot: under the header/tabs, above the account list.
         gutter = t.REMOVE_HIT + 6   # dismiss "x", same math as a card's ✕
         text_w = right - t.PAD - gutter
@@ -791,8 +796,9 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         shapes.append(t.Label(t.PAD, foot_cy, label, size=t.SIZE_CAPTION,
                               color=t.TEXT_TERTIARY))
         if blocked_reason:
-            # Non-action hit: PopoverView.swift:136 shows the actual
-            # reason on hover rather than a bare "update held" label.
+            # Non-action hit: PopoverView.footer's "Update held" label's
+            # .help() shows the actual reason on hover rather than a bare
+            # "update held" label.
             label_w = t.text_width(label, t.SIZE_CAPTION)
             hits.append(t.Hit("update-held", t.PAD, foot_cy - t.FOOTER_H / 2,
                               label_w, t.FOOTER_H,

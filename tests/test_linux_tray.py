@@ -8,35 +8,51 @@ file, cairo itself is NOT faked: pycairo IS installed in this environment,
 so smartbar.paint.tray_icon/popover_draw import and run for real underneath
 the fake toolkit.
 
+The fetch/apply/alert/recapture/check-update state machine itself now lives
+in smartbar.core.tray_controller (TrayController) and is pinned exactly
+once, there, in tests/test_tray_controller.py -- see that file's own
+docstring. What THIS file pins instead is the GTK-facing half: the TrayHost
+contract's concrete binding, and whatever stays genuinely GTK-shaped and
+therefore cannot move into the controller at all.
+
 What is pinned here, and why:
 
   1. Both modules import cleanly under the fake gi, and Popover actually
      subclasses the stubbed Gtk.Window (a real class, not a MagicMock --
      Python cannot use a bare Mock instance as a base class).
-  2. _popover_layout() forwards action_error/refreshing/stale_reason to
-     popover_layout.build() -- these three keyword-only parameters exist
-     precisely so a front-end can wire them, and a front-end that builds
-     the kwargs by hand is exactly the kind of thing that silently drifts.
-  3. The "sticky until the next attempt" contract for action_error
-     (mirrors UsageStore.swift:15-16): a switch/remove failure sets it,
-     armed BEFORE the network call so a stale error never survives a new
-     attempt in flight, cleared by the "dismiss-error" hit.
-  4. Every UI mutation a switch/remove failure makes happens through
-     GLib.idle_add rather than directly on the worker thread -- GLib.idle_add
-     is a plain recorder here (it does NOT auto-run its callback), so a
-     regression that pokes self.action_error straight from run() would
-     leave action_error empty until the test manually drains the recorder,
-     which is exactly what TestActionErrorGoesThroughIdleAdd checks for.
-  5. The refreshing flag: raised synchronously by _start_fetch, cleared by
-     _apply_snapshot/_apply_error ONLY when the generation still matches --
-     a superseded (late, pre-switch) fetch landing must not clear a NEWER
-     fetch's own in-flight flag.
-  6. The optimistic ACTIVE flip on switch (mirrors UsageStore.swift:
-     159-166): the account list flips and self.generation is bumped
-     synchronously, before the background cswap.switch() call even starts,
-     so a slow pre-switch fetch that lands afterwards is dropped by the
-     existing generation guard instead of clobbering the guess.
-  7. Per-hit tooltips (FINDING 8). The panel is one DrawingArea, so GTK
+  2. _popover_layout() forwards action_error/refreshing/stale_reason --
+     now read off self.controller rather than plain instance attributes --
+     to popover_layout.build(); a front-end that builds the kwargs by hand
+     is exactly the kind of thing that silently drifts.
+  3. TrayHost.call_on_ui_thread/schedule's concrete GTK binding:
+     call_on_ui_thread must BE GLib.idle_add (not merely call it once and
+     hope), and schedule must fire its callback exactly once through
+     GLib.timeout_add_seconds without asking GLib to repeat it -- these
+     are the highest-risk edits in the whole refactor (the controller
+     depends on this seam for every worker-thread -> UI-thread touch a
+     fetch, switch, remove, recapture or check-update makes).
+  4. set_icon's on-disk filename alternation: AppIndicator.set_icon_full
+     ignores a call whose icon name did not change, so a single fixed name
+     would never repaint -- pinned by asserting two successive calls use
+     different names drawn from exactly {state-a, state-b}.
+  5. notify()'s urgency -> icon-name mapping (dialog-warning for
+     'critical', dialog-information for 'normal') and its notify-send
+     subprocess fallback when libnotify could not be initialised.
+  6. rebuild_menu()'s pending-menu-until-hide swap: reassigning the menu
+     out from under an open one closes it on some shells, so a mapped menu
+     must hold the rebuild in self.pending_menu instead of installing it,
+     and the 'hide' signal is what installs it afterwards.
+  7. The optimistic ACTIVE flip's repaint (_flip_active_optimistically):
+     genuinely host-bound per the design's own divergence note (Linux
+     applies it synchronously; only the flip's platform-specific side --
+     moving account.active, then repainting through set_icon/set_title/
+     rebuild_menu/panel-refresh -- lives here; WHEN it runs is
+     TrayController.on_switch's job, pinned in test_tray_controller.py).
+  8. The dispatch table in _on_popover_action and the thin delegating
+     call sites (_on_switch, _on_check_update, _on_refresh, _quit) reach
+     the right controller call with the right arguments -- the decision
+     logic behind each call is the controller's, pinned there instead.
+  9. Per-hit tooltips (FINDING 8). The panel is one DrawingArea, so GTK
      has no widget tree to hang a tooltip on: set_has_tooltip(True) plus a
      query-tooltip handler that hit-tests the pointer itself is the only
      way in. An earlier version of this file also pinned a _clamp_y
@@ -45,7 +61,7 @@ What is pinned here, and why:
      pointer-following placement with top-right + drag + a remembered
      origin, so pin_origin now returns `top + margin` and the header
      cannot leave the work area by construction.
-  8. FINDING 9's other half -- an overtall panel's FOOTER running past
+  10. FINDING 9's other half -- an overtall panel's FOOTER running past
      the bottom of the work area -- and the scrolling viewport that now
      catches it, matching the Windows panel. What is worth pinning is
      not the cap arithmetic but the coordinate translation: the PAINT is
@@ -67,15 +83,14 @@ module was ever imported in this process.
 from __future__ import annotations
 
 import contextlib
-import importlib
 import inspect
-import sys
 import types
 import unittest
 from unittest import mock
 
 from smartbar.core import model
 from smartbar.core import popover_layout as layout
+from tests.support import stubs
 
 
 class _RecordingTooltip:
@@ -127,154 +142,23 @@ def _wheel(direction, deltas=None):
                                  get_scroll_deltas=lambda: deltas)
 
 
-def _install_gi_stubs():
-    """Fake gi/gi.repository.{Gtk,Gdk,GLib,AyatanaAppIndicator3} into
-    sys.modules. cairo is left alone -- it is really installed here."""
-    gi = types.ModuleType("gi")
-    gi.require_version = lambda *_a, **_k: None
-    sys.modules["gi"] = gi
-
-    repository = types.ModuleType("gi.repository")
-    sys.modules["gi.repository"] = repository
-    gi.repository = repository
-
-    class _FakeWidget:
-        """A real class, not a MagicMock: Popover(Gtk.Window) subclasses
-        this at class-definition time (import time), and a bare Mock()
-        instance cannot be used as a base class -- "metaclass conflict"."""
-
-        def __init__(self, *a, **k):
-            pass
-
-        def __getattr__(self, name):
-            def _method(*a, **k):
-                return None
-            return _method
-
-    class _Window(_FakeWidget):
-        pass
-
-    class _DrawingArea(_FakeWidget):
-        pass
-
-    class _MenuItem:
-        def __init__(self, label=""):
-            self.label = label
-            self.sensitive = True
-            self._callbacks = {}
-
-        def connect(self, signal, callback, *args):
-            self._callbacks[signal] = (callback, args)
-
-        def set_sensitive(self, value):
-            self.sensitive = value
-
-        def activate(self):
-            callback, args = self._callbacks["activate"]
-            callback(self, *args)
-
-    class _SeparatorMenuItem(_MenuItem):
-        pass
-
-    class _Menu:
-        def __init__(self):
-            self.items = []
-            self._callbacks = {}
-
-        def append(self, item):
-            self.items.append(item)
-
-        def connect(self, signal, callback, *args):
-            self._callbacks[signal] = (callback, args)
-
-        def show_all(self):
-            pass
-
-        def get_mapped(self):
-            return False
-
-    Gtk = types.ModuleType("gi.repository.Gtk")
-    Gtk.Window = _Window
-    Gtk.DrawingArea = _DrawingArea
-    Gtk.Menu = _Menu
-    Gtk.MenuItem = _MenuItem
-    Gtk.SeparatorMenuItem = _SeparatorMenuItem
-    Gtk.WindowType = types.SimpleNamespace(TOPLEVEL=0)
-    Gtk.main = lambda: None
-    Gtk.main_quit = lambda: None
-    repository.Gtk = Gtk
-    sys.modules["gi.repository.Gtk"] = Gtk
-
-    class _Display:
-        @staticmethod
-        def get_default():
-            return None
-
-    Gdk = types.ModuleType("gi.repository.Gdk")
-    Gdk.EventMask = types.SimpleNamespace(
-        BUTTON_PRESS_MASK=1, BUTTON_RELEASE_MASK=2, POINTER_MOTION_MASK=4,
-        LEAVE_NOTIFY_MASK=8, SCROLL_MASK=16, SMOOTH_SCROLL_MASK=32)
-    Gdk.ScrollDirection = types.SimpleNamespace(UP=0, DOWN=1, SMOOTH=4)
-    Gdk.WindowTypeHint = types.SimpleNamespace(DOCK=0, UTILITY=1)
-    Gdk.KEY_Escape = 65307
-    Gdk.Display = _Display
-    repository.Gdk = Gdk
-    sys.modules["gi.repository.Gdk"] = Gdk
-
-    GLib = types.ModuleType("gi.repository.GLib")
-    # A plain recorder, NOT an auto-runner: see the module docstring's
-    # point 4 -- a test has to be able to tell "queued for the main loop"
-    # apart from "ran inline on the worker thread".
-    GLib.idle_add = mock.Mock(name="GLib.idle_add")
-    GLib.timeout_add_seconds = mock.Mock(name="GLib.timeout_add_seconds",
-                                         return_value=1)
-    repository.GLib = GLib
-    sys.modules["gi.repository.GLib"] = GLib
-
-    class _Indicator:
-        IndicatorCategory = types.SimpleNamespace(APPLICATION_STATUS=0)
-        IndicatorStatus = types.SimpleNamespace(ACTIVE=1)
-
-        @staticmethod
-        def new(*a, **k):
-            return mock.MagicMock(name="AppIndicator.Indicator")
-
-    AppIndicator = types.ModuleType("gi.repository.AyatanaAppIndicator3")
-    AppIndicator.Indicator = _Indicator
-    AppIndicator.IndicatorCategory = _Indicator.IndicatorCategory
-    AppIndicator.IndicatorStatus = _Indicator.IndicatorStatus
-    repository.AyatanaAppIndicator3 = AppIndicator
-    sys.modules["gi.repository.AyatanaAppIndicator3"] = AppIndicator
-
-    return types.SimpleNamespace(Gtk=Gtk, Gdk=Gdk, GLib=GLib,
-                                 AppIndicator=AppIndicator)
-
-
-class GuiStubbedTestCase(unittest.TestCase):
+class GuiStubbedTestCase(stubs.GuiStubbedTestCase):
     """Installs the fake gi stack for one test, then restores ALL of
-    sys.modules -- not just the gi.* keys. See test_windows_tray.py's
-    identical-in-spirit GuiStubbedTestCase for why a partial restore is
-    not enough: smartbar.paint.tray_icon/popover_draw's own `import cairo`
-    binds whatever module object is in sys.modules["cairo"] AT THAT MOMENT
-    into their own globals permanently, and popover_layout/model are real,
+    sys.modules -- not just the gi.* keys. See tests/support/stubs.py's
+    GuiStubbedTestCase for why a partial restore is not enough:
+    smartbar.paint.tray_icon/popover_draw's own `import cairo` binds
+    whatever module object is in sys.modules["cairo"] AT THAT MOMENT into
+    their own globals permanently, and popover_layout/model are real,
     ordinary imports too that must not leak a fake-gi-flavoured copy of
     smartbar.linux.tray into a later test file's import of the same name.
     """
 
     def setUp(self):
-        self._sys_modules_snapshot = dict(sys.modules)
-        self.gi = _install_gi_stubs()
-
-    def tearDown(self):
-        for name in list(sys.modules):
-            if name not in self._sys_modules_snapshot:
-                del sys.modules[name]
-        sys.modules.update(self._sys_modules_snapshot)
+        super().setUp()
+        self.gi = stubs.install_gi()
 
 
-def _reimport(dotted_name):
-    sys.modules.pop(dotted_name, None)
-    return importlib.import_module(dotted_name)
+_reimport = stubs.reimport
 
 
 class TestImportsCleanly(GuiStubbedTestCase):
@@ -292,21 +176,21 @@ class TestImportsCleanly(GuiStubbedTestCase):
 def _bare_tray(mod, snapshot=None):
     """A Tray with no constructor side effects: no AppIndicator, no icon
     render, no thread -- just the plain-attribute state the methods under
-    test actually read, mirroring test_windows_tray.py's Tray.__new__
-    pattern."""
+    test actually read, plus a REAL TrayController wired to this tray as
+    its host (the controller itself is toolkit-free, so building one costs
+    nothing here), mirroring how Tray.__init__ wires the two together."""
     tray = mod.Tray.__new__(mod.Tray)
-    tray.snapshot = snapshot
+    tray.controller = mod.TrayController(tray)
+    tray.controller.snapshot = snapshot
     tray.provider = ""
     tray.confirm = ""
-    tray.failures = 0
     tray.flip = False
-    tray.generation = 0
     tray.menu = None
     tray.pending_menu = None
-    tray.last_fetch_at = 0.0
-    tray.last_error = ""
-    tray.action_error = ""
-    tray.refreshing = False
+    tray.open_item = None
+    # Fetch/error/update/check state now belongs to the controller built
+    # above; the fallback guard stays host-side on the Tray, so its fields
+    # are still seeded here.
     tray.fallback_guard_report = None
     tray.fallback_guard_busy = ""
     tray.fallback_guard_error = ""
@@ -314,21 +198,16 @@ def _bare_tray(mod, snapshot=None):
     tray.fallback_guard_advanced = False
     tray.fallback_guard_remove_confirm = False
     tray.fallback_guard_last_fetch = 0.0
-    tray.update_blocked = ""
-    tray.update_pending = ""
-    tray.open_item = None
-    tray.checking = False
-    tray.check_result = ""
-    tray.check_token = 0
-    tray.presence_started = True
     tray.popover = mock.MagicMock(name="popover")
     tray.popover.get_visible.return_value = True
     tray.indicator = mock.MagicMock(name="indicator")
+    tray._libnotify = None
     return tray
 
 
-def _account(number, email, active=False):
-    return model.Account(number=number, email=email, active=active)
+def _account(number, email, active=False, status="ok"):
+    return model.Account(number=number, email=email, active=active,
+                         status=status, ok=(status == "ok"))
 
 
 def _guard_report(state="protected", **changes):
@@ -349,14 +228,15 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
     """_popover_layout() must hand action_error/refreshing/stale_reason to
     popover_layout.build() -- the three keyword-only parameters that let
     this front-end actually surface a stale reason, a busy refresh glyph
-    and a dismissible action-error banner."""
+    and a dismissible action-error banner. All three now live on
+    self.controller rather than on the Tray instance directly."""
 
     def test_forwards_action_error_refreshing_stale_reason_and_guard_state(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
-        tray.action_error = "Switch failed: boom"
-        tray.refreshing = True
-        tray.last_error = "connection reset"
+        tray.controller.action_error = "Switch failed: boom"
+        tray.controller.refreshing = True
+        tray.controller.last_error = "connection reset"
         tray.fallback_guard_report = {"state": "protected"}
         tray.fallback_guard_busy = "verify"
         tray.fallback_guard_expanded = True
@@ -377,12 +257,12 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
         self.assertEqual(kwargs["fallback_error"], "guard error")
 
     def test_stale_reason_is_empty_once_a_fetch_has_succeeded(self):
-        # last_error is cleared by _apply_snapshot on success (see below),
-        # so a healthy panel must not show a stale reason left over from
-        # some earlier, since-resolved failure.
+        # last_error is cleared by the controller's _apply_snapshot on
+        # success, so a healthy panel must not show a stale reason left
+        # over from some earlier, since-resolved failure.
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
-        tray.last_error = ""
+        tray.controller.last_error = ""
         with mock.patch.object(mod.popover_layout, "build") as build:
             mod.Tray._popover_layout(tray)
         self.assertEqual(build.call_args.kwargs["stale_reason"], "")
@@ -499,7 +379,7 @@ class TestFallbackGuardTray(GuiStubbedTestCase):
             first = mod.Tray._build_menu(tray)
         arm = next(item for item in first.items
                    if item.label == "Advanced: Remove protection…")
-        with mock.patch.object(tray, "_refresh_menu"):
+        with mock.patch.object(tray, "rebuild_menu"):
             arm.activate()
         self.assertTrue(tray.fallback_guard_remove_confirm)
 
@@ -518,7 +398,8 @@ class TestFallbackGuardTray(GuiStubbedTestCase):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(tray, "_start_fetch"))
+            stack.enter_context(mock.patch.object(tray.controller,
+                                                  "_start_fetch"))
             start = stack.enter_context(mock.patch.object(
                 tray, "_start_fallback_guard"))
             stack.enter_context(mock.patch.object(
@@ -540,7 +421,7 @@ class TestFallbackGuardTray(GuiStubbedTestCase):
     def test_manual_refresh_runs_status_but_not_verify(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
-        with mock.patch.object(tray, "_start_fetch") as fetch, \
+        with mock.patch.object(tray.controller, "_start_fetch") as fetch, \
              mock.patch.object(tray, "_start_fallback_guard") as start:
             mod.Tray._on_refresh(tray, None)
         fetch.assert_called_once()
@@ -551,213 +432,322 @@ class TestDismissErrorHit(GuiStubbedTestCase):
     def test_dismiss_error_clears_the_sticky_banner(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
-        tray.action_error = "Remove failed: in use"
+        tray.controller.action_error = "Remove failed: in use"
         mod.Tray._on_popover_action(tray, "dismiss-error")
-        self.assertEqual(tray.action_error, "")
+        self.assertEqual(tray.controller.action_error, "")
         tray.popover.refresh_layout.assert_called_once()
 
 
-class TestRefreshingFlag(GuiStubbedTestCase):
-    """FINDING: the \u23f3 must dim and stop accepting clicks while a fetch
-    is in flight, and must not un-dim early because a DIFFERENT
-    (superseded) fetch's completion happened to land."""
-
-    def test_start_fetch_raises_the_flag_before_the_worker_even_runs(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        with mock.patch.object(mod.threading, "Thread") as thread:
-            mod.Tray._start_fetch(tray)
-        thread.assert_called_once()
-        self.assertTrue(tray.refreshing)
-
-    def test_apply_snapshot_clears_the_flag_for_the_current_generation(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.refreshing = True
-        tray.generation = 3
-        snap = model.Snapshot(accounts=[])
-        tray.alerts = mock.MagicMock()
-        tray.alerts.check.return_value = []
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(mod, "presence"))
-            stack.enter_context(mock.patch.object(mod, "plan"))
-            stack.enter_context(
-                mock.patch.object(mod.codex, "accounts", return_value=[]))
-            stack.enter_context(mock.patch.object(mod, "presence_client"))
-            stack.enter_context(
-                mock.patch.object(tray, "_pending_update", return_value=""))
-            stack.enter_context(mock.patch.object(tray, "_set_icon"))
-            stack.enter_context(mock.patch.object(tray, "_refresh_menu"))
-            stack.enter_context(mock.patch.object(tray, "_maybe_recapture"))
-            mod.Tray._apply_snapshot(tray, snap, 3)
-        self.assertFalse(tray.refreshing)
-
-    def test_apply_snapshot_leaves_a_superseded_generations_flag_alone(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.refreshing = True   # a NEWER fetch is genuinely in flight
-        tray.generation = 4
-        result = mod.Tray._apply_snapshot(tray, model.Snapshot(), 3)
-        self.assertFalse(result)
-        self.assertTrue(tray.refreshing, "a stale callback must not clear "
-                        "the flag a newer, still-running fetch owns")
-
-    def test_apply_error_clears_the_flag_for_the_current_generation(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.refreshing = True
-        tray.generation = 1
-        with mock.patch.object(tray, "_refresh_menu"):
-            mod.Tray._apply_error(tray, "boom", 1)
-        self.assertFalse(tray.refreshing)
-        self.assertEqual(tray.last_error, "boom")
-
-    def test_apply_error_leaves_a_superseded_generations_flag_alone(self):
-        mod = _reimport("smartbar.linux.tray")
-        tray = _bare_tray(mod)
-        tray.refreshing = True
-        tray.generation = 9
-        result = mod.Tray._apply_error(tray, "boom", 8)
-        self.assertFalse(result)
-        self.assertTrue(tray.refreshing)
-
-
-class TestActionErrorGoesThroughIdleAdd(GuiStubbedTestCase):
-    """A switch/remove failure happens on a worker thread; the fix must
-    route the resulting state mutation through GLib.idle_add, never touch
-    self.action_error directly from that thread (see module docstring
-    point 4)."""
-
-    def _run_worker_target(self, mod, thread_mock):
-        """threading.Thread(target=run, ...) was called once; invoke that
-        `run` synchronously, as if it were the worker thread, without ever
-        spinning up a real thread."""
-        _args, kwargs = thread_mock.call_args
-        kwargs["target"]()
-
-    def test_switch_failure_is_sticky_via_idle_add_not_a_direct_write(self):
-        mod = _reimport("smartbar.linux.tray")
-        snap = model.Snapshot(accounts=[_account(1, "a@x.com", active=True),
-                                        _account(2, "b@x.com")])
-        tray = _bare_tray(mod, snapshot=snap)
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(
-                mod.cswap, "switch",
-                side_effect=mod.cswap.CswapError("in use")))
-            stack.enter_context(mock.patch.object(tray, "_set_icon"))
-            stack.enter_context(mock.patch.object(tray, "_refresh_menu"))
-            thread = stack.enter_context(
-                mock.patch.object(mod.threading, "Thread"))
-            idle_add = stack.enter_context(
-                mock.patch.object(mod.GLib, "idle_add"))
-            mod.Tray._on_switch(tray, None, 2)
-            # The worker has not run yet: nothing may be visible until the
-            # idle_add-queued callback is actually drained.
-            self.assertEqual(tray.action_error, "")
-            self._run_worker_target(mod, thread)
-        idle_add.assert_called_once()
-        callback, message = idle_add.call_args.args
-        self.assertEqual(callback, tray._set_action_error)
-        self.assertIn("in use", message)
-        self.assertEqual(tray.action_error, "",
-                         "must still be empty until the recorded idle_add "
-                         "callback is actually invoked")
-        callback(message)
-        self.assertEqual(tray.action_error, "Switch failed: in use")
-
-    def test_remove_failure_is_sticky_via_idle_add_not_a_direct_write(self):
-        mod = _reimport("smartbar.linux.tray")
-        snap = model.Snapshot(accounts=[_account(5, "c@x.com")])
-        tray = _bare_tray(mod, snapshot=snap)
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(
-                mod.cswap, "remove_account",
-                side_effect=mod.cswap.CswapError("no such")))
-            thread = stack.enter_context(
-                mock.patch.object(mod.threading, "Thread"))
-            idle_add = stack.enter_context(
-                mock.patch.object(mod.GLib, "idle_add"))
-            mod.Tray._on_remove(tray, "claude:5")
-            self._run_worker_target(mod, thread)
-        callback, message = idle_add.call_args.args
-        self.assertEqual(message, "Remove failed: no such")
-        callback(message)
-        self.assertEqual(tray.action_error, "Remove failed: no such")
-
-    def test_a_new_switch_attempt_clears_any_previous_sticky_error(self):
-        # "sticky until the next attempt" (UsageStore.swift:15-16): the OLD
-        # error must be gone the instant a NEW attempt starts, not only
-        # once the new attempt itself resolves.
-        mod = _reimport("smartbar.linux.tray")
-        snap = model.Snapshot(accounts=[_account(1, "a@x.com", active=True),
-                                        _account(2, "b@x.com")])
-        tray = _bare_tray(mod, snapshot=snap)
-        tray.action_error = "Switch failed: stale old error"
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(mod.cswap, "switch"))
-            stack.enter_context(mock.patch.object(tray, "_set_icon"))
-            stack.enter_context(mock.patch.object(tray, "_refresh_menu"))
-            stack.enter_context(mock.patch.object(mod.threading, "Thread"))
-            mod.Tray._on_switch(tray, None, 2)
-        self.assertEqual(tray.action_error, "")
-
-
-class TestOptimisticSwitch(GuiStubbedTestCase):
-    """UsageStore.swift:159-166's optimistic flip: the ACTIVE account (and
+class TestOptimisticFlip(GuiStubbedTestCase):
+    """UsageStore.switchTo's optimistic-flip block: the ACTIVE account (and
     therefore the icon/menu/panel) must move the instant the user clicks,
-    not after the cswap round-trip -- guarded by the same generation bump
-    that protects a real fetch from a stale result."""
+    not after the cswap round-trip. TrayController.on_switch owns WHEN this
+    runs (pinned in test_tray_controller.py); _flip_active_optimistically
+    is WHAT it does on Linux -- genuinely host-bound per the design's own
+    divergence note, since the repaint is made through this host's own
+    set_icon/set_title/rebuild_menu/panel-refresh methods."""
 
-    def test_flip_moves_active_synchronously_and_bumps_generation(self):
+    def test_flip_moves_active_and_repaints_without_touching_generation(self):
         mod = _reimport("smartbar.linux.tray")
         snap = model.Snapshot(accounts=[_account(1, "a@x.com", active=True),
                                         _account(2, "b@x.com")])
         tray = _bare_tray(mod, snapshot=snap)
-        tray.generation = 7
+        tray.controller.generation = 7
+        tray.controller.refreshing = True
         with contextlib.ExitStack() as stack:
-            set_icon = stack.enter_context(
-                mock.patch.object(tray, "_set_icon"))
-            stack.enter_context(mock.patch.object(tray, "_refresh_menu"))
-            stack.enter_context(mock.patch.object(mod.threading, "Thread"))
-            mod.Tray._on_switch(tray, None, 2)
+            set_icon = stack.enter_context(mock.patch.object(tray, "set_icon"))
+            set_title = stack.enter_context(mock.patch.object(tray, "set_title"))
+            rebuild = stack.enter_context(mock.patch.object(tray, "rebuild_menu"))
+            mod.Tray._flip_active_optimistically(tray, 2)
         self.assertTrue(snap.accounts[1].active)
         self.assertFalse(snap.accounts[0].active)
         self.assertEqual(snap.active_account.number, 2)
-        self.assertEqual(tray.generation, 8, "must bump generation exactly "
-                        "like UsageStore.swift's fetchGeneration += 1")
-        self.assertFalse(tray.refreshing)
+        # Deliberately UNCHANGED. This flip is repaint-only: the bump that
+        # matches UsageStore.swift's `fetchGeneration += 1` is done by
+        # TrayController.on_switch under its own lock, because a bare `+=`
+        # here raced the switch worker once the flip started being marshalled
+        # through GLib.idle_add. See that bump's comment in tray_controller.py
+        # and test_tray_controller's own regression test for the ordering.
+        self.assertEqual(tray.controller.generation, 7)
+        self.assertFalse(tray.controller.refreshing)
         set_icon.assert_called_once()
+        set_title.assert_called_once()
+        rebuild.assert_called_once()
         tray.popover.refresh_layout.assert_called_once()
-
-    def test_generation_bump_makes_a_stale_preswitch_fetch_get_dropped(self):
-        """The whole point of bumping generation in the flip: a fetch that
-        started BEFORE the click must not un-flip the optimistic guess when
-        it lands after."""
-        mod = _reimport("smartbar.linux.tray")
-        snap = model.Snapshot(accounts=[_account(1, "a@x.com", active=True),
-                                        _account(2, "b@x.com")])
-        tray = _bare_tray(mod, snapshot=snap)
-        tray.generation = 7   # a fetch already in flight captured THIS
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(tray, "_set_icon"))
-            stack.enter_context(mock.patch.object(tray, "_refresh_menu"))
-            stack.enter_context(mock.patch.object(mod.threading, "Thread"))
-            mod.Tray._on_switch(tray, None, 2)
-        stale_snapshot = model.Snapshot(
-            accounts=[_account(1, "a@x.com", active=True),
-                      _account(2, "b@x.com")])
-        result = mod.Tray._apply_snapshot(tray, stale_snapshot, 7)
-        self.assertFalse(result)
-        # The optimistic guess (account 2 active) must survive untouched.
-        self.assertIs(tray.snapshot, snap)
-        self.assertEqual(tray.snapshot.active_account.number, 2)
 
     def test_no_snapshot_yet_is_a_no_op_not_a_crash(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod, snapshot=None)
-        with mock.patch.object(mod.threading, "Thread"):
-            mod.Tray._on_switch(tray, None, 2)   # must not raise
-        self.assertEqual(tray.generation, 0)
+        mod.Tray._flip_active_optimistically(tray, 2)   # must not raise
+        self.assertEqual(tray.controller.generation, 0)
+
+    def test_a_hidden_popover_is_not_asked_to_refresh(self):
+        mod = _reimport("smartbar.linux.tray")
+        snap = model.Snapshot(accounts=[_account(1, "a@x.com", active=True),
+                                        _account(2, "b@x.com")])
+        tray = _bare_tray(mod, snapshot=snap)
+        tray.popover.get_visible.return_value = False
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(tray, "set_icon"))
+            stack.enter_context(mock.patch.object(tray, "set_title"))
+            stack.enter_context(mock.patch.object(tray, "rebuild_menu"))
+            mod.Tray._flip_active_optimistically(tray, 2)
+        tray.popover.refresh_layout.assert_not_called()
+
+
+class TestSetIconFlip(GuiStubbedTestCase):
+    """AppIndicator.set_icon_full ignores a call whose name did not change
+    from the last one -- a single fixed name would never repaint."""
+
+    def test_alternates_between_exactly_two_names(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(mod, "render_pills"):
+            mod.Tray.set_icon(tray, [], False)
+            first = tray.indicator.set_icon_full.call_args.args[0]
+            mod.Tray.set_icon(tray, [], False)
+            second = tray.indicator.set_icon_full.call_args.args[0]
+        self.assertNotEqual(first, second)
+        self.assertEqual({first, second}, {"state-a", "state-b"})
+
+    def test_forwards_states_and_update_pending_to_render_pills(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        states = [(0.5, "green")]
+        with mock.patch.object(mod, "render_pills") as render:
+            mod.Tray.set_icon(tray, states, True)
+        args, kwargs = render.call_args
+        self.assertEqual(args[0], states)
+        self.assertTrue(kwargs["update_pending"])
+
+
+class TestSetTitle(GuiStubbedTestCase):
+    def test_forwards_to_the_indicator(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        mod.Tray.set_title(tray, "AI smartbar — 42%")
+        tray.indicator.set_title.assert_called_once_with("AI smartbar — 42%")
+
+
+class TestThreadHandoff(GuiStubbedTestCase):
+    """TrayController depends on host.call_on_ui_thread/host.schedule for
+    every worker-thread -> UI-thread touch a fetch, switch, remove,
+    recapture or check-update makes -- the module docstring calls these
+    the highest-risk edits in the whole refactor, since they used to be
+    3 separate GLib.idle_add call sites and are now one shared seam."""
+
+    def test_call_on_ui_thread_is_glib_idle_add(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        callback = mock.Mock()
+        mod.Tray.call_on_ui_thread(tray, callback, 1, 2)
+        mod.GLib.idle_add.assert_called_once_with(callback, 1, 2)
+
+    def test_schedule_fires_once_through_timeout_add_seconds(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        callback = mock.Mock()
+        mod.Tray.schedule(tray, 20, callback, "token")
+        mod.GLib.timeout_add_seconds.assert_called_once()
+        seconds, fire = mod.GLib.timeout_add_seconds.call_args.args
+        self.assertEqual(seconds, 20)
+        result = fire()
+        callback.assert_called_once_with("token")
+        self.assertFalse(result, "a one-shot timer must not ask GLib to "
+                        "repeat it")
+
+
+class TestNotify(GuiStubbedTestCase):
+    """urgency's icon-name mapping and the notify-send fallback when
+    libnotify could not be initialised (see _init_notify)."""
+
+    def test_critical_urgency_uses_the_warning_icon_via_libnotify(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray._libnotify = mock.MagicMock()
+        alert = types.SimpleNamespace(title="Low", body="80% used")
+        mod.Tray.notify(tray, alert, "critical")
+        tray._libnotify.Notification.new.assert_called_once_with(
+            "Low", "80% used", "dialog-warning")
+        tray._libnotify.Notification.new.return_value.show.assert_called_once()
+
+    def test_normal_urgency_uses_the_information_icon(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray._libnotify = mock.MagicMock()
+        alert = types.SimpleNamespace(title="AI smartbar", body="Up to date")
+        mod.Tray.notify(tray, alert, "normal")
+        args = tray._libnotify.Notification.new.call_args.args
+        self.assertEqual(args[2], "dialog-information")
+
+    def test_falls_back_to_notify_send_when_libnotify_is_unavailable(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        alert = types.SimpleNamespace(title="Low", body="80% used")
+        with mock.patch.object(mod.subprocess, "run") as run:
+            mod.Tray.notify(tray, alert, "critical")
+        run.assert_called_once_with(
+            ["notify-send", "-u", "critical", "Low", "80% used"],
+            timeout=10, check=False)
+
+    def test_a_notification_failure_is_swallowed_not_raised(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        alert = types.SimpleNamespace(title="Low", body="80% used")
+        with mock.patch.object(mod.subprocess, "run",
+                               side_effect=OSError("boom")):
+            mod.Tray.notify(tray, alert, "critical")   # must not raise
+
+
+class TestCheckUpdateArgv(GuiStubbedTestCase):
+    def test_returns_the_launcher_with_check_update_json(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        self.assertEqual(mod.Tray.check_update_argv(tray),
+                         [mod.LAUNCHER, "--check-update", "--json"])
+
+
+class TestPanelTriadDelegatesToPopover(GuiStubbedTestCase):
+    def test_has_panel_true_when_a_popover_exists(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        self.assertTrue(tray.has_panel)
+
+    def test_has_panel_false_when_no_popover_could_be_built(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.popover = None
+        self.assertFalse(tray.has_panel)
+
+    def test_show_hide_visible_and_refresh_all_forward_to_the_popover(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        mod.Tray.show_panel(tray)
+        tray.popover.show_panel.assert_called_once()
+        mod.Tray.hide_panel(tray)
+        tray.popover.hide_panel.assert_called_once()
+        tray.popover.get_visible.return_value = True
+        self.assertTrue(mod.Tray.panel_visible(tray))
+        mod.Tray.refresh_panel(tray)
+        tray.popover.refresh_layout.assert_called_once()
+
+
+class TestRebuildMenuPendingSwap(GuiStubbedTestCase):
+    """Swapping the menu out from under the pointer closes it on some
+    shells: a mapped (open) menu must hold the rebuild in pending_menu
+    instead of installing it, and the 'hide' signal installs it later."""
+
+    def test_an_open_menu_holds_the_rebuild_until_it_hides(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        old_menu = mock.MagicMock(name="old menu")
+        old_menu.get_mapped.return_value = True
+        tray.menu = old_menu
+        new_menu = mock.MagicMock(name="new menu")
+        with mock.patch.object(tray, "_build_menu", return_value=new_menu):
+            mod.Tray.rebuild_menu(tray)
+        self.assertIs(tray.menu, old_menu, "must not swap out from under "
+                      "an open menu")
+        self.assertIs(tray.pending_menu, new_menu)
+
+    def test_a_closed_menu_installs_the_rebuild_immediately(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        old_menu = mock.MagicMock(name="old menu")
+        old_menu.get_mapped.return_value = False
+        tray.menu = old_menu
+        new_menu = mock.MagicMock(name="new menu")
+        with mock.patch.object(tray, "_build_menu", return_value=new_menu), \
+             mock.patch.object(tray, "_install_menu") as install:
+            mod.Tray.rebuild_menu(tray)
+        install.assert_called_once_with(new_menu)
+
+    def test_hiding_installs_a_pending_rebuild(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        pending = mock.MagicMock(name="pending menu")
+        tray.pending_menu = pending
+        with mock.patch.object(tray, "_install_menu") as install:
+            mod.Tray._on_menu_hide(tray, None)
+        install.assert_called_once_with(pending)
+
+    def test_hiding_with_nothing_pending_is_a_no_op(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.pending_menu = None
+        with mock.patch.object(tray, "_install_menu") as install:
+            mod.Tray._on_menu_hide(tray, None)
+        install.assert_not_called()
+
+
+class TestControllerDelegation(GuiStubbedTestCase):
+    """These call sites are pure delegation onto the controller -- the
+    decision logic behind each one is pinned once in
+    tests/test_tray_controller.py. What matters here is only that the
+    toolkit-facing method reaches the RIGHT controller call with the
+    right arguments."""
+
+    def test_on_switch_delegates_with_the_flip_callable(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        mod.Tray._on_switch(tray, None, 3)
+        tray.controller.on_switch.assert_called_once_with(
+            3, tray._flip_active_optimistically)
+
+    def test_on_check_update_delegates(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        mod.Tray._on_check_update(tray, None)
+        tray.controller._on_check_update.assert_called_once_with()
+
+    def test_on_refresh_delegates(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        # The guard kick _on_refresh also fires is its own concern (see
+        # TestFallbackGuardTray); stub it so this asserts delegation only.
+        with mock.patch.object(tray, "_start_fallback_guard"):
+            mod.Tray._on_refresh(tray, None)
+        tray.controller._start_fetch.assert_called_once_with()
+
+    def test_refresh_popover_action_delegates(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        with mock.patch.object(tray, "_start_fallback_guard"):
+            mod.Tray._on_popover_action(tray, "refresh")
+        tray.controller._start_fetch.assert_called_once_with()
+
+    def test_confirm_remove_action_delegates_to_on_remove(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        tray.confirm = "claude:5"
+        mod.Tray._on_popover_action(tray, "confirm-remove:claude:5")
+        tray.controller.on_remove.assert_called_once_with("claude:5")
+        self.assertEqual(tray.confirm, "")
+
+    def test_switch_action_delegates_to_on_switch(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(tray, "_on_switch") as on_switch:
+            mod.Tray._on_popover_action(tray, "switch:2")
+        on_switch.assert_called_once_with(None, 2)
+
+
+class TestQuit(GuiStubbedTestCase):
+    def test_leaves_presence_before_stopping_the_loop(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        calls = []
+        with mock.patch.object(mod.presence_client, "leave",
+                               side_effect=lambda: calls.append("leave")), \
+             mock.patch.object(mod.Gtk, "main_quit",
+                               side_effect=lambda: calls.append("quit")):
+            mod.Tray._quit(tray)
+        self.assertEqual(calls, ["leave", "quit"])
 
 
 class TestPanelTooltips(GuiStubbedTestCase):

@@ -208,7 +208,7 @@ class TestTheCliContract(unittest.TestCase):
         # subprocess.run([LAUNCHER, ...]) fails there with WinError 193 ("%1
         # is not a valid Win32 application"). Going through sys.executable
         # sidesteps shebang dispatch on every platform (the precedent is
-        # tests/e2e-update.sh:39's `python3 ./bin/ai-smartbar`) and still
+        # tests/e2e-update.sh's run_update()'s `python3 ./bin/ai-smartbar`) and still
         # exercises exactly the CLI contract this test asserts against.
         return subprocess.run(
             [sys.executable, self.LAUNCHER, "--print-config", fmt],

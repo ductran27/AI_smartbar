@@ -1,6 +1,8 @@
 """Plan badge semantics: mapping, reader, stamping, cross-language parity."""
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -126,9 +128,6 @@ class TestApplyPlans(unittest.TestCase):
         plan.apply_plans(None, {"a@x.com": "20x"})  # must not raise
 
 
-import subprocess
-import sys
-
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -183,9 +182,21 @@ class TestPlanParity(unittest.TestCase):
     def test_swift_refresh_cadence_is_pinned(self):
         self.assertIn("refreshInterval: TimeInterval = 900", self.status)
 
-    def test_both_python_uis_stamp_plans(self):
-        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py"):
-            self.assertIn("apply_plans", (REPO / path).read_text(encoding="utf-8"), path)
+    def test_every_python_ui_stamps_plans_through_the_controller(self):
+        """Plan stamping used to be copy-pasted into each front-end, and the
+        older form of this test scraped both copies to keep them in step.
+        TrayController._fetch now does it once for every Python UI, so the
+        guarantee got stronger and the assertion has to move with it: the
+        stamp lives in the controller, and each front-end really does route
+        through the controller rather than keeping a private fetch path that
+        would quietly skip it. Windows is checked here too — it was missing
+        from the older two-UI form of this test."""
+        ctrl = REPO / "smartbar/core/tray_controller.py"
+        self.assertIn("apply_plans", ctrl.read_text(encoding="utf-8"))
+        for path in ("smartbar/macos/menubar.py", "smartbar/linux/tray.py",
+                     "smartbar/windows/tray.py"):
+            self.assertIn("TrayController", (REPO / path).read_text(encoding="utf-8"),
+                          path)
 
 
 if __name__ == "__main__":  # pragma: no cover

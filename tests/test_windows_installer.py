@@ -66,7 +66,9 @@ class TestTheChannelSurvivesItsOwnRoundTrip(unittest.TestCase):
     `main` device onto `release`. Those two halves live ~200 lines apart in one
     file and neither one fails visibly if they stop agreeing — the read just
     returns '' forever, silently defaulting every device to `release`. That is
-    the exact bug install/linux.sh:44-61 exists to prevent, so it gets a test.
+    the exact bug install/linux.sh's channel read-back block (the
+    `if [[ -z "$CHANNEL" ]]` ... `fi` guard) exists to prevent, so it gets a
+    test.
     """
 
     def read_back_pattern(self):
