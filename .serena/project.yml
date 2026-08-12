@@ -10,6 +10,11 @@ encoding: "utf-8"
 # This does not affect Serena's own files (e.g. memories and configuration files), which always use native line endings.
 line_ending:
 
+# compatibility key for older serena builds that read `languages` (KeyError without it);
+# the current template's `language_servers` list below is what new builds read.
+languages:
+- python
+
 # The language backend to use for this project.
 # If not set, the global setting from serena_config.yml is used.
 # Valid values: LSP, JetBrains
