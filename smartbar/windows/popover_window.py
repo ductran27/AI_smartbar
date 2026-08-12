@@ -5,7 +5,8 @@ this is the same port on tk.Toplevel + tk.Canvas, so the panel stays the
 same UI on Windows as on Linux/macOS instead of inheriting a native look —
 same reason the Linux file exists at all. tkinter has no cairo-backed
 widget, so where GTK hands popover_draw a Context bound straight to the
-window's own backing surface (popover_window.py:107-110), this module
+window's own backing surface (smartbar/linux/popover_window.py's
+Popover._on_draw), this module
 renders to an off-screen cairo.ImageSurface, PNG-encodes it to an in-memory
 buffer, decodes that with Pillow and places the result on a Canvas as an
 ImageTk.PhotoImage — see refresh_layout()/_paint() below.
@@ -195,7 +196,8 @@ class Popover(tk.Toplevel):
     Square corners (radius=0.0 is passed to popover_draw.draw() below by
     default) rather than the Linux/macOS rounded panel: GTK's rounded
     corners depend on an RGBA visual plus a compositing window manager
-    (popover_window.py:69-75) giving true per-pixel alpha, so the corner
+    (smartbar/linux/popover_window.py's Popover.__init__'s RGBA-visual
+    setup) giving true per-pixel alpha, so the corner
     pixels outside the rounded rect end up transparent. A plain tk.Toplevel
     has no such thing — wm_attributes("-alpha", ...) is whole-window
     opacity only, and true per-pixel alpha would need WS_EX_LAYERED +
@@ -512,7 +514,8 @@ class Popover(tk.Toplevel):
     def _position(self) -> None:
         """Place the panel: a pin goes to a fixed corner, a popover under or
         above the pointer -- the Win32 analogue of the Linux file's Gdk
-        pointer + monitor lookup (popover_window.py:176-202).
+        pointer + monitor lookup (smartbar/linux/popover_window.py's
+        Popover._position/_workareas).
         """
         try:
             if self.pinned:

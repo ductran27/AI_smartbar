@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 92
+target-version = "py39"
+
+[tool.ruff.lint]
+# E402 ("module level import not at top of file") is silenced ONLY for the
+# one module where it is unavoidable by design, never for the whole repo:
+#
+# smartbar/linux/tray.py must call gi.require_version("Gtk", "3.0") (and
+# the AyatanaAppIndicator3 version) before `from gi.repository import ...`
+# runs, because PyGObject picks which native binding to load the first time
+# a `gi.repository` submodule is imported -- there is no way to declare the
+# version after that import and still have it take effect. Every import in
+# the file sits below that require_version() call, so every one of them
+# trips E402 even though only the two `gi.repository` imports actually
+# depend on it running first.
+[tool.ruff.lint.per-file-ignores]
+"smartbar/linux/tray.py" = ["E402"]

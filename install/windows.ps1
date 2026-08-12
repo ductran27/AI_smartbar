@@ -6,7 +6,8 @@ Install (default) or -Uninstall ai-smartbar on Windows. No admin needed.
 The Windows counterpart of install/linux.sh, and deliberately a line-by-line
 mirror of it: same flags, same channel read-back, same "always end with exactly
 one tray running" contract. Re-running this script IS the update apply step
-(smartbar/core/update.py:194-203 re-runs the installers after a checkout), so
+(smartbar/core/update.py's apply_targets re-runs the installers after a
+checkout), so
 every step here has to be idempotent.
 
 Also installs the self-updater as a Scheduled Task unless -NoAutoUpdate is
@@ -92,7 +93,7 @@ function Get-TrayProcess {
     The running no-argument tray, if any -- and NOTHING else.
 
     The Linux side scopes its pkill to the pattern 'ai-smartbar$'
-    (install/linux.sh:14-16) precisely so that an in-flight `--update` run is
+    (install/linux.sh's TRAY_PATTERN) precisely so that an in-flight `--update` run is
     never caught: the updater re-runs this installer, so a kill that matched
     every ai-smartbar process would have the update terminate itself halfway
     through, leaving the device with no tray and a half-applied checkout.
@@ -132,14 +133,16 @@ function Get-InstalledChannel {
 
     Why this matters at all: without the read-back, every self-update would
     re-register the task with the default and silently flip a `main`
-    development box onto `release`. install/linux.sh:44-61 documents the same
+    development box onto `release`. install/linux.sh's channel read-back
+    block (the `if [[ -z "$CHANNEL" ]]` ... `fi` guard) documents the same
     trap.
 
     -ErrorAction SilentlyContinue on Get-ScheduledTask is load-bearing. On a
     FRESH install there is no task, and under $ErrorActionPreference='Stop' the
     resulting error would abort the installer here -- before the venv, before
     the shortcut, before anything. That is not hypothetical: it is the exact
-    bug install/linux.sh:48-53 describes shipping on the Linux side, where a
+    bug install/linux.sh's `|| true` load-bearing EXISTING read-back
+    describes shipping on the Linux side, where a
     missing unit made `sed` exit non-zero and killed every fresh install.
     #>
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -282,7 +285,8 @@ function Install-Updater {
     # when the updater is re-running this script (it just fetched, and a
     # network blip must not turn a good update into a rollback).
     #
-    # HONEST LIMITATION: install/linux.sh:104 uses `env -i` to run git with an
+    # HONEST LIMITATION: install/linux.sh's install_updater's `env -i ...
+    # git ls-remote` probe uses `env -i` to run git with an
     # EMPTY environment, which is what makes its probe airtight -- no
     # credential helper can be reached. There is no `env -i` on Windows, and
     # PowerShell cannot easily launch a child with a cleared environment. Worse,
