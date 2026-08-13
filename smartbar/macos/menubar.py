@@ -88,6 +88,16 @@ log = logging.getLogger("ai-smartbar")
 
 
 class SmartBarApp(rumps.App):
+    # TrayHost: this front-end has no popover, so the controller's panel
+    # triad (panel_visible/refresh_panel) is never reached. Declared HERE
+    # rather than inherited: a host satisfies TrayHost by duck typing, not
+    # by subclassing — this one's base is already rumps.App — so TrayHost's
+    # own `has_panel = False` default never reaches it. Omitting it is not
+    # a silent no-op: _apply_snapshot/_apply_error read host.has_panel
+    # unconditionally, and an AttributeError there is swallowed by
+    # _drain_ui, costing the alert and recapture steps that follow it.
+    has_panel = False
+
     def __init__(self):
         super().__init__("⚪ …", quit_button=None)
         self.controller = TrayController(self)

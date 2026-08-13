@@ -307,6 +307,67 @@ class TestTicksDelegateToController(MenubarTestCase):
         beat.assert_called_once_with("sentinel-snapshot")
 
 
+# --- the controller/host seam ------------------------------------------------
+
+class TestTheRealApplyPathRunsAgainstThisHost(MenubarTestCase):
+    """The ONE deliberate exception to this file's "the state machine is
+    pinned in test_tray_controller.py, not here" rule.
+
+    Everything else here mocks controller._tick/_start_fetch, and
+    test_tray_controller.py drives the real state machine against a FakeHost
+    that SUBCLASSES TrayHost. Between them, the real controller never once
+    ran against this real host — and that gap hid a live bug: SmartBarApp
+    did not declare has_panel, hosts satisfy TrayHost by duck typing so the
+    class default could not reach it, and _apply_snapshot's
+    `if self.host.has_panel` raised AttributeError on every macOS fetch.
+    _drain_ui swallows a failing queued callback by design, so nothing
+    crashed: the icon/title/menu written just above that line kept working
+    while the limit-alert loop and _maybe_recapture below it silently never
+    ran. What is asserted here is therefore not the ordering (that is the
+    controller's own test) but REACHABILITY — that the last two steps still
+    happen when the real host is on the other end.
+
+    tests/test_tray_host_conformance.py pins the same seam structurally,
+    by member set, for all three hosts.
+    """
+
+    def _apply(self, app, alerts):
+        c = app.controller
+        with mock.patch.object(c.alerts, "check", return_value=alerts), \
+             mock.patch.object(c, "_maybe_recapture") as recapture, \
+             mock.patch.object(self.menubar.presence_client, "beat"), \
+             mock.patch("smartbar.presence_client.counts", return_value={}), \
+             mock.patch("smartbar.core.plan.plans_by_email", return_value={}), \
+             mock.patch("smartbar.core.codex.accounts", return_value=[]), \
+             mock.patch("smartbar.update_runner.pending_for_ui",
+                        return_value=("", "")):
+            c._apply_snapshot(snapshot(), c.generation)
+        return recapture
+
+    def test_a_snapshot_reaches_the_alert_loop_and_recapture(self):
+        from smartbar.core.alerts import Alert
+        app = self.build()
+        recapture = self._apply(app, [Alert(title="t", body="b")])
+        self.rumps.notification.assert_called_once()
+        recapture.assert_called_once()
+
+    def test_a_snapshot_with_no_alerts_still_reaches_recapture(self):
+        app = self.build()
+        recapture = self._apply(app, [])
+        self.rumps.notification.assert_not_called()
+        recapture.assert_called_once()
+
+    def test_the_error_path_runs_to_completion_too(self):
+        """_apply_error reads host.has_panel on the same terms; nothing
+        follows it there, so this pins that it simply does not raise."""
+        app = self.build()
+        c = app.controller
+        with mock.patch.object(app, "_rebuild_menu") as rebuild:
+            c._apply_error("cswap exploded", c.generation)
+        rebuild.assert_called_once_with()
+        self.assertEqual(c.last_error, "cswap exploded")
+
+
 # --- menu construction --------------------------------------------------------
 
 class TestMenuConstruction(MenubarTestCase):
