@@ -61,6 +61,30 @@ class TestRowGeometryParity(SwiftPresent):
         self.assertIsNotNone(match, "could not find the label's frame(width:)")
         self.assertEqual(float(match.group(1)), theme.LABEL_W)
 
+    def test_label_and_value_font_sizes_match_the_shared_type_scale(self):
+        """The one drift a geometry-only parity test misses.
+
+        Stage 01 dropped SIZE_ROW_LABEL 11.0 -> 10.5 precisely so the label
+        and the value, which stage 02 put on the SAME line, would share one
+        optical size. Nothing pinned the Swift, so it kept its 11pt label
+        and the Mac alone grew a half-point size step between two words on
+        one line — a hierarchy the design says is not there, invisible to a
+        suite that only checked frames and spacings.
+        """
+        text = _read(ROW_SOURCE)
+        label = re.search(
+            r"\.font\(\.system\(size: ([\d.]+), weight: \.bold\)\)", text)
+        value = re.search(
+            r"\.font\(\.system\(size: ([\d.]+)\)\.monospacedDigit\(\)\)", text)
+        self.assertIsNotNone(label, "could not find the row label's font")
+        self.assertIsNotNone(value, "could not find the row value's font")
+        self.assertEqual(float(label.group(1)), theme.SIZE_ROW_LABEL)
+        self.assertEqual(float(value.group(1)), theme.SIZE_ROW_VALUE)
+        self.assertEqual(theme.SIZE_ROW_LABEL, theme.SIZE_ROW_VALUE,
+                         "the row label and row value share a line, so they "
+                         "must share a size — retuning one without the other "
+                         "reintroduces the step this test exists to catch")
+
     def test_label_value_gap_matches_bar_gap(self):
         match = re.search(r"Spacer\(minLength: ([\d.]+)\)", _read(ROW_SOURCE))
         self.assertIsNotNone(match, "could not find the label/value Spacer")

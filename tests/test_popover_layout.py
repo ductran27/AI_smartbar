@@ -692,14 +692,27 @@ class TestOverviewTab(unittest.TestCase):
                          ["best@example.com", "worst@example.com",
                           "nodata@example.com"])
 
-    def test_dataless_row_shows_state_text_and_an_em_dash_instead_of_a_bar(self):
+    def test_dataless_row_shows_the_short_state_name_and_no_bar(self):
+        """The SHORT state name, not the full sentence.
+
+        The row's free span fits about sixteen characters, and the whole
+        "Re-login required — sign in as this account in Claude Code once"
+        middle-truncated inside it rendered as "Re-lo…once", which names
+        nothing. The account's own card still carries the sentence.
+        """
         s = snap(
             account(number=1, email="a@example.com", metrics=[metric()]),
             account(number=2, email="dead@example.com", metrics=[], ok=False,
                    status="relogin_required"))
         built = layout.build(s, provider="overview", now=NOW)
-        self.assertTrue(any("Re-login required" in lbl for lbl in labels(built)))
-        self.assertIn("—", labels(built))
+        self.assertIn("Re-login required", labels(built))
+        # The full sentence must NOT be what the row was handed to draw:
+        # a Label carrying it would truncate to nonsense again.
+        self.assertFalse(any(" — sign in as this account" in lbl
+                             for lbl in labels(built)))
+        # No percentage column entry either — there is no reading to show,
+        # and the state name now spans that column too.
+        self.assertNotIn("—", labels(built))
 
     def test_lead_line_names_best_switchs_account(self):
         s = snap(
@@ -707,9 +720,29 @@ class TestOverviewTab(unittest.TestCase):
             account(number=2, email="best@example.com", metrics=[metric(pct=12.0)]))
         built = layout.build(s, provider="overview", now=NOW)
         self.assertEqual(model.best_switch(s).email, "best@example.com")
-        self.assertIn("Most headroom: best@example.com — 12% used", labels(built))
+        self.assertIn("Best switch: best@example.com — 12% used", labels(built))
 
-    def test_lead_line_says_no_spare_headroom_when_best_switch_is_none(self):
+    def test_the_lead_line_is_a_switch_target_not_the_top_row(self):
+        """best_switch is Claude-only and skips the active account, while
+        the rows rank BOTH providers including the active one — so the
+        lead line legitimately names an account that is not row one. The
+        wording has to say "best switch" rather than "most headroom" or
+        that disagreement reads as a sorting bug."""
+        s = snap(
+            account(active=True, email="active@example.com",
+                    metrics=[metric(pct=50.0)]),
+            account(number=2, email="other@example.com",
+                    metrics=[metric(pct=90.0)]))
+        # An OpenAI account with more headroom than any Claude slot: it
+        # sorts first, and it can never be the switch target.
+        s.openai = [openai_account(email="gpt@example.com",
+                                   metrics=[metric(pct=5.0)])]
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertEqual(model.best_switch(s).email, "other@example.com")
+        self.assertIn("Best switch: other@example.com — 90% used",
+                      labels(built))
+
+    def test_lead_line_says_there_is_nothing_to_switch_to(self):
         # A single Claude account (the active one, so it is not its own
         # candidate) plus an OpenAI account to clear the >1 total threshold
         # for the tab row -- best_switch has nothing to offer either way.
@@ -717,7 +750,7 @@ class TestOverviewTab(unittest.TestCase):
         s.openai = [openai_account(email="gpt@example.com")]
         built = layout.build(s, provider="overview", now=NOW)
         self.assertIsNone(model.best_switch(s))
-        self.assertIn("No account has spare headroom", labels(built))
+        self.assertIn("No account to switch to", labels(built))
 
 
 def strip_bars(built):

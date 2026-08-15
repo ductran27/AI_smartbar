@@ -18,7 +18,7 @@ struct MetricBarRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 0) {
                 Text(metric.label)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(.primary.opacity(0.9))
                     .lineLimit(1)
                     .frame(width: 40, alignment: .leading)
