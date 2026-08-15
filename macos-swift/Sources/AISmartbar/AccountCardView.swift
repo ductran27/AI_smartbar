@@ -92,12 +92,29 @@ struct AccountCardView: View {
                 cardHeader
             }
             if account.metrics.isEmpty {
-                Label(account.stateText,
-                      systemImage: account.switchBlocked
-                          ? "person.crop.circle.badge.exclamationmark" : "hourglass")
+                if account.switchBlocked {
+                    // A dead credential is the one data-less state that
+                    // needs a drawn mark rather than an SF Symbol — the
+                    // whole point of ProviderMark is that Linux's cairo
+                    // painter can reproduce the exact same shape (see its
+                    // file header), which "person.crop.circle.badge.
+                    // exclamationmark" cannot. Same icon/gap as the
+                    // countdown's clock mark (COUNTDOWN_ICON/
+                    // COUNTDOWN_ICON_GAP in the shared theme).
+                    HStack(alignment: .top, spacing: 3) {
+                        ProviderMark(kind: "warn")
+                            .frame(width: 9, height: 9)
+                        Text(account.stateText)
+                            .lineLimit(2)
+                    }
                     .font(.caption)
-                    .foregroundStyle(account.switchBlocked ? .orange : .secondary)
-                    .lineLimit(2)
+                    .foregroundStyle(.orange)
+                } else {
+                    Label(account.stateText, systemImage: "hourglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             } else {
                 VStack(spacing: 7) {
                     ForEach(account.metrics) { metric in

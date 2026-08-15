@@ -67,6 +67,12 @@ BAR_H = 6.0
 # Gap between the label and the value area on the label line — the bar on
 # the line below it has no such gap; it spans the card's full inner width.
 BAR_GAP = 9.0              # Spacer(minLength: 9) in MetricBarRow's label line
+# One "small glyph beside a line of text" size shared by every spot that
+# needs it — the countdown's clock, a blocked account's warn triangle, and
+# the footer's pause mark — rather than three near-identical pairs of
+# constants for what is visually the same job three times.
+COUNTDOWN_ICON = 9.0
+COUNTDOWN_ICON_GAP = 3.0
 # The pace caret marks "how far through this window are we" independently
 # of the fill, which marks "how much is spent" — two different questions a
 # single bar cannot answer. It stays a neutral hairline rather than joining
@@ -81,6 +87,13 @@ TAB_H = 20.0               # provider tab row (Claude | OpenAI), when shown
 TAB_GAP = 6.0              # gap between the two tab pills
 TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
+# Each tab pill now carries its provider's mark to the LEFT of its label,
+# not instead of it: the mark alone is not how most people tell Claude and
+# OpenAI's tabs apart, and a label-less pill would stop being readable to
+# anyone who doesn't recognise it on sight. TAB_MARK sizes the Glyph;
+# TAB_MARK_GAP is the gap before the label starts (see popover_layout.build).
+TAB_MARK = 11.0
+TAB_MARK_GAP = 5.0
 CHIP_H = 15.0
 REMOVE_HIT = 18.0          # square hit target for the per-card remove ✕
 REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
@@ -214,8 +227,13 @@ class Glyph:
     """A symbol the renderer draws from paths.
 
     SF Symbols have no cross-platform equivalent and a font that happens to
-    carry "⟳" cannot be assumed, so the icon buttons are drawn rather
-    than typeset. `kind` is "refresh", "power" or "close".
+    carry "⟳" cannot be assumed, so every symbol on the panel is drawn
+    rather than typeset. `kind` is one of: "refresh", "close", "power",
+    "quit" (the header's Quit button — the same power-ring shape as
+    "power", under its own name because its Hit is also named "quit"),
+    "overview", "claude", "openai" (the provider marks beside a tab's
+    label), "clock" (a metric row's countdown), "pause" (the footer's
+    "update held") and "warn" (a blocked account's state line).
     """
     kind: str
     cx: float
