@@ -22,6 +22,7 @@ import unittest
 from unittest import mock
 
 from smartbar import update_runner
+from smartbar.core import branding
 
 
 class WindowsPlatform(unittest.TestCase):
@@ -85,14 +86,20 @@ class TestArgvShape(WindowsPlatform):
             fake_subprocess.SubprocessError = Exception
             update_runner.notify("AI smartbar updated", "Now on 1.2.3")
         argv = fake_subprocess.run.call_args[0][0]
-        self.assertEqual(argv[-2:], ["AI smartbar updated", "Now on 1.2.3"])
+        # The icon path joined title/body as a third slot; it is built from
+        # __file__ rather than from user text, but it travels the same way so
+        # there is only ever one rule here to remember.
+        self.assertEqual(argv[-3:-1], ["AI smartbar updated", "Now on 1.2.3"])
+        self.assertEqual(argv[-1], branding.icon_path())
         command_index = argv.index("-Command")
         script = argv[command_index + 1]
         self.assertNotIn("AI smartbar updated", script)
         self.assertNotIn("Now on 1.2.3", script)
+        self.assertNotIn(branding.icon_path(), script)
         # The script references them positionally instead.
         self.assertIn("$args[0]", script)
         self.assertIn("$args[1]", script)
+        self.assertIn("$args[2]", script)
 
     def test_no_console_flash_kwargs_are_passed_through(self):
         with (

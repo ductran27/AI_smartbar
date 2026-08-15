@@ -8,6 +8,32 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$HOME/.local/bin/ai-smartbar"
 AUTOSTART="$HOME/.config/autostart/ai-smartbar.desktop"
 CACHE="$HOME/.cache/ai-smartbar"
+# Published into the icon THEME rather than referenced in place, because the
+# .desktop entry and notify-send both resolve a bare NAME through the theme
+# and neither can see a path inside the checkout.
+ICON_SRC="$REPO/assets/ai-smartbar.png"
+ICON_SIZE=512
+ICON_DIR="$HOME/.local/share/icons/hicolor/${ICON_SIZE}x${ICON_SIZE}/apps"
+ICON_NAME="ai-smartbar"
+
+install_icon() {
+  # Redrawn at exactly the theme directory's size when this box can draw --
+  # pycairo is already a hard dependency of the tray, and app_icon renders
+  # vector, so this is a clean 512 and not a resample of the 1024 asset.
+  # Copying it verbatim is the fallback: an oversized file in a sized
+  # directory still resolves, it is merely scaled at lookup time.
+  mkdir -p "$ICON_DIR" 2>/dev/null || return 0
+  PYTHONPATH="$REPO" python3 -m smartbar.paint.app_icon \
+      "$ICON_DIR/$ICON_NAME.png" "$ICON_SIZE" >/dev/null 2>&1 \
+    || cp -f "$ICON_SRC" "$ICON_DIR/$ICON_NAME.png" 2>/dev/null \
+    || return 0
+  # Some panels only notice a new icon after the theme cache is rebuilt;
+  # absent on minimal installs, and the icon still resolves without it.
+  if command -v gtk-update-icon-cache >/dev/null; then
+    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" \
+      >/dev/null 2>&1 || true
+  fi
+}
 UNITS="$HOME/.config/systemd/user"
 CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 AGENT_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
@@ -31,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     --uninstall)
       pkill -f "$TRAY_PATTERN" 2>/dev/null || true
       remove_timer
-      rm -f "$BIN" "$AUTOSTART"
+      rm -f "$BIN" "$AUTOSTART" "$ICON_DIR/$ICON_NAME.png"
       rm -rf "$CACHE"
       echo "ai-smartbar uninstalled."
       exit 0 ;;
@@ -86,13 +112,14 @@ INTERVAL_SEC="$("$REPO/bin/ai-smartbar" --update-interval 2>/dev/null || echo 21
 INTERVAL_CRON="$("$REPO/bin/ai-smartbar" --update-interval cron 2>/dev/null \
   || echo '17 */6 * * *')"
 
+install_icon
 cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
 Name=AI smartbar
 Comment=Claude usage limits in the system tray
 Exec=${CONFIG_EXEC}$BIN
-Icon=dialog-information
+Icon=${ICON_NAME}
 X-GNOME-Autostart-enabled=true
 EOF
 

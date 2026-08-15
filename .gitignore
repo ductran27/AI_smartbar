@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 macos-swift/.build/
 .claude/settings.local.json
+# Generated from assets/ai-smartbar.png by install/windows.ps1.
+assets/*.ico

@@ -54,6 +54,11 @@ $VenvPython = Join-Path $Venv 'Scripts\python.exe'
 $VenvPythonW = Join-Path $Venv 'Scripts\pythonw.exe'
 $Launcher = Join-Path $Repo 'bin\ai-smartbar'
 $Shortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'AI smartbar.lnk'
+$IconPng = Join-Path $Repo 'assets\ai-smartbar.png'
+# A .lnk IconLocation must point at an .ico or an .exe -- it cannot read a
+# PNG -- so the shared asset is converted once, here, and kept beside the
+# checkout rather than in the cache: a shortcut outlives any cache clear.
+$IconIco = Join-Path $Repo 'assets\ai-smartbar.ico'
 
 # Must match smartbar/update_runner.py:_win_task_file(), which stats
 # %SystemRoot%\System32\Tasks\<name> to decide this device is installed. That
@@ -165,6 +170,9 @@ if ($Uninstall) {
     Stop-Tray
     Remove-Updater
     Remove-Item -LiteralPath $Shortcut -Force -ErrorAction SilentlyContinue
+    # Generated from assets/ai-smartbar.png by this script, so it is ours
+    # to remove; the PNG it came from is checked in and stays.
+    Remove-Item -LiteralPath $IconIco -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $Cache -Recurse -Force -ErrorAction SilentlyContinue
     # The venv lives inside the checkout and is this script's own artifact, so
     # it goes too. The CHECKOUT itself is never touched: it is what the updater
@@ -371,12 +379,33 @@ if (-not $NoAutoUpdate) {
 # out to cswap, so a console-attached host would flash a window continuously.
 # For bring-up, run venv\Scripts\python.exe bin\ai-smartbar by hand instead --
 # see docs/windows-bring-up.md.
+# The shortcut's icon. Never fatal: System.Drawing is present on every
+# Windows PowerShell, but this runs unattended from the updater too, and a
+# missing icon is a cosmetic loss where a thrown exception would cost the
+# user their startup entry. GetHicon() caps out around 256px, which is why
+# the 1024 asset is resized first rather than converted straight across.
+try {
+    if (Test-Path -LiteralPath $IconPng) {
+        Add-Type -AssemblyName System.Drawing
+        $src = New-Object System.Drawing.Bitmap $IconPng
+        $sized = New-Object System.Drawing.Bitmap $src, 256, 256
+        $icon = [System.Drawing.Icon]::FromHandle($sized.GetHicon())
+        $fs = [System.IO.File]::Create($IconIco)
+        $icon.Save($fs)
+        $fs.Close()
+        $src.Dispose(); $sized.Dispose()
+    }
+} catch {
+    Write-Warning "Could not build $IconIco - the shortcut keeps the default icon."
+}
+
 $wscript = New-Object -ComObject WScript.Shell
 $link = $wscript.CreateShortcut($Shortcut)
 $link.TargetPath = $VenvPythonW
 $link.Arguments = '"{0}"' -f $Launcher
 $link.WorkingDirectory = $Repo
 $link.Description = 'Claude usage limits in the system tray'
+if (Test-Path -LiteralPath $IconIco) { $link.IconLocation = "$IconIco,0" }
 $link.Save()
 
 # --------------------------------------------------------- exactly one
