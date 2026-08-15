@@ -1,8 +1,23 @@
 name: tests
 
+# push is narrowed to main: with an unfiltered `push` alongside `pull_request`,
+# every push to a branch with an open PR ran the whole 3-OS matrix TWICE for
+# one change. main still gets its own push run, which is what
+# install/release.sh's tag gate looks for (`--event push --branch main
+# --commit <sha>`), so narrowing this costs the release flow nothing.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A new push makes the run already in flight obsolete, so stop paying for it.
+# main is deliberately EXEMPT: install/release.sh refuses to tag unless the
+# tests run for that exact SHA concluded `success`, and a cancelled run is not
+# success — cancelling on main would turn every closely-spaced push into a
+# blocked release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   unittest:
@@ -19,6 +34,15 @@ jobs:
       # floor rather than a floor-to-ceiling matrix: the suite is plain
       # stdlib unittest with no version-conditional code paths, so testing
       # N Pythons buys nothing but CI minutes.
+      #
+      # There is deliberately no 3.9 LEG, and it is not an oversight: GitHub's
+      # ubuntu-24.04 runners cache 3.10 upward, and the pinned pycairo below
+      # is itself 3.10+, so a 3.9 job would be a bespoke interpreter build
+      # plus a second pycairo pin to maintain forever. What the floor actually
+      # needs protecting from is one specific mistake — `x: str | None`, valid
+      # syntax that raises TypeError at import on 3.9 — and ruff's FA102 rule
+      # (enabled in pyproject.toml, under `target-version = "py39"`) catches
+      # exactly that, statically, on every run. See that file's own comment.
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -79,3 +103,39 @@ jobs:
       - name: Build the Swift front-end
         if: runner.os == 'macOS'
         run: swift build -c release --package-path macos-swift
+
+  # The e2e suites used to run ONLY from install/release.sh, on whichever
+  # machine cut the release. That made the tag gate weaker than the release
+  # script it gates: CI would go green on a change that broke the installers,
+  # and only the maintainer's own laptop would ever find out.
+  #
+  # ubuntu is the right (and only needed) leg. Both scripts branch on
+  # `uname`, and their macOS arms are the ones a release cut on a Mac already
+  # covers — so running them here exercises the LINUX arms that otherwise
+  # never run anywhere. Both are hermetic by construction: e2e-config shadows
+  # launchctl/systemctl/crontab/pkill/setsid/nohup with no-op stubs and points
+  # HOME at a temporary directory, and e2e-update builds a throwaway origin
+  # and sets SMARTBAR_UPDATE_TARGETS so it can never reach a real install.
+  #
+  # These two and not the other three: e2e-config writes the units every
+  # device re-installs on update (a malformed one is not a degraded feature,
+  # it is a device that stops running the app) and e2e-update drives the
+  # rollback path that protects devices nobody can test by hand. e2e-warmup,
+  # e2e-autoadd and e2e-presence need stateful mocks or a real bare remote,
+  # and stay where they are, behind release.sh's --full.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # No pycairo: neither script renders anything. They drive the
+      # installers and the update state machine, which are cairo-free.
+      - name: config.env reaches the real agents
+        run: ./tests/e2e-config.sh
+
+      - name: self-update applies, blocks and rolls back
+        run: ./tests/e2e-update.sh
