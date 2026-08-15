@@ -125,6 +125,28 @@ struct Metric: Identifiable, Equatable {
 
     var usedPct: Int { Int(max(0, pct).rounded()) }
 
+    /// The heading this metric wears in the popover — a word, not a key.
+    /// Mirror of model.metric_title: the name sits on its own line above the
+    /// bar now, where "5h" reads as a token rather than as a thing you have.
+    /// "7d" becomes "Weekly" because that is both what it is and what Claude
+    /// Code's /usage calls it. A per-model bucket already carries a real
+    /// name (the model), and anything unrecognised keeps whatever cswap
+    /// labelled it rather than being mangled by a rule not written for it —
+    /// the same refusal to guess metricWindowSeconds makes.
+    var title: String {
+        let trimmed = key.trimmingCharacters(in: .whitespaces)
+        let fallback = label.isEmpty ? trimmed : label
+        if trimmed.hasPrefix("scoped:") { return fallback }
+        if trimmed == "spend" { return "Spend" }
+        guard let found = trimmed.range(of: #"^(\d+)([hd])$"#,
+                                        options: .regularExpression),
+              found.lowerBound == trimmed.startIndex else { return fallback }
+        let unit = trimmed.suffix(1)
+        guard let amount = Int(trimmed.dropLast()) else { return fallback }
+        if unit == "d" { return amount == 7 ? "Weekly" : "\(amount)-day" }
+        return "\(amount)-hour"
+    }
+
     /// Countdown recomputed from the absolute reset time so the wait shown
     /// stays live however old the snapshot is; cswap's fetch-time string is
     /// the fallback when resetsAt is unparseable.

@@ -33,6 +33,15 @@ DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴",
 RGB = {"green": (0.239, 0.745, 0.545), "yellow": (0.847, 0.651, 0.290),
        "low": (0.867, 0.478, 0.271), "critical": (0.851, 0.325, 0.310),
        "full": (0.486, 0.420, 0.910), "gray": (0.361, 0.400, 0.447)}
+# The same ramp retuned for a LIGHT ground. Not a computed darkening of RGB
+# and not optional: those values were picked against a near-black panel, and
+# on white the green and the yellow drop under the 3:1 a filled bar needs to
+# stay legible — the two most common states on the panel, washing out
+# exactly when a user glances at them. Same six keys, same meanings, same
+# order along the ramp; only the ground they are read against changes.
+RGB_LIGHT = {"green": (0.086, 0.580, 0.396), "yellow": (0.706, 0.463, 0.043),
+             "low": (0.749, 0.310, 0.106), "critical": (0.769, 0.176, 0.153),
+             "full": (0.353, 0.278, 0.827), "gray": (0.545, 0.588, 0.639)}
 
 # cswap usageStatus values other than "ok", mapped to the short explanation
 # UIs put on the account's card/row (instead of a bare "No usage data").
@@ -200,6 +209,32 @@ def window_seconds(key: str) -> float | None:
         return None
     amount, unit = match.groups()
     return float(amount) * (86400.0 if unit == "d" else 3600.0)
+
+
+def metric_title(metric) -> str:
+    """The heading a metric wears in the popover — a word, not a key.
+
+    The name sits on its own line above the bar now, where "5h" reads as a
+    token rather than as a thing you have. Stated windows get spelled out;
+    "7d" becomes "Weekly" because that is both what it is and what Claude
+    Code's /usage calls it. A per-model bucket already carries a real name
+    (the model), and anything this doesn't recognise keeps whatever cswap
+    labelled it rather than being mangled by a rule not written for it —
+    the same refusal-to-guess window_seconds() makes just above.
+    """
+    key = (getattr(metric, "key", "") or "").strip()
+    label = (getattr(metric, "label", "") or "").strip() or key
+    if key.startswith("scoped:"):
+        return label
+    if key == "spend":
+        return "Spend"
+    match = _WINDOW_KEY.fullmatch(key)
+    if not match:
+        return label
+    amount, unit = int(match.group(1)), match.group(2)
+    if unit == "d":
+        return "Weekly" if amount == 7 else f"{amount}-day"
+    return f"{amount}-hour"
 
 
 def pace_fraction(metric, now=None) -> float | None:

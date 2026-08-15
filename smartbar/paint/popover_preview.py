@@ -85,8 +85,12 @@ def _pending() -> tuple:
         return "", ""
 
 
-def render(path: str = "", *, scale: float = 2.0, demo: bool = False) -> str:
+def render(path: str = "", *, scale: float = 2.0, demo: bool = False,
+           scheme: str = "dark") -> str:
+    from smartbar.core import popover_theme
     from smartbar.paint import popover_draw
+
+    appearance = popover_theme.scheme_for(scheme)
 
     error = ""
     if demo:
@@ -107,9 +111,13 @@ def render(path: str = "", *, scale: float = 2.0, demo: bool = False) -> str:
     layout = popover_layout.build(snapshot, version=__version__,
                                   pending_version=pending,
                                   blocked_reason=blocked,
-                                  fetched_at=snapshot.fetched_at)
+                                  fetched_at=snapshot.fetched_at,
+                                  scheme=appearance)
     path = path or DEFAULT_PATH
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    # No background argument: the layout carries the scheme's own window
+    # colour, so the painter cannot be handed a ground the cards were not
+    # drawn against.
     popover_draw.render_png(layout, path, scale=scale)
     if error:
         print(error)

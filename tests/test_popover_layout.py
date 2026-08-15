@@ -50,7 +50,7 @@ def rails(built):
     """Active-card leading-rail boxes, picked by fill color — the rail is
     the only box painted RAIL, so this can't be confused with a card box,
     a bar, or a button of the same width."""
-    return [b for b in boxes(built) if b.fill == t.RAIL]
+    return [b for b in boxes(built) if b.fill == t.DARK.rail]
 
 
 def chips(built):
@@ -58,7 +58,7 @@ def chips(built):
     Make Active button (also BUTTON_DISABLED-filled, but BUTTON_H tall)
     can't be mistaken for one."""
     return [b for b in boxes(built)
-            if b.fill == t.BUTTON_DISABLED and abs(b.h - t.CHIP_H) < 0.01]
+            if b.fill == t.DARK.button_disabled and abs(b.h - t.CHIP_H) < 0.01]
 
 
 class TestPinOrigin(unittest.TestCase):
@@ -190,9 +190,9 @@ class TestCardContent(unittest.TestCase):
         active = layout.build(snap(account(active=True)), now=NOW)
         inactive = layout.build(snap(account(number=4)), now=NOW)
         self.assertIn("ACTIVE", labels(active))
-        self.assertEqual(boxes(active)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(active)[0].stroke, t.DARK.card_border)
         self.assertEqual(boxes(active)[0].line_width, 1.0)
-        self.assertEqual(boxes(inactive)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(inactive)[0].stroke, t.DARK.card_border)
         self.assertEqual(boxes(inactive)[0].line_width, 1.0)
 
     def test_inactive_card_gets_a_switch_button(self):
@@ -268,7 +268,7 @@ class TestCardContent(unittest.TestCase):
                        if isinstance(s, t.Label) and s.text.startswith("aaa"))
         badge = chips(built)[0]
         active_chip = next(s for s in boxes(built)
-                           if s.fill == t.status_rgba("green"))
+                           if s.fill == t.DARK.status_rgba("green"))
         self.assertLessEqual(address.x + address.max_width, badge.x)
         self.assertLessEqual(badge.x + badge.w, active_chip.x)
 
@@ -276,20 +276,21 @@ class TestCardContent(unittest.TestCase):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])), now=NOW)
-        # Two separate labels (FINDING 3), not one concatenated string —
-        # see test_percent_position_is_stable_across_countdown_lengths for
-        # why keeping them apart matters.
-        self.assertIn("79%", labels(built))
-        # No " · " separator any more (stage 02): the space is reserved for
-        # stage 04's clock glyph instead.
-        self.assertIn(" 2h 5m", labels(built))
+        # Two separate labels anchored to opposite edges of the readout
+        # line — see test_percent_position_is_stable_across_countdown_lengths
+        # for why keeping them apart matters. The percentage names its own
+        # scale now that the row has room for the word.
+        self.assertIn("79% used", labels(built))
+        # No " · " separator and no padded string: the clock glyph sits in
+        # the gap the leading space used to reserve.
+        self.assertIn("2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
-        self.assertIn("5%", labels(built))
-        self.assertIn(" 3h 1m", labels(built))
+        self.assertIn("5% used", labels(built))
+        self.assertIn("3h 1m", labels(built))
 
     def test_a_countdown_gets_a_clock_glyph_immediately_left_of_it(self):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
@@ -300,9 +301,9 @@ class TestCardContent(unittest.TestCase):
                  if isinstance(s, t.Glyph) and s.kind == "clock"]
         self.assertEqual(len(clocks), 1)
         countdown_label = next(s for s in built.shapes
-                               if isinstance(s, t.Label) and s.text == " 2h 5m")
+                               if isinstance(s, t.Label) and s.text == "2h 5m")
         text_edge = countdown_label.x - t.text_width(
-            countdown_label.text, t.SIZE_ROW_VALUE, mono=True)
+            countdown_label.text, t.SIZE_ROW_META, mono=True)
         self.assertLess(clocks[0].cx, text_edge)
 
     def test_a_row_with_no_countdown_draws_no_clock_glyph(self):
@@ -314,9 +315,11 @@ class TestCardContent(unittest.TestCase):
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
         # ONE string with the countdown, so it visibly slid sideways every
-        # time the countdown's length changed (e.g. "1h 0m" -> "59m").
-        # Independently anchored labels mean the percentage's x never
-        # moves, no matter how long or short the countdown text is.
+        # time the countdown's length changed (e.g. "1h 0m" -> "59m"). It is
+        # anchored to the card's LEFT inner edge now while the countdown
+        # keeps the right, so its x cannot move however long the countdown
+        # runs — the fix stopped being a pair of reserved columns and became
+        # a property of the layout.
         short = layout.build(
             snap(account(metrics=[metric(pct=79.0, countdown="9m")])),
             now=NOW)
@@ -324,22 +327,19 @@ class TestCardContent(unittest.TestCase):
             snap(account(metrics=[metric(pct=79.0, countdown="6d 23h")])),
             now=NOW)
         pct_short = next(s for s in short.shapes
-                         if isinstance(s, t.Label) and s.text == "79%")
+                         if isinstance(s, t.Label) and s.text == "79% used")
         pct_long = next(s for s in long_.shapes
-                        if isinstance(s, t.Label) and s.text == "79%")
+                        if isinstance(s, t.Label) and s.text == "79% used")
         self.assertEqual(pct_short.x, pct_long.x)
 
-    def test_the_bar_reclaims_the_width_the_old_single_column_wasted(self):
-        # FINDING 3: VALUE_W used to reserve 104pt for a value no realistic
-        # string needs; the two-column layout reserves less, in total, so
-        # the bar itself gets wider.
-        self.assertLess(t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W, 104.0)
-
     def test_the_bar_spans_the_cards_full_inner_width(self):
-        # Stage 02: the bar moved to its own line and no longer shares the
-        # row with a label column or the value sub-columns — it now runs
-        # edge to edge of the card's inner width, not inner_l + LABEL_W +
-        # BAR_GAP .. inner_r - VALUE_PCT_W - VALUE_COUNTDOWN_W - BAR_GAP.
+        # The end of FINDING 3's arithmetic. The bar used to share its row
+        # with a label column and two reserved value sub-columns (VALUE_W
+        # alone held 104pt for a value no realistic string needed); it then
+        # moved to its own line, and the value moved to a third line. No
+        # horizontal width is reserved for anything any more, so the bar
+        # runs edge to edge of the card's inner width — which is why the
+        # constants that used to be asserted here no longer exist.
         built = layout.build(snap(account()), now=NOW)
         track, _fill = bars(built)
         inner_l = t.PAD + t.CARD_PAD_H
@@ -352,7 +352,12 @@ class TestCardContent(unittest.TestCase):
         built = layout.build(
             snap(account(metrics=[metric(key="7d", resets_at=resets)])),
             now=NOW)
-        carets = [b for b in boxes(built) if b.fill == t.PACE]
+        # Filtered on width as well as fill: the notch is drawn in the
+        # card's own colour (that is what makes it read as a hole rather
+        # than a stripe), so `fill == pace` alone also matches every card
+        # background on the panel.
+        carets = [b for b in boxes(built)
+                  if b.fill == t.DARK.pace and b.w == t.PACE_W]
         self.assertEqual(len(carets), 1)
         self.assertAlmostEqual(carets[0].w, t.PACE_W)
         self.assertAlmostEqual(carets[0].h, t.BAR_H)
@@ -365,7 +370,8 @@ class TestCardContent(unittest.TestCase):
         built = layout.build(
             snap(account(metrics=[metric(key="spend", resets_at=resets)])),
             now=NOW)
-        self.assertFalse(any(b.fill == t.PACE for b in boxes(built)))
+        self.assertFalse(any(b.fill == t.DARK.pace and b.w == t.PACE_W
+                             for b in boxes(built)))
 
     def test_bar_fill_is_proportional_and_clamped(self):
         for pct, expect_full in ((50.0, False), (100.0, True), (140.0, True)):
@@ -379,7 +385,7 @@ class TestCardContent(unittest.TestCase):
 
     def test_a_spent_metric_is_painted_purple(self):
         built = layout.build(snap(account(metrics=[metric(pct=100.0)])), now=NOW)
-        self.assertEqual(bars(built)[1].fill, t.status_rgba("full"))
+        self.assertEqual(bars(built)[1].fill, t.DARK.status_rgba("full"))
 
     def test_zero_percent_draws_no_fill(self):
         built = layout.build(snap(account(metrics=[metric(pct=0.0)])), now=NOW)
@@ -542,6 +548,75 @@ def openai_account(number=1, email="gpt@example.com", active=True,
     return acct
 
 
+class TestAppearance(unittest.TestCase):
+    """The panel follows the system appearance, so `build` takes a Scheme.
+
+    Only colour may depend on it: every hit rect, every card height and the
+    overall size have to be identical in both, because a front-end measures
+    the panel once and because a review of one appearance is meant to be a
+    review of the other's geometry too.
+    """
+
+    def _both(self, **kwargs):
+        # Both providers, so the tab row is on screen too — it is the one
+        # place an accent fill appears, and the one most likely to be
+        # hardcoded to a single appearance.
+        made = snap(account(active=True))
+        made.openai = [openai_account()]
+        return (layout.build(made, now=NOW, scheme=t.DARK, **kwargs),
+                layout.build(made, now=NOW, scheme=t.LIGHT, **kwargs))
+
+    def test_geometry_is_identical_in_both_appearances(self):
+        dark, light = self._both()
+        self.assertEqual((dark.width, dark.height),
+                         (light.width, light.height))
+        self.assertEqual([(h.name, h.x, h.y, h.w, h.h, h.enabled)
+                          for h in dark.hits],
+                         [(h.name, h.x, h.y, h.w, h.h, h.enabled)
+                          for h in light.hits])
+
+    def test_the_same_text_is_drawn_in_both_appearances(self):
+        dark, light = self._both()
+        self.assertEqual(labels(dark), labels(light))
+
+    def test_the_two_appearances_actually_paint_differently(self):
+        """The guard on everything above: if `scheme` were quietly ignored,
+        every assertion in this class would pass on two identical layouts."""
+        dark, light = self._both()
+        self.assertNotEqual([s.color for s in dark.shapes
+                             if isinstance(s, t.Label)],
+                            [s.color for s in light.shapes
+                             if isinstance(s, t.Label)])
+
+    def test_the_layout_carries_its_own_window_ground(self):
+        # So a painter cannot be handed a light layout and a dark background.
+        dark, light = self._both()
+        self.assertEqual(dark.background, t.DARK.window_bg)
+        self.assertEqual(light.background, t.LIGHT.window_bg)
+
+    def test_a_scheme_can_be_named_instead_of_passed(self):
+        # Front-ends pass through whatever the host calls its appearance.
+        by_name = layout.build(snap(account(active=True)), now=NOW,
+                               scheme="light")
+        self.assertEqual(by_name.background, t.LIGHT.window_bg)
+
+    def test_an_unknown_appearance_falls_back_to_dark(self):
+        # An unrecognised name has to land somewhere, and dark is where this
+        # panel spent its whole life before light existed.
+        for name in ("", "midnight", None):
+            with self.subTest(name=name):
+                built = layout.build(snap(account(active=True)), now=NOW,
+                                     scheme=name)
+                self.assertEqual(built.background, t.DARK.window_bg)
+
+    def test_the_default_is_still_dark(self):
+        # An un-migrated caller (the Linux and Windows front-ends both call
+        # build() with no scheme) must render exactly as it did before the
+        # parameter existed.
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertEqual(built.background, t.DARK.window_bg)
+
+
 class TestProviderTabs(unittest.TestCase):
     def snap_both(self):
         s = snap(account(active=True))
@@ -605,7 +680,7 @@ class TestProviderTabs(unittest.TestCase):
         self.assertEqual(len(chips(built)), 1)
 
     def test_each_tab_carries_exactly_one_provider_mark(self):
-        # The mark sits BESIDE the label, not instead of it: this pins
+        # The mark sits ABOVE the label, not instead of it: this pins
         # "exactly one", not "at least one", so a stray extra glyph (or a
         # kind mismatch that duplicates one tab's mark on the other) would
         # fail here too.
@@ -617,7 +692,10 @@ class TestProviderTabs(unittest.TestCase):
         claude_label = next(s for s in built.shapes
                             if isinstance(s, t.Label) and s.text == "Claude")
         claude_mark = next(m for m in marks if m.kind == "claude")
-        self.assertLess(claude_mark.cx, claude_label.x)
+        # Stacked, so they share a centre line rather than sitting side by
+        # side; the label is centred on the pill too (anchor "center").
+        self.assertAlmostEqual(claude_mark.cx, claude_label.x)
+        self.assertLess(claude_mark.cy, claude_label.y)
 
     def test_a_single_provider_machine_gets_no_tab_marks_either(self):
         # No tab row at all here (see test_claude_only_layout_is_byte_
@@ -734,7 +812,7 @@ class TestRemoveAffordance(unittest.TestCase):
         fills = [b.fill for b in boxes(confirm)
                  if abs(b.x - remove_hit.x) < 0.01
                  and abs(b.y - remove_hit.y) < 0.01]
-        self.assertIn(t.DANGER, fills)
+        self.assertIn(t.DARK.danger, fills)
 
     def test_a_stale_confirm_for_the_active_card_is_ignored(self):
         built = layout.build(snap(account(active=True)), confirm="claude:1",
@@ -878,7 +956,9 @@ class TestActionFeedback(unittest.TestCase):
         self.assertTrue(refresh.enabled)
         glyph = next(s for s in built.shapes
                     if isinstance(s, t.Glyph) and s.kind == "refresh")
-        self.assertEqual(glyph.color, t.TEXT)
+        # Header chrome sits a step back from the cards it frames and
+        # brightens to full ink only under the pointer.
+        self.assertEqual(glyph.color, t.DARK.text_secondary)
 
     def test_action_error_renders_as_a_dismissible_banner(self):
         built = layout.build(snap(account(active=True)),
@@ -914,8 +994,8 @@ class TestActionFeedback(unittest.TestCase):
         self.assertTrue(quit_.enabled)
         glyphs = {s.kind: s.color for s in built.shapes
                  if isinstance(s, t.Glyph) and s.kind in ("refresh", "quit")}
-        self.assertEqual(glyphs["refresh"], t.TEXT_TERTIARY)
-        self.assertEqual(glyphs["quit"], t.TEXT)
+        self.assertEqual(glyphs["refresh"], t.DARK.text_tertiary)
+        self.assertEqual(glyphs["quit"], t.DARK.text_secondary)
 
     def test_a_click_on_the_disabled_refresh_hit_resolves_to_nothing(self):
         # enabled=False, not just dimmed — a real second click while a
