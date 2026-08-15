@@ -141,10 +141,10 @@ struct ProviderMark: View {
     }
 
     // MARK: - overview — four rounded squares in a 2x2 grid, filled
-    // (mirror of popover_draw._draw_overview). Not wired into any view
-    // yet — stage 04 only wires claude/openai/clock/pause/warn — but it
-    // draws so a future "all providers" tab can reach for it without a
-    // second round of Swift/cairo parity work.
+    // (mirror of popover_draw._draw_overview). Stage 04 drew this without
+    // wiring it into any view yet; stage 05's Overview tab is that "future
+    // tab" — its pill in PopoverView.tabButton reaches for it exactly like
+    // the claude/openai marks do.
 
     private func overviewPath(size: CGFloat) -> Path {
         var path = Path()

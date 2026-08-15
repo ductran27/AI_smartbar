@@ -947,6 +947,31 @@ class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
         _args, kwargs = fake_build.call_args
         self.assertEqual(kwargs.get("provider"), "openai")
 
+    def test_overview_tab_hit_sets_provider_and_next_layout_uses_it(self):
+        # Stage 05's new first tab: "tab:overview" is just another `name.
+        # startswith("tab:")` hit as far as this dispatcher is concerned --
+        # nothing here special-cases it to exactly "claude"/"openai", and
+        # this pins that a third value keeps flowing through untouched.
+        mod = _reimport("smartbar.windows.tray")
+        tray = _bare_tray(mod)
+        tray.popover = None
+        tray._quit = mock.Mock()
+        tray._on_update = mock.Mock()
+        tray._on_switch = mock.Mock()
+        tray.controller._start_fetch = mock.Mock()
+
+        tray._on_popover_action("tab:overview")
+        self.assertEqual(tray.provider, "overview")
+        tray._quit.assert_not_called()
+        tray.controller._start_fetch.assert_not_called()
+        tray._on_update.assert_not_called()
+        tray._on_switch.assert_not_called()
+
+        with mock.patch.object(mod.popover_layout, "build") as fake_build:
+            tray._popover_layout(hover="quit")
+        _args, kwargs = fake_build.call_args
+        self.assertEqual(kwargs.get("provider"), "overview")
+
 
 class TestOptimisticFlip(GuiStubbedTestCase):
     """TrayController.on_switch owns WHEN the optimistic flip runs (pinned

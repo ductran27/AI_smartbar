@@ -203,6 +203,13 @@ struct Account: Identifiable, Equatable {
         metrics.filter { $0.isScoped }.max(by: { $0.pct < $1.pct })
     }
 
+    /// The metric closest to its limit, or nil without data (mirror of
+    /// model.worst). worstPct/worstStatus below answer "how bad" without
+    /// the metric itself; OverviewView needs the metric ITSELF (its key,
+    /// for the bar's pace caret), which is why this exists as its own
+    /// property rather than just being folded into worstPct's expression.
+    var worstMetric: Metric? { metrics.max(by: { $0.pct < $1.pct }) }
+
     var worstPct: Double { metrics.map { $0.pct }.max() ?? 0 }
     var worstUsedPct: Int { Int(max(0, worstPct).rounded()) }
     var worstStatus: Status {

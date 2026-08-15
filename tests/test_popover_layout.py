@@ -151,9 +151,14 @@ class TestStructure(unittest.TestCase):
         self.assertEqual(built.width, t.WIDTH)   # same 330 as the macOS popover
 
     def test_height_grows_by_exactly_one_card_per_account(self):
-        one = layout.build(snap(account()), now=NOW)
+        # Two accounts vs three, not one vs two: both sides of THIS
+        # comparison sit above the tab row's own >1-account threshold (see
+        # TestProviderTabs), so the delta measured here is purely the
+        # per-card growth, not partly the tab row switching on.
         two = layout.build(snap(account(), account(number=2)), now=NOW)
-        self.assertAlmostEqual(two.height - one.height,
+        three = layout.build(
+            snap(account(), account(number=2), account(number=3)), now=NOW)
+        self.assertAlmostEqual(three.height - two.height,
                                layout.card_height(account()) + t.CARD_GAP)
 
     def test_card_height_follows_the_row_count(self):
@@ -486,8 +491,13 @@ class TestHitTesting(unittest.TestCase):
         names = {h.name for h in self.built().hits}
         # card:* regions are hover trackers (they make the remove ✕ appear
         # in the painted UIs), not buttons — clicks on them do nothing.
+        # Two accounts total (both Claude) now clears the >1 threshold for
+        # the tab row (see TestProviderTabs), so Overview + Claude tabs are
+        # part of the target set here too — no OpenAI tab, since this
+        # machine has no OpenAI accounts to show under one.
         self.assertEqual(names, {"refresh", "quit", "switch:2",
-                                 "card:claude:2", "card:claude:3"})
+                                 "card:claude:2", "card:claude:3",
+                                 "tab:overview", "tab:claude"})
 
     def test_update_target_appears_only_when_one_is_pending(self):
         self.assertNotIn("update", {h.name for h in self.built().hits})
@@ -572,14 +582,20 @@ class TestProviderTabs(unittest.TestCase):
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
         self.assertIn("ACTIVE", labels(built))   # the live login's chip
 
-    def test_openai_only_machine_needs_no_tabs_and_no_claude_banner(self):
+    def test_openai_only_machine_gets_overview_plus_openai_tabs_and_no_claude_banner(self):
+        # Two OpenAI accounts, zero Claude ones: total > 1 now clears the
+        # tab-row threshold (previously this needed BOTH providers to have
+        # accounts, so a single-provider machine like this one got no tab
+        # row at all). Only Overview + OpenAI show — there is no Claude tab
+        # to offer since there are no Claude accounts to show under it.
         s = snap()   # no Claude accounts at all
         s.openai = [openai_account(),
                     openai_account(number=2, email="old@example.com",
                                    active=False, ok=False,
                                    status="signed_out", metrics=[])]
         built = layout.build(s, now=NOW)   # auto-resolves to the OpenAI tab
-        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        tab_names = {h.name for h in built.hits if h.name.startswith("tab:")}
+        self.assertEqual(tab_names, {"tab:overview", "tab:openai"})
         self.assertNotIn(layout.NO_ACCOUNTS, labels(built))
         self.assertTrue(any("Signed out" in text for text in labels(built)))
 
@@ -615,6 +631,93 @@ class TestProviderTabs(unittest.TestCase):
         self.assertFalse(any(isinstance(s, t.Glyph)
                              and s.kind in ("claude", "openai")
                              for s in built.shapes))
+
+
+class TestOverviewTab(unittest.TestCase):
+    """Stage 05: the "where do I go next" tab. Its tab row is driven by the
+    TOTAL account count across both providers now, not "both providers have
+    accounts"; its body is one summary card, not a list of account cards."""
+
+    def test_tab_row_appears_with_two_accounts_of_one_provider(self):
+        # Previously this needed BOTH providers to have accounts; a single
+        # provider with two accounts got no tab row at all.
+        built = layout.build(snap(account(), account(number=2)), now=NOW)
+        self.assertTrue(any(h.name.startswith("tab:") for h in built.hits))
+
+    def test_tab_row_does_not_appear_with_one_account_total(self):
+        built = layout.build(snap(account()), now=NOW)
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+
+    def test_overview_tab_is_present_and_first(self):
+        built = layout.build(snap(account(), account(number=2)), now=NOW)
+        tab_hits = [h for h in built.hits if h.name.startswith("tab:")]
+        self.assertEqual(tab_hits[0].name, "tab:overview")
+        # "first" means leftmost on screen, not merely first appended.
+        self.assertTrue(all(tab_hits[0].x <= h.x for h in tab_hits[1:]))
+
+    def test_provider_overview_renders_no_account_cards_and_one_row_each(self):
+        s = snap(account(active=True, email="a@example.com"),
+                 account(number=2, email="b@example.com"))
+        s.openai = [openai_account(email="gpt@example.com")]
+        built = layout.build(s, provider="overview", now=NOW)
+        # No account cards: none of their hover/switch/remove hits exist.
+        self.assertFalse(any(h.name.startswith("card:") for h in built.hits))
+        self.assertFalse(any(h.name.startswith("switch:") for h in built.hits))
+        self.assertFalse(any(h.name.startswith("remove:") for h in built.hits))
+        for email in ("a@example.com", "b@example.com", "gpt@example.com"):
+            self.assertIn(email, labels(built))
+
+    def test_overview_rows_are_not_clickable(self):
+        # Section 2 of the stage brief: no switch hits on Overview rows in
+        # this stage, full stop -- only the tab row itself is clickable.
+        s = snap(account(active=True, email="a@example.com"),
+                 account(number=2, email="b@example.com"))
+        built = layout.build(s, provider="overview", now=NOW)
+        names = {h.name for h in built.hits}
+        self.assertEqual(names, {"refresh", "quit",
+                                 "tab:overview", "tab:claude"})
+
+    def test_ordering_puts_most_headroom_first_and_dataless_last(self):
+        s = snap(
+            account(number=1, email="worst@example.com",
+                   metrics=[metric(pct=95.0)]),
+            account(number=2, email="best@example.com",
+                   metrics=[metric(pct=5.0)]),
+            account(number=3, email="nodata@example.com", metrics=[]))
+        built = layout.build(s, provider="overview", now=NOW)
+        wanted = {"best@example.com", "worst@example.com", "nodata@example.com"}
+        order = [lbl.text for lbl in built.shapes
+                if isinstance(lbl, t.Label) and lbl.text in wanted]
+        self.assertEqual(order,
+                         ["best@example.com", "worst@example.com",
+                          "nodata@example.com"])
+
+    def test_dataless_row_shows_state_text_and_an_em_dash_instead_of_a_bar(self):
+        s = snap(
+            account(number=1, email="a@example.com", metrics=[metric()]),
+            account(number=2, email="dead@example.com", metrics=[], ok=False,
+                   status="relogin_required"))
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertTrue(any("Re-login required" in lbl for lbl in labels(built)))
+        self.assertIn("—", labels(built))
+
+    def test_lead_line_names_best_switchs_account(self):
+        s = snap(
+            account(active=True, email="a@example.com", metrics=[metric(pct=50.0)]),
+            account(number=2, email="best@example.com", metrics=[metric(pct=12.0)]))
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertEqual(model.best_switch(s).email, "best@example.com")
+        self.assertIn("Most headroom: best@example.com — 12% used", labels(built))
+
+    def test_lead_line_says_no_spare_headroom_when_best_switch_is_none(self):
+        # A single Claude account (the active one, so it is not its own
+        # candidate) plus an OpenAI account to clear the >1 total threshold
+        # for the tab row -- best_switch has nothing to offer either way.
+        s = snap(account(active=True, email="a@example.com"))
+        s.openai = [openai_account(email="gpt@example.com")]
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertIsNone(model.best_switch(s))
+        self.assertIn("No account has spare headroom", labels(built))
 
 
 class TestRemoveAffordance(unittest.TestCase):
