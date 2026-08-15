@@ -1,14 +1,14 @@
-"""MetricBarRow's row geometry and the pace caret's math exist twice, in two
-languages. Pin them together.
+"""MetricBarRow's row geometry, its heading text and the pace caret's math
+exist twice, in two languages. Pin them together.
 
-Stage 02 gave every metric row a second line (the bar, now the card's full
-inner width) and a pace caret, and duplicated a handful of new numbers to do
-it: ROW_LABEL_GAP/BAR_H/PACE_W/PACE's alpha as SwiftUI frame/opacity
-literals in MetricBarRow.swift, and window_seconds/pace_fraction's whole
-formula as metricWindowSeconds/Metric.paceFraction in Models.swift. Same
-approach as test_model_parity.py and test_popover_theme_parity.py: read the
-Swift as SOURCE TEXT, so a value or formula drifting on one side fails the
-ordinary unit suite with no Swift toolchain and no Xcode required.
+A metric row is three stacked lines now — name, bar, readout — and each gap
+between them is duplicated as a SwiftUI frame/padding literal in
+MetricBarRow.swift, alongside model.metric_title's twin (Metric.title) and
+model.window_seconds/pace_fraction's (metricWindowSeconds/paceFraction) in
+Models.swift. Same approach as test_model_parity.py and
+test_popover_theme_parity.py: read the Swift as SOURCE TEXT, so a value or
+formula drifting on one side fails the ordinary unit suite with no Swift
+toolchain and no Xcode required.
 """
 from __future__ import annotations
 
@@ -39,79 +39,146 @@ class SwiftPresent(unittest.TestCase):
                 raise unittest.SkipTest("macos-swift/ is not in this checkout")
 
 
+class TestRowHeightAddsUp(unittest.TestCase):
+    """Python-only, and the one number nothing else would catch.
+
+    card_height() reserves ROW_H per metric while _card_body() lays out the
+    three lines from their individual constants. If those disagree, every
+    card is drawn a few points taller or shorter than the space reserved for
+    it — the rows still look right, and the CARD quietly overlaps the one
+    below or leaves a gap, on every platform at once.
+    """
+
+    def test_the_three_lines_and_two_gaps_sum_to_row_h(self):
+        self.assertEqual(
+            theme.ROW_HEAD_H + theme.ROW_HEAD_GAP + theme.BAR_H
+            + theme.ROW_META_GAP + theme.ROW_META_H,
+            theme.ROW_H)
+
+
 class TestRowGeometryParity(SwiftPresent):
-    """Every stage-02 geometry number MetricBarRow.swift hardcodes as a
-    SwiftUI literal, matched against its popover_theme.py twin."""
+    """Every geometry number MetricBarRow.swift hardcodes as a SwiftUI
+    literal, matched against its popover_theme.py twin. Each is anchored on
+    the marker comment above it, so a regex cannot drift onto a different
+    frame that happens to carry the same shape."""
 
-    def test_label_line_gap_matches_row_label_gap(self):
+    def test_the_name_line_matches_size_row_head_and_row_head_h(self):
+        text = _read(ROW_SOURCE)
         match = re.search(
-            r"VStack\(alignment: \.leading, spacing: ([\d.]+)\)",
-            _read(ROW_SOURCE))
-        self.assertIsNotNone(match, "could not find the row's VStack spacing")
-        self.assertEqual(float(match.group(1)), theme.ROW_LABEL_GAP)
+            r"// SIZE_ROW_HEAD / ROW_HEAD_H in the shared theme\.\s+"
+            r"Text\(metric\.title\)\s+"
+            r"\.font\(\.system\(size: ([\d.]+), weight: \.semibold\)\)",
+            text)
+        self.assertIsNotNone(match, "could not find the name line's font")
+        self.assertEqual(float(match.group(1)), theme.SIZE_ROW_HEAD)
+        height = re.search(
+            r"\.frame\(height: ([\d.]+), alignment: \.leading\)", text)
+        self.assertIsNotNone(height, "could not find the name line's frame")
+        self.assertEqual(float(height.group(1)), theme.ROW_HEAD_H)
 
-    def test_bar_height_matches_bar_h(self):
-        match = re.search(r"\.frame\(height: ([\d.]+)\)", _read(ROW_SOURCE))
-        self.assertIsNotNone(match, "could not find the bar's frame(height:)")
+    def test_the_bar_matches_row_head_gap_and_bar_h(self):
+        match = re.search(
+            r"// ROW_HEAD_GAP / BAR_H in the shared theme\.\s+bar\s+"
+            r"\.padding\(\.top, ([\d.]+)\)\s+\.frame\(height: ([\d.]+)\)",
+            _read(ROW_SOURCE))
+        self.assertIsNotNone(match, "could not find the bar's padding/frame")
+        gap, height = (float(v) for v in match.groups())
+        self.assertEqual(gap, theme.ROW_HEAD_GAP)
+        self.assertEqual(height, theme.BAR_H)
+
+    def test_the_readout_matches_row_meta_gap_and_row_meta_h(self):
+        match = re.search(
+            r"\.padding\(\.top, ([\d.]+)\)\s+\.frame\(height: ([\d.]+)\)\s+\}",
+            _read(ROW_SOURCE))
+        self.assertIsNotNone(match, "could not find the readout's frame")
+        gap, height = (float(v) for v in match.groups())
+        self.assertEqual(gap, theme.ROW_META_GAP)
+        self.assertEqual(height, theme.ROW_META_H)
+
+    def test_the_minimum_fill_is_the_bars_own_height(self):
+        """The floor stops a 1%-used bar being a sliver its own corner
+        radius clips away. It is BAR_H, not a constant that merely equalled
+        it when written — BAR_H has already grown once."""
+        match = re.search(r"\.frame\(width: max\(([\d.]+), "
+                          r"geo\.size\.width \* fraction\)\)",
+                          _read(ROW_SOURCE))
+        self.assertIsNotNone(match, "could not find the fill's minimum width")
         self.assertEqual(float(match.group(1)), theme.BAR_H)
 
-    def test_label_column_width_matches_label_w(self):
-        match = re.search(r"\.frame\(width: ([\d.]+), alignment: \.leading\)",
-                          _read(ROW_SOURCE))
-        self.assertIsNotNone(match, "could not find the label's frame(width:)")
-        self.assertEqual(float(match.group(1)), theme.LABEL_W)
-
-    def test_label_and_value_font_sizes_match_the_shared_type_scale(self):
-        """The one drift a geometry-only parity test misses.
-
-        Stage 01 dropped SIZE_ROW_LABEL 11.0 -> 10.5 precisely so the label
-        and the value, which stage 02 put on the SAME line, would share one
-        optical size. Nothing pinned the Swift, so it kept its 11pt label
-        and the Mac alone grew a half-point size step between two words on
-        one line — a hierarchy the design says is not there, invisible to a
-        suite that only checked frames and spacings.
-        """
-        text = _read(ROW_SOURCE)
-        label = re.search(
-            r"\.font\(\.system\(size: ([\d.]+), weight: \.bold\)\)", text)
-        value = re.search(
-            r"\.font\(\.system\(size: ([\d.]+)\)\.monospacedDigit\(\)\)", text)
-        self.assertIsNotNone(label, "could not find the row label's font")
-        self.assertIsNotNone(value, "could not find the row value's font")
-        self.assertEqual(float(label.group(1)), theme.SIZE_ROW_LABEL)
-        self.assertEqual(float(value.group(1)), theme.SIZE_ROW_VALUE)
-        self.assertEqual(theme.SIZE_ROW_LABEL, theme.SIZE_ROW_VALUE,
-                         "the row label and row value share a line, so they "
-                         "must share a size — retuning one without the other "
-                         "reintroduces the step this test exists to catch")
-
-    def test_label_value_gap_matches_bar_gap(self):
-        match = re.search(r"Spacer\(minLength: ([\d.]+)\)", _read(ROW_SOURCE))
-        self.assertIsNotNone(match, "could not find the label/value Spacer")
-        self.assertEqual(float(match.group(1)), theme.BAR_GAP)
-
-    def test_value_subcolumns_match_pct_and_countdown_widths(self):
-        text = _read(ROW_SOURCE)
-        pct = re.search(
-            r"// VALUE_PCT_W in the shared theme\.\s+\.frame\(width: "
-            r"([\d.]+), alignment: \.trailing\)", text)
-        countdown = re.search(
-            r"// VALUE_COUNTDOWN_W in the shared theme\.\s+\.frame\(width: "
-            r"([\d.]+), alignment: \.trailing\)", text)
-        self.assertIsNotNone(pct, "could not find the pct trailing frame")
-        self.assertIsNotNone(countdown,
-                             "could not find the countdown trailing frame")
-        self.assertEqual(float(pct.group(1)), theme.VALUE_PCT_W)
-        self.assertEqual(float(countdown.group(1)), theme.VALUE_COUNTDOWN_W)
-
-    def test_the_caret_matches_pace_w_and_pace_alpha(self):
+    def test_the_readout_font_matches_size_row_meta(self):
         match = re.search(
-            r"Rectangle\(\)\s+\.fill\(Color\.white\.opacity\(([\d.]+)\)\)\s+"
-            r"\.frame\(width: ([\d.]+)\)", _read(ROW_SOURCE))
+            r"\.font\(\.system\(size: ([\d.]+)\)\.monospacedDigit\(\)\)",
+            _read(ROW_SOURCE))
+        self.assertIsNotNone(match, "could not find the readout's font")
+        self.assertEqual(float(match.group(1)), theme.SIZE_ROW_META)
+
+    def test_the_name_and_readout_sizes_are_a_real_step_apart(self):
+        """The inverse of what this file used to assert.
+
+        The name and the readout were pinned EQUAL while they shared one
+        line, because a size step between two words on the same line reads
+        as a hierarchy that isn't there. They are now a heading over its
+        data, so the step IS the hierarchy — and collapsing it back would
+        silently undo the reason the line was split.
+        """
+        self.assertGreater(theme.SIZE_ROW_HEAD, theme.SIZE_ROW_META)
+
+    def test_the_caret_matches_pace_w_and_is_drawn_as_the_notch(self):
+        text = _read(ROW_SOURCE)
+        match = re.search(
+            r"Rectangle\(\)\s+\.fill\(palette\.pace\)\s+"
+            r"\.frame\(width: ([\d.]+)\)", text)
         self.assertIsNotNone(match, "could not find the caret Rectangle")
-        alpha, width = match.groups()
-        self.assertEqual(float(width), theme.PACE_W)
-        self.assertEqual(float(alpha), theme.PACE[3])
+        self.assertEqual(float(match.group(1)), theme.PACE_W)
+        half = re.search(r"let half: CGFloat = ([\d.]+)", text)
+        self.assertIsNotNone(half, "could not find the caret's half-width")
+        self.assertEqual(float(half.group(1)) * 2, theme.PACE_W,
+                         "the caret centres itself on half its own width; a "
+                         "stale half puts the notch off-centre by a hair at "
+                         "every pace but 50%")
+
+
+class TestMetricTitleParity(SwiftPresent):
+    """model.metric_title's Swift twin. Structural rather than a value
+    comparison — there is no Swift to execute here — so it pins the actual
+    rules Metric.title encodes, not a string that happens to agree today."""
+
+    def test_python_titles_every_key_shape_the_ramp_can_produce(self):
+        # (key, label as cswap actually sets it, expected heading). The
+        # label matters: a scoped bucket's key is "scoped:Fable" but its
+        # label is already the model's name, and metric_title's whole
+        # contract for those is to defer to it rather than parse the key.
+        cases = [
+            ("5h", "5h", "5-hour"),
+            ("7d", "7d", "Weekly"),
+            ("3d", "3d", "3-day"),
+            ("24h", "24h", "24-hour"),
+            ("spend", "Spend", "Spend"),
+            ("scoped:Fable", "Fable", "Fable"),
+            ("", "", ""),
+            # Anything the rules do not recognise keeps cswap's own label
+            # rather than being mangled by a rule not written for it.
+            ("weekly", "Weekly window", "Weekly window"),
+        ]
+        for key, label, expected in cases:
+            with self.subTest(key=key):
+                metric = model.Metric(key=key, label=label, short=key,
+                                      pct=0.0)
+                self.assertEqual(model.metric_title(metric), expected)
+
+    def test_the_swift_encodes_the_same_four_rules(self):
+        text = _read(MODELS_SOURCE)
+        for fragment in ('trimmed.hasPrefix("scoped:")',
+                         'trimmed == "spend"',
+                         r'#"^(\d+)([hd])$"#',
+                         'amount == 7 ? "Weekly"',
+                         '"\\(amount)-day"',
+                         '"\\(amount)-hour"'):
+            with self.subTest(rule=fragment):
+                self.assertIn(fragment, text,
+                              "Metric.title dropped a rule model.metric_title "
+                              "still applies — the Mac would head a row with "
+                              "a different word from every other front-end")
 
 
 class TestPaceFractionParity(SwiftPresent):

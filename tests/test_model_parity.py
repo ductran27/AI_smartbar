@@ -49,13 +49,23 @@ def _read(path: str) -> str:
         return handle.read()
 
 
-def swift_palette() -> dict:
-    """{status name: (r, g, b)} as StatusPalette.swift declares it."""
+def swift_palette(scheme: str = "dark") -> dict:
+    """{status name: (r, g, b)} for ONE of StatusPalette.swift's ramps.
+
+    Sliced by property declaration rather than scraped from the whole file:
+    the dark and light ramps use the same six case names, so a flat pass
+    would let the second silently overwrite the first and compare a ramp
+    against itself.
+    """
     text = _read(PALETTE_SOURCE)
+    start = text.index("var %sNSColor: NSColor {" % scheme)
+    rest = text[start:]
+    end = rest.find("\n    }")
+    block = rest if end < 0 else rest[:end]
     found = {name: (float(r), float(g), float(b))
-             for name, r, g, b in _RGB_CASE.findall(text)}
+             for name, r, g, b in _RGB_CASE.findall(block)}
     found.update({name: (float(v), float(v), float(v))
-                  for name, v in _WHITE_CASE.findall(text)})
+                  for name, v in _WHITE_CASE.findall(block)})
     return found
 
 
@@ -85,7 +95,12 @@ class TestTheScraperFoundSomething(SwiftPresent):
     a comparison of two empty containers: green, and worthless."""
 
     def test_all_three_scrapers_return_a_full_set(self):
-        self.assertEqual(len(swift_palette()), 6)
+        self.assertEqual(len(swift_palette("dark")), 6)
+        self.assertEqual(len(swift_palette("light")), 6)
+        # The slicing is the part most likely to break quietly: a bad index
+        # would hand both calls the same block, and every comparison below
+        # would still pass on one ramp's values.
+        self.assertNotEqual(swift_palette("dark"), swift_palette("light"))
         self.assertEqual(len(swift_thresholds()), 3)
         self.assertEqual(len(swift_status_names()), 6)
 
@@ -103,13 +118,26 @@ class TestStatusNames(SwiftPresent):
 
 class TestPalette(SwiftPresent):
     def test_every_status_paints_the_same_rgb_in_both_languages(self):
-        swift = swift_palette()
-        for name, rgb in sorted(model.RGB.items()):
-            with self.subTest(status=name):
-                self.assertEqual(swift.get(name), rgb,
-                                 "StatusPalette.swift and model.RGB disagree "
-                                 "about %s — the Mac would paint a different "
-                                 "color from every other front-end" % name)
+        """Both ramps: the dark one every renderer has always used, and the
+        light one that arrived with the appearance-following panel. A light
+        value drifting is exactly as invisible on a dark Mac as a dark one
+        drifting is on a light Linux box, so neither can go unpinned."""
+        for scheme, ramp in (("dark", model.RGB), ("light", model.RGB_LIGHT)):
+            swift = swift_palette(scheme)
+            for name, rgb in sorted(ramp.items()):
+                with self.subTest(scheme=scheme, status=name):
+                    self.assertEqual(
+                        swift.get(name), rgb,
+                        "StatusPalette.swift's %s ramp and model's disagree "
+                        "about %s — the Mac would paint a different color "
+                        "from every other front-end" % (scheme, name))
+
+    def test_both_ramps_cover_exactly_the_same_statuses(self):
+        """A status present in one ramp and missing from the other is a
+        KeyError the moment someone switches appearance — and model.py's own
+        header warns that a missing key crashes a UI we may not be able to
+        run."""
+        self.assertEqual(set(model.RGB_LIGHT), set(model.RGB))
 
 
 class TestThresholds(SwiftPresent):

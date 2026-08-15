@@ -1,8 +1,9 @@
 // One card per Claude account: status dot, email, ACTIVE chip or switch
-// button, and one horizontal filling bar per metric (5h / 7d / per-model).
-// Every card wears the same quiet hairline; the active one is told apart by
-// a leading rail instead of a loud outline (dark-only design). Accounts
-// whose stored credential is dead say so and cannot be switched to.
+// button, and one metric section (name, bar, readout) per limit (5h / 7d /
+// per-model). Every card wears the same quiet hairline; the active one is
+// told apart by a leading rail instead of a loud outline. Accounts whose
+// stored credential is dead say so and cannot be switched to. Colours come
+// from the appearance's Palette — the panel follows the system now.
 import SwiftUI
 
 struct AccountCardView: View {
@@ -11,7 +12,10 @@ struct AccountCardView: View {
     @EnvironmentObject private var presence: PresenceStatus
     @EnvironmentObject private var planStatus: PlanStatus
     @EnvironmentObject private var openai: OpenAIStatus
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hovering = false
+
+    private var palette: Palette { Palette.of(colorScheme) }
     // The card whose removal awaits confirmation, named in full — NOT a
     // Bool: card views are recycled by slot number, and OpenAI numbers are
     // re-enumerated positions, so a bare flag could survive a data refresh
@@ -108,15 +112,16 @@ struct AccountCardView: View {
                             .lineLimit(2)
                     }
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(palette.warning)
                 } else {
                     Label(account.stateText, systemImage: "hourglass")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.textSecondary)
                         .lineLimit(2)
                 }
             } else {
-                VStack(spacing: 7) {
+                // ROW_GAP in the shared theme.
+                VStack(spacing: 9) {
                     ForEach(account.metrics) { metric in
                         MetricBarRow(metric: metric)
                     }
@@ -126,8 +131,14 @@ struct AccountCardView: View {
         .padding(.vertical, 9)
         .padding(.horizontal, 11)
         .background(
+            // A solid ground rather than `.thinMaterial`. The pace notch is
+            // the card's own colour cut through a bar (see MetricBarRow),
+            // which only lands exactly if that colour is known rather than
+            // whatever a blur resolves to over the desktop behind it — and
+            // it retires the one deliberate divergence the cairo painter
+            // could never reproduce. CARD_BG in the shared theme.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.thinMaterial)
+                .fill(palette.cardBG)
         )
         .overlay(
             // Every card gets the same quiet hairline now — the active one
@@ -135,17 +146,17 @@ struct AccountCardView: View {
             // mark on the panel for information the ACTIVE chip already
             // carries. CARD_BORDER in the shared theme.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                .strokeBorder(palette.cardBorder, lineWidth: 1)
         )
         .overlay(alignment: .leading) {
             if account.active {
                 // The rail replaces the outline as the active mark: a
                 // quiet ink line rather than a colour, because colour on
                 // this panel is reserved for how much budget is left —
-                // see RAIL's comment in the shared theme. RAIL_W/
-                // RAIL_INSET/RAIL there.
+                // see Scheme.rail's comment in the shared theme. RAIL_W/
+                // RAIL_INSET there.
                 RoundedRectangle(cornerRadius: 1.25, style: .continuous)
-                    .fill(Palette.chalk)
+                    .fill(palette.rail)
                     .frame(width: 2.5)
                     .padding(.vertical, 3)
             }
@@ -161,6 +172,7 @@ struct AccountCardView: View {
             // make room for it.
             Text(account.email)
                 .font(.callout.weight(.semibold))
+                .foregroundStyle(palette.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(headerHelp)
@@ -178,7 +190,7 @@ struct AccountCardView: View {
                 Button { confirmToken = removalToken } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(palette.textTertiary)
                         // REMOVE_HIT in the shared theme
                         .frame(width: 18, height: 18)
                         .opacity(hovering ? 1 : 0)
@@ -194,10 +206,11 @@ struct AccountCardView: View {
             if account.active {
                 Text("ACTIVE")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.accentText)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(Status.green.color))
+                    .background(Capsule()
+                        .fill(Status.green.color(in: colorScheme)))
             } else if account.provider == "openai" {
                 // Read-only card: no switcher exists for ChatGPT logins.
                 EmptyView()
@@ -228,6 +241,7 @@ struct AccountCardView: View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Remove \(accountLabel)?")
                 .font(.callout.weight(.semibold))
+                .foregroundStyle(palette.text)
                 .lineLimit(2)
             HStack(spacing: 7) {
                 Spacer(minLength: 0)
@@ -236,8 +250,11 @@ struct AccountCardView: View {
                     performRemoval()
                 }
                 .buttonStyle(.borderedProminent)
-                // DANGER in the shared theme — the status ramp's critical red.
-                .tint(Status.critical.color)
+                // DANGER in the shared theme. It used to tint from
+                // Status.critical, which the theme's comment claimed was the
+                // same red — it never numerically was, so this now takes the
+                // palette's own value and the claim is true.
+                .tint(palette.danger)
                 .controlSize(.small)
                 .help(account.provider == "openai"
                       ? "Forget this card (labels and last numbers). Signing in with Codex brings it back"
@@ -265,10 +282,10 @@ struct AccountCardView: View {
     private var planBadge: some View {
         Text(accountBadge)
             .font(.system(size: 9))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(palette.textSecondary)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.05)))
+            .background(Capsule().fill(palette.buttonDisabled))
     }
 
     /// Solid = a real reading (purple when a limit is spent). Hollow gray =
@@ -278,12 +295,13 @@ struct AccountCardView: View {
     private var statusDot: some View {
         if account.dotHollow {
             Circle()
-                .strokeBorder(account.worstStatus.color, lineWidth: 1.5)
+                .strokeBorder(account.worstStatus.color(in: colorScheme),
+                              lineWidth: 1.5)
                 .frame(width: 7, height: 7)
                 .accessibilityLabel("no usage data")
         } else {
             Circle()
-                .fill(account.worstStatus.color)
+                .fill(account.worstStatus.color(in: colorScheme))
                 .frame(width: 7, height: 7)
         }
     }

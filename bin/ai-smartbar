@@ -157,6 +157,10 @@ def main() -> int:
     parser.add_argument("--demo", action="store_true",
                         help="with --preview-popover: sample data covering "
                              "every card state, no claude-swap needed")
+    parser.add_argument("--scheme", choices=("dark", "light"), default="dark",
+                        help="with --preview-popover: which appearance to "
+                             "render (the panel follows the system's at run "
+                             "time; this is how the other one gets reviewed)")
     parser.add_argument("--update", action="store_true",
                         help="fetch and apply the newest release, then restart")
     parser.add_argument("--check-update", action="store_true",
@@ -240,7 +244,8 @@ def main() -> int:
         return run_once()
     if args.preview_popover is not None:
         from smartbar.paint.popover_preview import render
-        print(render(args.preview_popover, demo=args.demo))
+        print(render(args.preview_popover, demo=args.demo,
+                     scheme=args.scheme))
         return 0
     if args.update or args.check_update:
         from smartbar.update_runner import run_once as update_once
