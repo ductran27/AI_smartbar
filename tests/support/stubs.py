@@ -119,6 +119,58 @@ def reimport(dotted_name):
     return importlib.import_module(dotted_name)
 
 
+# --- pycairo: the one dependency the fakes deliberately do NOT replace ------
+
+try:                                                 # pragma: no cover
+    import cairo as _real_cairo
+except ImportError:                                  # pragma: no cover
+    _real_cairo = None
+
+#: Resolved ONCE, at import time, and never recomputed. Every install_*
+#: below is free to push a fake `cairo` into sys.modules, so a later
+#: `import cairo` (or importlib.util.find_spec) would answer about the fake
+#: rather than about the environment. This module is imported before any
+#: test runs, so this records the real answer.
+HAS_PYCAIRO = _real_cairo is not None
+
+
+def skip_without_pycairo():
+    """Skip the running test when pycairo is absent, rather than erroring.
+
+    Raises SkipTest rather than taking a TestCase and calling .skipTest()
+    on it, which is the same exception by a longer route -- so this works
+    from a setUp, from inside a `with self.subTest(...)` block (where it is
+    recorded against that subtest and the loop continues), and from a
+    plain module-level helper with no test instance in reach.
+
+    install_gi() deliberately leaves cairo REAL (see its docstring) so that
+    smartbar.paint.tray_icon/popover_draw run for real underneath the fake
+    toolkit -- which is the whole point of those tests, and the reason a
+    fake cairo is not the answer here. The cost is that the Linux front-end
+    is unimportable without pycairo: smartbar/linux/tray.py imports
+    smartbar.paint.tray_icon at module scope, so every one of those tests
+    died in ModuleNotFoundError before this existed.
+
+    That erroring contradicted what README.md tells a contributor to expect
+    and, worse, buried it: on a pycairo-less interpreter the suite reported
+    60 errors, of which only 54 were even about cairo -- the other 6 were
+    collateral, later files inheriting a poisoned sys.modules from the
+    half-completed imports these failures left behind. Skipping cleanly
+    removes both. tests/test_popover_draw.py has always skipped for exactly
+    this reason; this is the same rule, applied to the tests that reach
+    cairo INDIRECTLY.
+
+    Nothing is quietly lost in CI: .github/workflows/tests.yml installs
+    pinned pycairo and then runs `python -c "import cairo"` as its own step
+    specifically so these cannot turn into silent skips there.
+    """
+    if not HAS_PYCAIRO:
+        raise unittest.SkipTest(
+            "pycairo is not installed -- the Linux front-end imports "
+            "smartbar.paint at module scope, which needs a real cairo. "
+            "`pip install pycairo` to run these.")
+
+
 # --- the shared catch-all fake widget ---------------------------------------
 
 class FakeWidget:
