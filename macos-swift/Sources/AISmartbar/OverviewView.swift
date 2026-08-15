@@ -32,14 +32,19 @@ struct OverviewView: View {
         guard let suggestion = store.snapshot?.bestSwitch,
               let worst = suggestion.worstMetric else {
             // True whether there are simply no other Claude accounts to
-            // offer, or every one of them is blocked/data-less/active --
+            // offer, or every one of them is blocked/data-less --
             // Snapshot.bestSwitch collapses those cases on purpose (mirror
-            // of model.best_switch), and "no spare headroom" is honest
-            // about all of them without claiming to know which.
-            return "No account has spare headroom"
+            // of model.best_switch), and this is honest about all of them
+            // without claiming to know which.
+            return "No account to switch to"
         }
         let pct = Int(max(0, worst.pct).rounded())
-        return "Most headroom: \(suggestion.email) — \(pct)% used"
+        // "Best switch", NOT "most headroom": bestSwitch only considers
+        // non-active Claude slots, while the rows below rank BOTH providers
+        // and include the active account — so this line can legitimately
+        // name an account that is not row one. Naming it after what it
+        // computes is what stops that reading as a sorting bug.
+        return "Best switch: \(suggestion.email) — \(pct)% used"
     }
 
     /// The strip only ever shows the ACTIVE Claude account's own 7-day
@@ -112,15 +117,18 @@ private struct OverviewRow: View {
                                      ? Palette.spent : Color.white.opacity(0.8))
                     .frame(width: 28, alignment: .trailing)
             } else {
-                Text(account.stateText.isEmpty ? "No usage data" : account.stateText)
+                // The SHORT state name (Account.stateSummary), spanning the
+                // bar AND percentage columns: there is no bar and no
+                // reading to collide with, and the full sentence truncated
+                // inside the bar's 56pt rendered as "Re-lo…once", which
+                // names nothing. The account's own card still carries the
+                // whole sentence. Mirror of popover_layout._overview_card.
+                Text(account.stateSummary.isEmpty
+                     ? "No usage data" : account.stateSummary)
                     .font(.caption)
                     .foregroundStyle(account.switchBlocked ? .orange : .secondary)
                     .lineLimit(1)
-                    .frame(width: 56, alignment: .leading)
-                Text("—")
-                    .font(.system(size: 10.5).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 28, alignment: .trailing)
+                    .frame(width: 56 + 6 + 28, alignment: .trailing)
             }
         }
         .frame(height: 16)

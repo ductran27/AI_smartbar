@@ -192,6 +192,17 @@ struct Account: Identifiable, Equatable {
         return AccountState.text(forStatus: status)
     }
 
+    /// stateText's opening clause — the NAME of the state, without its
+    /// instruction ("Re-login required", "Signed out"). The Overview row
+    /// has room for a word, not a sentence; the account's own card still
+    /// carries the whole thing. Split on the same " — " separator every
+    /// AccountState.text entry is written with, rather than kept as a
+    /// second table beside them, so the two can never drift (mirror of
+    /// model.state_summary, pinned by TestStateSummaryParity).
+    var stateSummary: String {
+        stateText.components(separatedBy: " — ").first ?? stateText
+    }
+
     /// Activating this slot would restore a dead stored credential.
     var switchBlocked: Bool { AccountState.switchBlocked(status: status) }
 
