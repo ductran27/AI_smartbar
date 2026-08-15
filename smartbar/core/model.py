@@ -95,7 +95,6 @@ class Metric:
     pct: float          # % used, as reported by cswap (same scale as /usage)
     resets_at: str = ""
     countdown: str = ""  # preformatted by cswap, e.g. "4h 3m"
-    clock: str = ""
 
 
 @dataclass
@@ -118,11 +117,23 @@ class Account:
     # "claude" (cswap slots) or "openai" (core/codex.py). Cards branch on
     # it — an OpenAI account has no switch button and no device badge.
     provider: str = "claude"
+    # cswap's usageFetchedAt for THIS account: when its usage was actually
+    # measured at the API. Per-account on purpose — cswap refreshes each
+    # slot on its own plan, so an alternate parked on a long plan can be
+    # arbitrarily older than the active one in the very same payload.
+    # Anything asking "how old is this reading" (warmup's staleness gate)
+    # must use the account's own stamp, never a snapshot-wide one.
+    fetched_at: str = ""
 
 
 @dataclass
 class Snapshot:
     accounts: list = field(default_factory=list)
+    # The one stamp the popover's "Updated" line shows. It is the ACTIVE
+    # account's measurement time (see cswap.snapshot_stamp), because that is
+    # the account /usage describes too — NOT an arbitrary account's. It is a
+    # display aggregate and nothing else: per-account freshness lives on
+    # Account.fetched_at, and anything gating on age must read that instead.
     fetched_at: str = ""
     schema_warning: str = ""
     # OpenAI/ChatGPT accounts ride a SEPARATE list, never merged into

@@ -87,5 +87,56 @@ class TestSnippetsHaveNotDrifted(unittest.TestCase):
             self.assertGreater(len(body.splitlines()), 5)
 
 
+MODELS_SOURCE = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                             "Models.swift")
+
+
+def swift_parse_body():
+    """The body of Snapshot.parse in Models.swift — the Swift half of the
+    same wire format smartbar/core/cswap.py's parse_snapshot decodes."""
+    with open(MODELS_SOURCE, encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.search(r"^    static func parse\(.*?^    \}", text,
+                      re.DOTALL | re.MULTILINE)
+    assert match, "could not find Snapshot.parse in Models.swift"
+    return match.group(0)
+
+
+class TestEveryWindowKeepsItsResetTime(unittest.TestCase):
+    """Both parsers must carry resetsAt/countdown for EVERY window.
+
+    The drift this pins: the Swift spend branch hard-coded `resetsAt: ""`,
+    `countdown: ""` while cswap.py's _metric read both from the payload for
+    all four window kinds. MetricBarRow renders a countdown for whatever
+    metric it is handed, so an enterprise account's Spend row showed a reset
+    time on Linux/Windows and a blank on macOS — from one payload.
+
+    Written as "no empty literal survives in the parse body" rather than a
+    per-branch match: it needs no update when a fifth window kind is added,
+    and a new branch that forgets the two fields fails here on the run it
+    lands.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(MODELS_SOURCE):
+            raise unittest.SkipTest("macos-swift/ is not in this checkout")
+
+    def test_the_scraper_actually_found_the_parse_body(self):
+        body = swift_parse_body()
+        self.assertGreaterEqual(body.count("Metric("), 4,
+                                "expected the 5h/7d/spend/scoped branches")
+
+    def test_no_swift_branch_discards_resets_at_or_countdown(self):
+        body = swift_parse_body()
+        for field in ("resetsAt", "countdown"):
+            # assertFalse, not assertNotIn: the latter prints the whole parse
+            # body on failure and buries the one line that explains it.
+            self.assertFalse('%s: ""' % field in body,
+                             '%s is hard-coded empty in Snapshot.parse; read '
+                             "it from the payload like cswap.py's _metric "
+                             "does, or the macOS row silently loses it" % field)
+
+
 if __name__ == "__main__":
     unittest.main()

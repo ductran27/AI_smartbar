@@ -46,7 +46,9 @@ The panel — identical on macOS, Linux and Windows:
   countdowns ticking live from the absolute reset time, the active card
   outlined white with a green `ACTIVE` chip, and an "Updated" stamp that
   shows when the usage was actually measured at the API — not when the
-  app last polled.
+  app last polled. It is the ACTIVE account's measurement time, the same
+  account `/usage` describes; cswap refreshes each slot on its own plan,
+  so the others in the same payload can be much older.
 - **One-click switching.** `Make Active` flips the account instantly
   (optimistic UI; failures surface in the popover and the next fetch
   corrects the display). New Claude Code sessions use the new account;

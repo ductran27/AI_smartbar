@@ -61,6 +61,11 @@ Linux and Windows front-ends and each learned the same way:
     on the one front-end whose own header admits it has never run on real
     hardware, which is precisely where an invisible failure costs most.
 """
+# See smartbar/linux/tray.py's own note: the repo floor is 3.9, where a
+# PEP 604 annotation is a runtime TypeError without this. Every other module
+# in the package already carries it; these two front-ends were the gap.
+from __future__ import annotations
+
 import logging
 import os
 import queue
