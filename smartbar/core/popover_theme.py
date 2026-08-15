@@ -7,15 +7,24 @@ primitives, and each platform only rasterises what it is handed. Nothing in
 this module imports a graphics library, so it is unit-testable anywhere.
 
 Values mirror PopoverView.swift / AccountCardView.swift / MetricBarRow.swift
-1:1. One deliberate difference: macOS cards use `.thinMaterial`, whose blur
-has no portable cairo equivalent, so CARD_BG is the solid shade it resolves
-to over this background.
+1:1. macOS cards used to be `.thinMaterial`, whose blur has no portable cairo
+equivalent, leaving `card_bg` as the solid shade it happened to resolve to;
+they are now that solid colour on every platform. The pace notch is what
+settled it — it is drawn as the card's own ground showing through the bar
+(see PACE_W), which only lands exactly if that ground is a known colour
+rather than whatever a blur resolves to over the desktop behind it.
+
+Geometry is module-level and shared; COLOUR is per-appearance and lives in a
+Scheme (DARK / LIGHT). The split is the point: the panel follows the system
+appearance, and because only colour varies, a layout is the same shape in
+both — nothing re-measures, and reviewing one appearance reviews the other's
+geometry too.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from smartbar.core.model import RGB
+from smartbar.core.model import RGB, RGB_LIGHT
 
 # --- geometry (points; mirrors the SwiftUI frames) -------------------------
 WIDTH = 330.0
@@ -31,15 +40,25 @@ CARD_INNER_GAP = 7.0
 RAIL_W = 2.5                # active-card leading rail width
 RAIL_INSET = 3.0            # vertical inset so the rail reads as a mark,
                             # not a second border
-# A row is two stacked lines now, not one: the label/pct/countdown line,
-# then a bar that gets the card's FULL inner width instead of splitting it
-# with a label column (see popover_layout._card_body). ROW_H is their sum
-# (12 + 2 + 6 = 20), so card_height's row-counting arithmetic needs no
-# change of its own beyond this constant moving.
-ROW_LABEL_H = 12.0        # the label/pct/countdown line
-ROW_LABEL_GAP = 2.0       # gap between that line and the bar under it
-ROW_H = 20.0
-ROW_GAP = 7.0
+# A row is three stacked lines: the metric's NAME on its own line, the bar
+# under it at the card's full inner width, then the readout ("45% used" on
+# the left, the countdown on the right) under that. ROW_H is their sum
+# (13 + 4 + 8 + 5 + 12 = 42), so card_height's row-counting arithmetic needs
+# no change of its own beyond these constants moving.
+#
+# The name used to SHARE a line with the readout. That forced the two into
+# one optical size (a step between two words on one line reads as a
+# hierarchy that isn't there) and gave the name a 40pt column to truncate
+# inside. Splitting them lets the name be a heading, lets the bar be the
+# full-width object it always wanted to be, and moves the hierarchy into a
+# real size step — which is also why SIZE_ROW_HEAD and SIZE_ROW_META are
+# now deliberately DIFFERENT where their predecessors were pinned equal.
+ROW_HEAD_H = 13.0         # the metric's name, alone on its line
+ROW_HEAD_GAP = 4.0        # name -> bar
+ROW_META_GAP = 5.0        # bar -> readout
+ROW_META_H = 12.0         # "45% used" / countdown
+ROW_H = 42.0
+ROW_GAP = 9.0
 STATE_ROW_H = 16.0         # "Re-login required…" line on a data-less card
 STATE_LINE_H = 13.0        # extra height per wrapped line (.lineLimit(2))
 STATE_MAX_LINES = 2
@@ -50,23 +69,17 @@ CONFIRM_MAX_LINES = 2
 CONFIRM_LINE_H = 15.0
 DOT_R = 3.5                # 7pt circle
 DOT_STROKE = 1.5
-# MetricBarRow's label/pct/countdown line still has a label column and two
-# value sub-columns — only the BAR moved out from between them onto its own
-# line below (see popover_layout._card_body). LABEL_W still caps the
-# label's truncation width; VALUE_PCT_W/VALUE_COUNTDOWN_W still split the
-# value into two independently right-anchored sub-columns — percentage,
-# then countdown — instead of one right-anchored string (a single string
-# jitters sideways every time the countdown's length changes, FINDING 3).
-# Sized from real cairo metrics for the widest realistic value ("100%" /
-# " · 23h 59m"), each with a few points of margin for other platforms'
-# default mono fonts.
-LABEL_W = 40.0             # MetricBarRow label column
-VALUE_PCT_W = 28.0
-VALUE_COUNTDOWN_W = 66.0
-BAR_H = 6.0
-# Gap between the label and the value area on the label line — the bar on
-# the line below it has no such gap; it spans the card's full inner width.
-BAR_GAP = 9.0              # Spacer(minLength: 9) in MetricBarRow's label line
+# The readout's two halves now sit at OPPOSITE ends of their own line —
+# "45% used" anchored to the card's left inner edge, the countdown anchored
+# to its right — so neither needs a reserved sub-column any more. FINDING 3
+# (the percentage sliding sideways every time the countdown changed length,
+# "1h 0m" -> "59m") was a symptom of the two being one right-anchored group
+# that had to be split into fixed columns to hold still; anchoring them to
+# opposite edges dissolves the problem instead of measuring around it, and
+# LABEL_W/VALUE_PCT_W/VALUE_COUNTDOWN_W/BAR_GAP retire with it.
+BAR_H = 8.0                # The bar is the row's primary object now, not a
+                           # strip squeezed between a label and a value, so
+                           # it is sized to be read at a glance.
 # One "small glyph beside a line of text" size shared by every spot that
 # needs it — the countdown's clock, a blocked account's warn triangle, and
 # the footer's pause mark — rather than three near-identical pairs of
@@ -75,26 +88,42 @@ COUNTDOWN_ICON = 9.0
 COUNTDOWN_ICON_GAP = 3.0
 # The pace caret marks "how far through this window are we" independently
 # of the fill, which marks "how much is spent" — two different questions a
-# single bar cannot answer. It stays a neutral hairline rather than joining
-# the status ramp so it never competes with the fill for the user's first
-# glance: the fill says "how worried should I be", the caret says "am I
-# roughly on schedule for that", and conflating their colors would blur
-# both answers into a bar even a burn-rate expert can't parse at a glance.
+# single bar cannot answer. It never joins the status ramp, so it cannot
+# compete with the fill for the first glance: the fill says "how worried
+# should I be", the caret says "am I roughly on schedule for that", and
+# giving them related colours would blur both answers into a bar even a
+# burn-rate expert can't parse quickly.
+#
+# It is drawn as a NOTCH — the card's own ground, cut through the bar —
+# rather than as a translucent hairline over it. A hairline has to be
+# legible against two different backgrounds at once (bare track AND
+# saturated fill) and was washing out over both; a notch is a hole, so it
+# contrasts with whatever it interrupts, automatically. It also gets
+# sharper exactly as the fill grows past it, which is when "am I ahead of
+# schedule" starts to matter.
+#
+# It stays a HAIRLINE's width: an opaque notch earns its legibility from
+# being a hole rather than from being wide, and widening it starts to read
+# as a bar cut into two segments rather than one bar with a mark on it.
 PACE_W = 1.5
-PACE = (1.0, 1.0, 1.0, 0.38)
 BUTTON_H = 18.0
-TAB_H = 20.0               # provider tab row (Claude | OpenAI), shown only
+TAB_H = 40.0               # provider tab row (Claude | OpenAI), shown only
                            # when both providers actually have accounts
 TAB_GAP = 6.0              # gap between adjacent tab pills
 TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
-# Each tab pill now carries its provider's mark to the LEFT of its label,
-# not instead of it: the mark alone is not how most people tell Claude and
-# OpenAI's tabs apart, and a label-less pill would stop being readable to
-# anyone who doesn't recognise it on sight. TAB_MARK sizes the Glyph;
-# TAB_MARK_GAP is the gap before the label starts (see popover_layout.build).
-TAB_MARK = 11.0
-TAB_MARK_GAP = 5.0
+# Each tab stacks its provider's mark ABOVE its label, and the selected one
+# is a filled accent pill rather than a brighter grey one. The mark still
+# never REPLACES the label — a label-less pill stops being readable to
+# anyone who doesn't know the provider's mark on sight — but stacking buys
+# it enough room (TAB_MARK, up from 11) to actually be recognised instead of
+# merely present. TAB_MARK_GAP is now a VERTICAL gap (see popover_layout.
+# build).
+TAB_MARK = 16.0
+TAB_MARK_GAP = 3.0
+TAB_MIN_W = 76.0           # a floor, so two tabs read as one segmented
+                           # control rather than two differently-sized blobs
+TAB_RADIUS = 9.0
 CHIP_H = 15.0
 REMOVE_HIT = 18.0          # square hit target for the per-card remove ✕
 REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
@@ -103,12 +132,6 @@ REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
 # of hardcoding an x position (see build()).
 HEADER_LABEL_GAP = 6.0
 
-# Tab pills read as faded / not-faded rather than colored: the selected
-# provider is full strength, the other recedes (user-picked over an accent
-# fill). Mirrored by PopoverView.tabButton.
-TAB_BG_SELECTED = (1.0, 1.0, 1.0, 0.16)
-TAB_BG_HOVER = (1.0, 1.0, 1.0, 0.12)
-TAB_BG = (1.0, 1.0, 1.0, 0.06)
 BUTTON_PAD_H = 8.0
 FOOTER_H = 20.0
 ICON_BUTTON_W = 22.0
@@ -117,53 +140,171 @@ ICON_BUTTON_W = 22.0
 SIZE_TITLE = 13.0          # .headline
 SIZE_EMAIL = 12.0          # .callout.weight(.semibold)
 SIZE_CAPTION = 10.0        # .caption2
-# Label and value share one optical size on purpose: they are about to sit
-# on the SAME line (stage 02 moves the label off its own column), and a size
-# step between them would read as a hierarchy that isn't there — they are
-# one fact ("5h: 42% · 3h 12m"), not a heading over a body.
-SIZE_ROW_LABEL = 10.5
-SIZE_ROW_VALUE = 10.5      # monospaced
+# The name and the readout no longer share a line, so they deliberately no
+# longer share a size. The step between them IS the hierarchy — a heading
+# over its data — where an equal size used to be what stopped two words on
+# ONE line from implying a hierarchy that wasn't there. The old
+# SIZE_ROW_LABEL/SIZE_ROW_VALUE pair was pinned EQUAL by a parity test; its
+# replacement pins the step, for the same reason: whichever relationship
+# the design depends on is the one worth failing a build over.
+SIZE_ROW_HEAD = 12.0       # the metric's name
+SIZE_ROW_META = 10.5       # "45% used" / countdown, monospaced digits
 SIZE_CHIP = 9.0
 SIZE_ICON = 12.5
 
 # --- colors (r, g, b, a in 0..1) -------------------------------------------
-# WINDOW_BG/CARD_BG are blue-shifted rather than macOS-neutral greys, so the
-# panel reads as an instrument sitting on the desktop rather than a sheet of
-# it. TEXT* stopped being white-with-alpha and became explicit cool greys at
-# full alpha ("chalk"/"mist"/"dim"/spent-value), so the tint survives
-# compositing instead of washing out over whatever sits behind the popover.
-WINDOW_BG = (0.059, 0.071, 0.086, 1.0)
-CARD_BG = (0.090, 0.110, 0.133, 1.0)
-CARD_BORDER = (1.0, 1.0, 1.0, 0.06)        # hairline, same on every card now
-TEXT = (0.914, 0.929, 0.949, 1.0)          # "chalk"
-TEXT_SECONDARY = (0.596, 0.639, 0.690, 1.0)  # "mist"
-TEXT_TERTIARY = (0.361, 0.400, 0.447, 1.0)   # "dim"
-TEXT_SPENT = (0.725, 0.757, 0.796, 1.0)    # MetricBarRow's 100% row
-# The active card used to be told apart by a 1.5pt pure-white border — the
-# loudest mark on the panel, spent on information the ACTIVE chip already
-# carries. A leading rail replaces it, and the rail borrows TEXT rather than
-# joining the status ramp: colour on this panel is reserved for how much
-# budget is left, and tinting "this is the active account" would make it
-# compete with that signal instead of just marking presence.
-RAIL = TEXT
-BAR_TRACK = (1.0, 1.0, 1.0, 0.09)
-BUTTON_BG = (1.0, 1.0, 1.0, 0.12)
-BUTTON_BG_HOVER = (1.0, 1.0, 1.0, 0.20)
-BUTTON_BORDER = (1.0, 1.0, 1.0, 0.18)
-BUTTON_DISABLED = (1.0, 1.0, 1.0, 0.05)
-ACCENT = (0.0, 0.48, 1.0, 1.0)          # .borderedProminent
-ACCENT_HOVER = (0.15, 0.56, 1.0, 1.0)
-# Destructive confirm ("Remove") — the status ramp's critical red, so both
-# renderers and the Swift tint (Status.critical) agree on one red.
-DANGER = (0.80, 0.184, 0.184, 1.0)
-DANGER_HOVER = (0.88, 0.25, 0.25, 1.0)
-WARNING = (1.0, 0.62, 0.20, 1.0)
+# Colour lives in a Scheme, not in module constants, because the popover
+# follows the system appearance instead of forcing dark. Everything ABOVE is
+# geometry and is shared: a layout built for one scheme is exactly the same
+# shape as the other, so a front-end can hand build() whichever appearance
+# the user is in without re-measuring anything, and a review of one is a
+# review of both.
 
 
-def status_rgba(name: str, alpha: float = 1.0):
-    """Metric color by status name, as an RGBA tuple (see model.RGB)."""
-    red, green, blue = RGB[name]
-    return (red, green, blue, alpha)
+@dataclass(frozen=True)
+class Scheme:
+    """Every colour the popover paints, for one appearance.
+
+    The two grounds (window/card) and four inks stay blue-shifted rather
+    than host-neutral in BOTH appearances, so the panel reads as the same
+    instrument sitting on the desktop rather than a sheet of it — a light
+    panel that borrowed the system's warm greys would be a different
+    product wearing the same layout. The inks are explicit cool greys at
+    full alpha, never ink-with-alpha, so the tint survives compositing
+    instead of washing out over whatever sits behind the popover.
+
+    `status` is the used-ramp (model.RGB / model.RGB_LIGHT) and is the ONE
+    place colour carries meaning here, which is why nothing else in this
+    class is allowed to be saturated. The light ramp is darkened rather
+    than reused: the dark values were tuned against a near-black ground and
+    its green and amber fall below usable contrast on white.
+    """
+    name: str
+    window_bg: tuple
+    card_bg: tuple
+    card_border: tuple
+    text: tuple
+    text_secondary: tuple
+    text_tertiary: tuple
+    text_spent: tuple
+    rail: tuple
+    bar_track: tuple
+    pace: tuple
+    button_bg: tuple
+    button_bg_hover: tuple
+    button_border: tuple
+    button_disabled: tuple
+    tab_bg: tuple
+    tab_bg_hover: tuple
+    accent: tuple
+    accent_hover: tuple
+    accent_text: tuple
+    danger: tuple
+    danger_hover: tuple
+    warning: tuple
+    status: dict
+
+    def status_rgba(self, name: str, alpha: float = 1.0) -> tuple:
+        """Metric colour by status name, as RGBA (see model.RGB)."""
+        red, green, blue = self.status[name]
+        return (red, green, blue, alpha)
+
+
+# The active card is told apart by a leading rail rather than the 1.5pt
+# pure-white border it used to wear — the loudest mark on the panel, spent
+# on information the ACTIVE chip already carries. The rail borrows the
+# scheme's own `text` rather than joining the status ramp: colour here is
+# reserved for how much budget is left, and tinting "this is the active
+# account" would make it compete with that signal instead of just marking
+# presence. That reasoning is appearance-independent, which is why both
+# schemes below point `rail` at their own `text`.
+_CHALK = (0.914, 0.929, 0.949, 1.0)
+_INK = (0.086, 0.106, 0.133, 1.0)
+# One cool grey doing two jobs: it is the SECONDARY ink on light and the
+# TERTIARY ink on dark. Not a copy-paste — the middle of a single grey
+# scale genuinely lands in different places depending on which end the
+# ground sits at, and naming it once is what keeps the two ramps a system
+# rather than two hand-tuned lists.
+_SLATE = (0.361, 0.400, 0.447, 1.0)
+# The pace notch is the card's own ground showing through the bar, so it is
+# named once per scheme and used for BOTH `card_bg` and `pace` — the two
+# cannot be allowed to drift, or the notch stops being a hole and becomes a
+# faint grey stripe that happens to sit near the card colour.
+_DARK_CARD = (0.090, 0.110, 0.133, 1.0)
+_LIGHT_CARD = (1.0, 1.0, 1.0, 1.0)
+
+DARK = Scheme(
+    name="dark",
+    window_bg=(0.059, 0.071, 0.086, 1.0),
+    card_bg=_DARK_CARD,
+    card_border=(1.0, 1.0, 1.0, 0.06),      # hairline, same on every card
+    text=_CHALK,
+    text_secondary=(0.596, 0.639, 0.690, 1.0),   # "mist"
+    text_tertiary=_SLATE,                        # "dim"
+    text_spent=(0.725, 0.757, 0.796, 1.0),       # a 100%-used readout
+    rail=_CHALK,
+    bar_track=(1.0, 1.0, 1.0, 0.09),
+    pace=_DARK_CARD,
+    button_bg=(1.0, 1.0, 1.0, 0.12),
+    button_bg_hover=(1.0, 1.0, 1.0, 0.20),
+    button_border=(1.0, 1.0, 1.0, 0.18),
+    button_disabled=(1.0, 1.0, 1.0, 0.05),
+    tab_bg=(0.0, 0.0, 0.0, 0.0),            # unselected tabs carry no fill
+    tab_bg_hover=(1.0, 1.0, 1.0, 0.08),
+    accent=(0.0, 0.48, 1.0, 1.0),           # .borderedProminent
+    accent_hover=(0.15, 0.56, 1.0, 1.0),
+    accent_text=(1.0, 1.0, 1.0, 1.0),
+    # Destructive confirm ("Remove") — the status ramp's critical red, so
+    # both renderers and the Swift tint (Status.critical) agree on one red.
+    danger=(0.80, 0.184, 0.184, 1.0),
+    danger_hover=(0.88, 0.25, 0.25, 1.0),
+    warning=(1.0, 0.62, 0.20, 1.0),
+    status=RGB,
+)
+
+LIGHT = Scheme(
+    name="light",
+    window_bg=(0.949, 0.957, 0.969, 1.0),
+    # White, so a card LIFTS off the window rather than being outlined onto
+    # it. On dark the two grounds are close and the hairline does the
+    # separating; on light the value gap does it, so the hairline can be
+    # quieter than a naive inversion of the dark one.
+    card_bg=_LIGHT_CARD,
+    card_border=(0.0, 0.0, 0.0, 0.07),
+    text=_INK,
+    text_secondary=_SLATE,
+    text_tertiary=(0.545, 0.588, 0.639, 1.0),    # "haze"
+    text_spent=(0.263, 0.294, 0.341, 1.0),
+    rail=_INK,
+    bar_track=(0.0, 0.0, 0.0, 0.08),
+    pace=_LIGHT_CARD,
+    button_bg=(0.0, 0.0, 0.0, 0.06),
+    button_bg_hover=(0.0, 0.0, 0.0, 0.11),
+    button_border=(0.0, 0.0, 0.0, 0.14),
+    button_disabled=(0.0, 0.0, 0.0, 0.05),
+    tab_bg=(0.0, 0.0, 0.0, 0.0),
+    tab_bg_hover=(0.0, 0.0, 0.0, 0.06),
+    accent=(0.0, 0.42, 0.90, 1.0),
+    accent_hover=(0.0, 0.36, 0.82, 1.0),
+    accent_text=(1.0, 1.0, 1.0, 1.0),
+    danger=(0.76, 0.145, 0.145, 1.0),
+    danger_hover=(0.66, 0.11, 0.11, 1.0),
+    warning=(0.72, 0.42, 0.04, 1.0),
+    status=RGB_LIGHT,
+)
+
+SCHEMES = {"dark": DARK, "light": LIGHT}
+
+
+def scheme_for(name: str) -> Scheme:
+    """The Scheme called `name`, defaulting to dark for anything unknown.
+
+    Front-ends pass through whatever the host reports its appearance to be,
+    which is a different string on every platform and can be absent
+    entirely; an unrecognised one has to land somewhere, and dark is where
+    this panel spent its whole life before light existed.
+    """
+    return SCHEMES.get((name or "").strip().lower(), DARK)
 
 
 # Advance-width factors for the fonts the renderer selects. The layout has to
@@ -214,8 +355,10 @@ class Label:
     x: float
     y: float                 # vertical CENTER of the line
     text: str
+    color: tuple             # no default: ink depends on the Scheme now, and
+                             # a default would silently paint one appearance's
+                             # colour onto the other
     size: float = SIZE_CAPTION
-    color: tuple = TEXT
     bold: bool = False
     mono: bool = False
     anchor: str = "left"
@@ -240,7 +383,7 @@ class Glyph:
     cx: float
     cy: float
     size: float
-    color: tuple = TEXT
+    color: tuple             # see Label.color — no default, same reason
 
 
 @dataclass
@@ -282,6 +425,12 @@ class Layout:
     height: float
     shapes: list = field(default_factory=list)   # Box | Dot | Label, draw order
     hits: list = field(default_factory=list)
+    # The window ground this layout's colours were chosen against. It rides
+    # on the layout rather than being passed alongside it because the shapes
+    # already have their Scheme baked in: a painter handed a light layout and
+    # a dark background would render light cards on a dark window, and there
+    # would be nothing in either argument to say which one was wrong.
+    background: tuple = DARK.window_bg
 
     def hit(self, px: float, py: float):
         """Topmost enabled hit under the point, or None."""

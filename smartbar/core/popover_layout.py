@@ -167,56 +167,65 @@ def card_height(account, confirm=False) -> float:
     return t.CARD_PAD_V * 2 + header + t.CARD_INNER_GAP + body
 
 
-def _button(shapes, hits, name, right, cy, text, *, enabled=True,
+def _button(shapes, hits, s, name, right, cy, text, *, enabled=True,
             accent=False, danger=False, hover="", tooltip=""):
     """Right-aligned pill button; returns its left edge."""
     bold = accent or danger
     width = t.text_width(text, t.SIZE_CAPTION, bold=bold) + t.BUTTON_PAD_H * 2
     x = right - width
     top = cy - t.BUTTON_H / 2
+    # A filled button takes the scheme's accent_text, NOT its ink: `text` is
+    # near-black on light, which on a saturated blue or red fill is the one
+    # combination that reads as a rendering bug rather than a style.
+    label_color = s.text if enabled else s.text_tertiary
     if accent:
-        fill = t.ACCENT_HOVER if hover == name else t.ACCENT
+        fill = s.accent_hover if hover == name else s.accent
         border = None
+        label_color = s.accent_text
     elif danger:
-        fill = t.DANGER_HOVER if hover == name else t.DANGER
+        fill = s.danger_hover if hover == name else s.danger
         border = None
+        label_color = s.accent_text
     elif not enabled:
-        fill, border = t.BUTTON_DISABLED, None
+        fill, border = s.button_disabled, None
     else:
-        fill = t.BUTTON_BG_HOVER if hover == name else t.BUTTON_BG
-        border = t.BUTTON_BORDER
+        fill = s.button_bg_hover if hover == name else s.button_bg
+        border = s.button_border
     shapes.append(t.Box(x, top, width, t.BUTTON_H, radius=t.BUTTON_H / 2,
                         fill=fill, stroke=border))
     shapes.append(t.Label(x + width / 2, cy, text, size=t.SIZE_CAPTION,
-                          bold=bold, anchor="center",
-                          color=t.TEXT if enabled else t.TEXT_TERTIARY))
+                          bold=bold, anchor="center", color=label_color))
     hits.append(t.Hit(name, x, top, width, t.BUTTON_H, enabled=enabled,
                       tooltip=tooltip))
     return x
 
 
-def _bar(shapes, x, y, w, metric, now):
+def _bar(shapes, s, x, y, w, metric, now):
     """Track + proportional fill + pace caret for one metric, at a given
     x/y/width. Factored out of _card_body and kept that way: the caret
     maths is worth having in exactly one place."""
     shapes.append(t.Box(x, y, w, t.BAR_H, radius=t.BAR_H / 2,
-                        fill=t.BAR_TRACK))
+                        fill=s.bar_track))
     fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
     if fraction > 0:
-        shapes.append(t.Box(x, y, max(6.0, w * fraction), t.BAR_H,
+        # The floor is the bar's own height, so the smallest possible fill is
+        # a dot the track's width rather than a sliver clipped by its own
+        # corner radius — BAR_H grew, so a fixed 6.0 would now under-run it.
+        shapes.append(t.Box(x, y, max(t.BAR_H, w * fraction), t.BAR_H,
                             radius=t.BAR_H / 2,
-                            fill=t.status_rgba(model.color(metric.pct))))
-    # See PACE's own comment (popover_theme.py) for why "how far through the
-    # window" has to be a second mark rather than a second color on the fill.
+                            fill=s.status_rgba(model.color(metric.pct))))
+    # See Scheme.pace's own comment (popover_theme.py) for why "how far
+    # through the window" has to be a second MARK rather than a second
+    # colour on the fill.
     pace = model.pace_fraction(metric, now)
     if pace is not None:
         half = t.PACE_W / 2
         center = min(max(x + w * pace, x + half), x + w - half)
         shapes.append(t.Box(center - half, y, t.PACE_W, t.BAR_H,
-                            radius=0.0, fill=t.PACE))
+                            radius=0.0, fill=s.pace))
 
 
-def _card(shapes, hits, account, top, now, hover, confirm=""):
+def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     """One account card: dot, email, ACTIVE chip or Make Active, metric rows.
 
     Hovering a non-active card reveals a small ✕ (hit "remove:<p>:<id>");
@@ -240,15 +249,15 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     # FIRST so every real button inside it wins hit-testing.
     hits.append(t.Hit(f"card:{pid}", left, top, right - left, height))
     shapes.append(t.Box(
-        left, top, right - left, height, radius=t.CARD_RADIUS, fill=t.CARD_BG,
-        stroke=t.CARD_BORDER, line_width=1.0))
+        left, top, right - left, height, radius=t.CARD_RADIUS, fill=s.card_bg,
+        stroke=s.card_border, line_width=1.0))
     if account.active:
         # Drawn AFTER the card so it sits on top, and deliberately inset
         # into the card's own horizontal padding rather than shifting
         # inner_l — becoming active must never reflow a row.
         shapes.append(t.Box(left, top + t.RAIL_INSET, t.RAIL_W,
                             height - t.RAIL_INSET * 2, radius=t.RAIL_W / 2,
-                            fill=t.RAIL))
+                            fill=s.rail))
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
 
@@ -257,11 +266,11 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         question_h = t.CARD_HEADER_H + (lines - 1) * t.CONFIRM_LINE_H
         shapes.append(t.Label(inner_l, top + t.CARD_PAD_V + question_h / 2,
                               question, size=t.SIZE_EMAIL, bold=True,
-                              color=t.TEXT, max_width=inner_r - inner_l,
+                              color=s.text, max_width=inner_r - inner_l,
                               max_lines=lines))
         button_cy = (top + t.CARD_PAD_V + question_h + t.CARD_INNER_GAP
                      + t.BUTTON_H / 2)
-        keep_l = _button(shapes, hits, "cancel-remove", inner_r, button_cy,
+        keep_l = _button(shapes, hits, s, "cancel-remove", inner_r, button_cy,
                          "Keep", hover=hover, tooltip="Keep this account")
         # Wording from AccountCardView.confirmHeader's Remove button's
         # .help(), which differs by provider: an OpenAI card has no
@@ -271,15 +280,16 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
             "Codex brings it back" if provider == "openai" else
             f"Deletes claude-swap's stored credential backup for slot "
             f"{account.number}. Signing in as this account re-registers it")
-        _button(shapes, hits, f"confirm-remove:{pid}", keep_l - 6, button_cy,
-                "Remove", hover=hover, danger=True, tooltip=confirm_tip)
+        _button(shapes, hits, s, f"confirm-remove:{pid}", keep_l - 6,
+                button_cy, "Remove", hover=hover, danger=True,
+                tooltip=confirm_tip)
         header_h = question_h + t.CARD_INNER_GAP + t.BUTTON_H
-        _card_body(shapes, account, top, now, inner_l, inner_r,
+        _card_body(shapes, s, account, top, now, inner_l, inner_r,
                    header_h=header_h)
         return height
 
     head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
-    dot_color = t.status_rgba(model.dot_color(account))
+    dot_color = s.status_rgba(model.dot_color(account))
     shapes.append(t.Dot(inner_l + t.DOT_R, head_cy, t.DOT_R, dot_color,
                         hollow=model.dot_style(account) == "hollow"))
 
@@ -288,10 +298,10 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         chip_x = inner_r - chip_w
         shapes.append(t.Box(chip_x, head_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
                             radius=t.CHIP_H / 2,
-                            fill=t.status_rgba("green")))
+                            fill=s.status_rgba("green")))
         shapes.append(t.Label(chip_x + chip_w / 2, head_cy, "ACTIVE",
                               size=t.SIZE_CHIP, bold=True, anchor="center",
-                              color=(1, 1, 1, 1)))
+                              color=s.accent_text))
         control_l = chip_x
     elif provider != "claude":
         # No switcher exists for a ChatGPT login: a remembered account is a
@@ -307,8 +317,8 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
             f"Stored credential is dead — switching would log Claude Code "
             f"out. {model.state_text(account)}." if blocked else
             f"Switch Claude Code to {account.email}")
-        control_l = _button(shapes, hits, f"switch:{account.number}", inner_r,
-                            head_cy, "Make Active", hover=hover,
+        control_l = _button(shapes, hits, s, f"switch:{account.number}",
+                            inner_r, head_cy, "Make Active", hover=hover,
                             enabled=not blocked, tooltip=switch_tip)
 
     # The plan/device badge used to ride inside account_label as plain text;
@@ -322,10 +332,10 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
         badge_x = control_l - 6 - badge_w
         shapes.append(t.Box(badge_x, head_cy - t.CHIP_H / 2, badge_w,
                             t.CHIP_H, radius=t.CHIP_H / 2,
-                            fill=t.BUTTON_DISABLED))
+                            fill=s.button_disabled))
         shapes.append(t.Label(badge_x + badge_w / 2, head_cy, badge,
                               size=t.SIZE_CHIP, anchor="center",
-                              color=t.TEXT_SECONDARY))
+                              color=s.text_secondary))
         control_l = badge_x
 
     # The ✕ exists only while the pointer is on this card (any of its hover
@@ -342,8 +352,8 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     if removable and on_card:
         cx = control_l - 8 - t.REMOVE_HIT / 2
         shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
-                              t.TEXT if hover == f"remove:{pid}"
-                              else t.TEXT_TERTIARY))
+                              s.text if hover == f"remove:{pid}"
+                              else s.text_tertiary))
         # Wording from AccountCardView.cardHeader's remove (✕) button's
         # .help().
         hits.append(t.Hit(f"remove:{pid}", cx - t.REMOVE_HIT / 2,
@@ -353,27 +363,32 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
 
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
                           model.account_address(account),
-                          size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
+                          size=t.SIZE_EMAIL, bold=True, color=s.text,
                           max_width=label_r - (inner_l + t.DOT_R * 2 + 7)))
 
-    _card_body(shapes, account, top, now, inner_l, inner_r)
+    _card_body(shapes, s, account, top, now, inner_l, inner_r)
     return height
 
 
-def _card_body(shapes, account, top, now, inner_l, inner_r,
+def _card_body(shapes, s, account, top, now, inner_l, inner_r,
                header_h=t.CARD_HEADER_H):
     """Metric rows, or the explanatory line on a data-less card — shared by
-    the normal header and the (possibly taller) remove-confirm header."""
+    the normal header and the (possibly taller) remove-confirm header.
+
+    A metric row is three stacked lines: its NAME, the bar, then the
+    readout. See ROW_HEAD_H's comment in popover_theme for why the name
+    left the readout's line.
+    """
     body_top = top + t.CARD_PAD_V + header_h + t.CARD_INNER_GAP
     if not account.metrics:
         blocked = model.switch_blocked(account)
         lines = state_lines(account)
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
-        color = t.WARNING if blocked else t.TEXT_SECONDARY
+        color = s.warning if blocked else s.text_secondary
         text_l = inner_l
         if blocked:
             # A dead credential is the one data-less state that needs a
-            # glyph as well as a color — WARNING alone reads as just this
+            # glyph as well as a color — warning alone reads as just this
             # account's usual shade, not "you need to act". Same
             # icon/gap the countdown's clock uses, reused rather than
             # giving this its own pair of constants for the same job.
@@ -388,54 +403,58 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
         return
 
     bar_l, bar_w = inner_l, inner_r - inner_l
-    pct_r = inner_r - t.VALUE_COUNTDOWN_W
     for index, metric in enumerate(account.metrics):
         row_top = body_top + index * (t.ROW_H + t.ROW_GAP)
-        label_cy = row_top + t.ROW_LABEL_H / 2
-        shapes.append(t.Label(inner_l, label_cy, metric.label,
-                              size=t.SIZE_ROW_LABEL, bold=True, color=t.TEXT,
-                              max_width=t.LABEL_W))
+        # 1. The name, alone on its line and free to use the full width —
+        #    metric_title turns cswap's key into a word ("5h" -> "5-hour").
+        shapes.append(t.Label(inner_l, row_top + t.ROW_HEAD_H / 2,
+                              model.metric_title(metric),
+                              size=t.SIZE_ROW_HEAD, bold=True, color=s.text,
+                              max_width=bar_w))
+        # 2. The bar.
+        bar_top = row_top + t.ROW_HEAD_H + t.ROW_HEAD_GAP
+        _bar(shapes, s, bar_l, bar_top, bar_w, metric, now)
+        # 3. The readout, anchored to OPPOSITE edges: what is spent on the
+        #    left, when it comes back on the right. Neither needs a reserved
+        #    column to hold still — see BAR_H's comment in popover_theme for
+        #    why that retires FINDING 3 rather than working around it.
+        meta_cy = bar_top + t.BAR_H + t.ROW_META_GAP + t.ROW_META_H / 2
+        spent = metric.pct >= 100
+        # "45%" alone never said WHICH scale it was on; the row has room for
+        # the word now, so it says so rather than leaving the README to.
+        shapes.append(t.Label(inner_l, meta_cy, f"{round(metric.pct)}% used",
+                              size=t.SIZE_ROW_META, mono=True,
+                              color=s.text_spent if spent else s.text))
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
-        color = t.TEXT_SPENT if metric.pct >= 100 else (1, 1, 1, 0.8)
-        # Percentage and countdown are two INDEPENDENTLY right-anchored
-        # labels, not one concatenated string right-anchored at inner_r —
-        # a single string makes the percentage slide sideways every time
-        # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
-        # exactly what FINDING 3 measured (a 19pt swing on the "·").
-        shapes.append(t.Label(pct_r, label_cy, f"{round(metric.pct)}%",
-                              size=t.SIZE_ROW_VALUE, mono=True,
-                              anchor="right", color=color))
         if countdown:
-            # The leading " · " is gone: a clock glyph fills the space
-            # that space used to reserve, so "· 🕐 2h 5m" never doubles up
-            # the separator.
-            countdown_text = f" {countdown}"
-            shapes.append(t.Label(inner_r, label_cy, countdown_text,
-                                  size=t.SIZE_ROW_VALUE, mono=True,
+            color = s.text_spent if spent else s.text_secondary
+            shapes.append(t.Label(inner_r, meta_cy, countdown,
+                                  size=t.SIZE_ROW_META, mono=True,
                                   anchor="right", color=color))
-            # The clock sits immediately left of wherever the countdown
-            # text actually STARTS, not the reserved column's nominal edge
-            # (inner_r - VALUE_COUNTDOWN_W) — that column is sized for the
-            # widest realistic countdown ("23h 59m"), so anchoring there
-            # would leave a visible gap before a short one like "9m". The
-            # layout has no font engine, so t.text_width is the same
-            # estimate the countdown label itself is measured by.
-            text_w = t.text_width(countdown_text, t.SIZE_ROW_VALUE, mono=True)
-            clock_cx = inner_r - text_w - t.COUNTDOWN_ICON_GAP - t.COUNTDOWN_ICON / 2
-            shapes.append(t.Glyph("clock", clock_cx, label_cy,
+            # The clock sits immediately left of where the countdown text
+            # actually STARTS. The layout has no font engine, so
+            # t.text_width is the same estimate the label itself is
+            # measured by — a wrong estimate stays cosmetic.
+            text_w = t.text_width(countdown, t.SIZE_ROW_META, mono=True)
+            clock_cx = (inner_r - text_w - t.COUNTDOWN_ICON_GAP
+                        - t.COUNTDOWN_ICON / 2)
+            shapes.append(t.Glyph("clock", clock_cx, meta_cy,
                                   t.COUNTDOWN_ICON, color))
-
-        bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
-        _bar(shapes, bar_l, bar_top, bar_w, metric, now)
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
           provider="", confirm="", action_error="", refreshing=False,
-          stale_reason="") -> t.Layout:
+          stale_reason="", scheme=t.DARK) -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
+
+    `scheme` is the appearance to paint — a t.Scheme, or the name of one
+    ("dark"/"light") for front-ends that just pass through whatever the host
+    reports. Only colour depends on it: the geometry below is identical in
+    both, so nothing about WHERE anything lands can differ between
+    appearances, and a hit rect measured in one is valid in the other.
 
     `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
     to Claude when it has accounts, else OpenAI.
@@ -463,13 +482,14 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     computed and then thrown away (FINDING 7).
     """
     now = now or datetime.now(timezone.utc)
+    s = scheme if isinstance(scheme, t.Scheme) else t.scheme_for(scheme)
     shapes, hits = [], []
     right = t.WIDTH - t.PAD
 
     head_cy = t.PAD + t.HEADER_H / 2
     title = "AI smartbar"
     shapes.append(t.Label(t.PAD, head_cy, title, size=t.SIZE_TITLE,
-                          bold=True, color=t.TEXT))
+                          bold=True, color=s.text))
     updated = updated_label(fetched_at, now)
     # Both offsets below are DERIVED from the module's own text_width()
     # estimate, never hardcoded — popover_layout has no font engine, so an
@@ -481,12 +501,12 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                  + t.HEADER_LABEL_GAP)
     if updated:
         shapes.append(t.Label(updated_x, head_cy, updated,
-                              size=t.SIZE_CAPTION, color=t.TEXT_TERTIARY))
+                              size=t.SIZE_CAPTION, color=s.text_tertiary))
     if stale:
         stale_x = (updated_x + t.text_width(updated, t.SIZE_CAPTION)
                    + t.HEADER_LABEL_GAP)
         shapes.append(t.Label(stale_x, head_cy, "stale", size=t.SIZE_CAPTION,
-                              color=t.WARNING))
+                              color=s.warning))
         # Non-action hit (see t.Hit) purely so a front-end can show WHY on
         # hover — mirrors store.lastError on PopoverView.header's
         # stale-icon .help().
@@ -502,8 +522,12 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         # button) so a second click while a fetch is in flight cannot
         # queue another.
         busy = refreshing and name == "refresh"
-        color = (t.TEXT_TERTIARY if busy
-                 else (1, 1, 1, 1) if hover == name else t.TEXT)
+        # Header chrome sits a step back from the content it frames — the
+        # cards are what you came to read — and brightens to full ink only
+        # under the pointer. The old "pure white on hover" was a dark-only
+        # literal: on a light scheme it would have hovered to invisible.
+        color = (s.text_tertiary if busy
+                 else s.text if hover == name else s.text_secondary)
         shapes.append(t.Glyph(name, cx, head_cy, t.SIZE_ICON, color))
         tip = "Refresh now" if name == "refresh" else "Quit AI smartbar"
         hits.append(t.Hit(name, cx - t.ICON_BUTTON_W / 2,
@@ -521,36 +545,46 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
-        cy = cursor + t.TAB_H / 2
+        tab_top = cursor
+        # The mark stacks ABOVE its label and the selected tab is a filled
+        # accent pill. Accent is admissible here even though colour on this
+        # panel is otherwise reserved for how much budget is left: blue sits
+        # outside the used-ramp entirely (green/amber/orange/red/purple), so
+        # it reads as chrome — "you are here" — and cannot be misread as a
+        # budget state the way a tinted rail or a coloured chip could.
         for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
             current = name == selected
             label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
-            width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
+            width = max(t.TAB_MIN_W, label_w + t.BUTTON_PAD_H * 2)
             hit_name = f"tab:{name}"
-            # Faded / not-faded, not colored: the selected provider is full
-            # strength and the other recedes (mirrored by tabButton in
-            # PopoverView.swift).
             if current:
-                fill, color = t.TAB_BG_SELECTED, t.TEXT
+                fill = s.accent_hover if hover == hit_name else s.accent
+                color = s.accent_text
             elif hover == hit_name:
-                fill, color = t.TAB_BG_HOVER, t.TEXT
+                fill, color = s.tab_bg_hover, s.text
             else:
-                fill, color = t.TAB_BG, t.TEXT_TERTIARY
-            shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
-                                radius=t.BUTTON_H / 2, fill=fill))
-            # The mark sits BESIDE the label, never instead of it — a tab
-            # has to stay readable to anyone who doesn't recognise the
-            # provider's mark on sight, so it never becomes an icon-only
-            # button. It takes the label's own color, so a faded tab reads
-            # as faded mark-and-all rather than the mark competing with the
-            # fade as a second signal.
-            mark_cx = x + t.BUTTON_PAD_H + t.TAB_MARK / 2
-            shapes.append(t.Glyph(name, mark_cx, cy, t.TAB_MARK, color))
-            label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
-            shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
-                                  bold=current, anchor="left", color=color))
-            hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
-                              t.BUTTON_H, tooltip=f"Show {text} accounts"))
+                fill, color = s.tab_bg, s.text_tertiary
+            shapes.append(t.Box(x, tab_top, width, t.TAB_H,
+                                radius=t.TAB_RADIUS, fill=fill))
+            # The mark never REPLACES the label — a tab has to stay readable
+            # to anyone who doesn't recognise the provider's mark on sight,
+            # so this never becomes an icon-only button. It takes the
+            # label's own colour, so an unselected tab recedes mark-and-all
+            # rather than the mark competing with the fade as a second
+            # signal. Both are centred on the pill and vertically centred as
+            # ONE block, so the pair reads as a unit at any TAB_H.
+            block_h = t.TAB_MARK + t.TAB_MARK_GAP + t.SIZE_CAPTION
+            block_top = tab_top + (t.TAB_H - block_h) / 2
+            center_x = x + width / 2
+            shapes.append(t.Glyph(name, center_x, block_top + t.TAB_MARK / 2,
+                                  t.TAB_MARK, color))
+            shapes.append(t.Label(
+                center_x,
+                block_top + t.TAB_MARK + t.TAB_MARK_GAP + t.SIZE_CAPTION / 2,
+                text, size=t.SIZE_CAPTION, bold=current, anchor="center",
+                color=color))
+            hits.append(t.Hit(hit_name, x, tab_top, width, t.TAB_H,
+                              tooltip=f"Show {text} accounts"))
             x += width + t.TAB_GAP
         cursor += t.TAB_H + t.SECTION_GAP
     if action_error:
@@ -563,12 +597,12 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
         err_cy = cursor + block_h / 2
         shapes.append(t.Label(t.PAD, err_cy, action_error,
-                              size=t.SIZE_CAPTION, color=t.WARNING,
+                              size=t.SIZE_CAPTION, color=s.warning,
                               max_width=text_w, max_lines=lines))
         dx = right - t.REMOVE_HIT / 2
         shapes.append(t.Glyph("close", dx, err_cy, t.REMOVE_ICON,
-                              t.TEXT if hover == "dismiss-error"
-                              else t.TEXT_TERTIARY))
+                              s.text if hover == "dismiss-error"
+                              else s.text_tertiary))
         hits.append(t.Hit("dismiss-error", dx - t.REMOVE_HIT / 2,
                           err_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
                           t.REMOVE_HIT, tooltip="Dismiss"))
@@ -580,7 +614,7 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
         shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
                               size=t.SIZE_CAPTION,
-                              color=t.WARNING if error else t.TEXT_SECONDARY,
+                              color=s.warning if error else s.text_secondary,
                               max_width=right - t.PAD, max_lines=lines))
         cursor += block_h + t.CARD_GAP
     elif selected == "claude" and snapshot.active_account is None:
@@ -593,11 +627,11 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         lines = _lines_for_width(text_, right - t.PAD)
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
         shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
-                              size=t.SIZE_CAPTION, color=t.TEXT_SECONDARY,
+                              size=t.SIZE_CAPTION, color=s.text_secondary,
                               max_width=right - t.PAD, max_lines=lines))
         cursor += block_h + t.CARD_GAP
     for account in cards:
-        cursor += _card(shapes, hits, account, cursor, now, hover,
+        cursor += _card(shapes, hits, s, account, cursor, now, hover,
                         confirm) + t.CARD_GAP
     if cards:
         cursor -= t.CARD_GAP
@@ -616,10 +650,10 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
             # a fourth pair of constants for the same "glyph beside a line
             # of text" job.
             shapes.append(t.Glyph("pause", t.PAD + t.COUNTDOWN_ICON / 2,
-                                  foot_cy, t.COUNTDOWN_ICON, t.TEXT_TERTIARY))
+                                  foot_cy, t.COUNTDOWN_ICON, s.text_tertiary))
             label_x = t.PAD + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
         shapes.append(t.Label(label_x, foot_cy, label, size=t.SIZE_CAPTION,
-                              color=t.TEXT_TERTIARY))
+                              color=s.text_tertiary))
         if blocked_reason:
             # Non-action hit: PopoverView.footer's "Update held" label's
             # .help() shows the actual reason on hover rather than a bare
@@ -630,7 +664,8 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                               label_x - t.PAD + label_w, t.FOOTER_H,
                               tooltip=f"Update held back: {blocked_reason}"))
     if pending_version:
-        _button(shapes, hits, "update", right, foot_cy,
+        _button(shapes, hits, s, "update", right, foot_cy,
                 f"Update to {pending_version}", accent=True, hover=hover,
                 tooltip="Fetch, rebuild and restart AI smartbar")
-    return t.Layout(t.WIDTH, cursor + t.FOOTER_H + t.PAD, shapes, hits)
+    return t.Layout(t.WIDTH, cursor + t.FOOTER_H + t.PAD, shapes, hits,
+                    background=s.window_bg)
