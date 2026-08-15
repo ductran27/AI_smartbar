@@ -255,13 +255,17 @@ def run_once() -> int:
         return 1
 
     now = datetime.now(timezone.utc)
-    fetched_at = warmup.parse_iso(snap.fetched_at)
     state = load_state()
     warmup.prune_state(state, [a.email for a in snap.accounts], now)
     failures = 0
 
     for account in snap.accounts:
-        ok, reason = warmup.should_warm(account, now, state, fetched_at)
+        # This account's OWN measurement time, never the snapshot's display
+        # aggregate: cswap refreshes each slot on its own plan, so one shared
+        # stamp both skipped every account whenever the stamped one happened
+        # to be stale, and warmed accounts whose 5h window was hours old.
+        ok, reason = warmup.should_warm(account, now, state,
+                                        warmup.parse_iso(account.fetched_at))
         if not ok:
             log.info("skip #%s %s: %s", account.number, account.email, reason)
             continue

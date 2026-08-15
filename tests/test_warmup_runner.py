@@ -321,5 +321,109 @@ class TestPingForwardsNoWindow(Env):
         self.assertEqual(run.call_args.kwargs.get("creationflags"), 0x08000000)
 
 
+class TestRunOnceGatesPerAccount(Env):
+    """Each account is gated on ITS OWN measurement time.
+
+    The bug this pins: run_once() read one snapshot-wide stamp — whichever
+    account happened to carry the first usageFetchedAt — and handed it to
+    should_warm() for every account. cswap refreshes each slot on its own
+    plan, so that single value is routinely wrong for the others, in both
+    directions:
+
+      * a stale slot 1 made EVERY account skip with "snapshot stale", and
+        warmup silently never ran (the invisible failure);
+      * a fresh slot 1 made a slot whose reading was hours old warm anyway,
+        judging window_idle() on data long out of date.
+
+    Driven through the real run_once() rather than should_warm() directly,
+    because the defect was never in the gate — it was in what the runner
+    chose to hand it.
+    """
+
+    def _run(self, accounts):
+        """run_once() over `accounts`, returning the slot numbers it pinged."""
+        from smartbar.core.model import Snapshot
+        pinged = []
+        with mock.patch.object(warmup_runner.cswap, "fetch",
+                               return_value=Snapshot(accounts=accounts)), \
+             mock.patch.object(warmup_runner, "claude_binary",
+                               return_value="/mock/bin/claude"), \
+             mock.patch.object(warmup_runner, "load_state", return_value={}), \
+             mock.patch.object(warmup_runner, "save_state"), \
+             mock.patch.object(warmup_runner.portable, "lock",
+                               return_value=mock.Mock()), \
+             mock.patch.object(warmup_runner, "ping",
+                               side_effect=lambda number, _claude: (
+                                   pinged.append(number), (True, ""))[1]):
+            warmup_runner.run_once()
+        return pinged
+
+    @staticmethod
+    def _account(number, minutes_old, now):
+        """An idle, warmable account whose reading is `minutes_old`."""
+        from datetime import timedelta
+        from smartbar.core.model import Account, Metric
+        stamp = (now - timedelta(minutes=minutes_old)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        return Account(number=number, email="a%s@x.com" % number,
+                       active=number == 1, ok=True, status="ok",
+                       fetched_at=stamp,
+                       metrics=[Metric(key="5h", label="5h", short="5h",
+                                       pct=10.0, resets_at="")])
+
+    def test_a_stale_slot_no_longer_silences_the_fresh_ones(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        pinged = self._run([self._account(1, 45, now),    # stale reading
+                            self._account(2, 1, now)])    # fresh reading
+        self.assertEqual(pinged, [2], "the fresh account must still warm")
+
+    def test_a_fresh_slot_no_longer_warms_a_stale_one(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        pinged = self._run([self._account(1, 1, now),      # fresh reading
+                            self._account(2, 180, now)])   # 3h-old reading
+        self.assertEqual(pinged, [1], "the stale account must not warm")
+
+    def test_a_dead_credential_is_still_named_as_such_not_as_stale(self):
+        """A slot with no usage data must report WHY, through the real wiring.
+
+        cswap emits usageFetchedAt only alongside a non-null `usage`, so every
+        dead-credential slot reaches should_warm with fetched_at None. When the
+        staleness gate ran first, that made "re-login required" unreachable in
+        production and warmup.log said "snapshot stale" instead — pointing an
+        operator at cswap freshness for what is actually a dead credential.
+
+        tests/test_warmup.py cannot catch this: it calls should_warm directly
+        with an explicit fresh timestamp, which is exactly the value the real
+        runner never has for such an account.
+        """
+        from datetime import datetime, timezone
+        from smartbar.core.model import Account, Snapshot
+        now = datetime.now(timezone.utc)
+        dead = Account(number=2, email="dead@x.com", ok=False,
+                       status="relogin_required", fetched_at="")  # no metrics
+        reasons = []
+        with mock.patch.object(warmup_runner.cswap, "fetch",
+                               return_value=Snapshot(accounts=[
+                                   self._account(1, 1, now), dead])), \
+             mock.patch.object(warmup_runner, "claude_binary",
+                               return_value="/mock/bin/claude"), \
+             mock.patch.object(warmup_runner, "load_state", return_value={}), \
+             mock.patch.object(warmup_runner, "save_state"), \
+             mock.patch.object(warmup_runner.portable, "lock",
+                               return_value=mock.Mock()), \
+             mock.patch.object(warmup_runner, "ping",
+                               return_value=(True, "")), \
+             mock.patch.object(warmup_runner.log, "info",
+                               side_effect=lambda msg, *a: reasons.append(
+                                   msg % a if a else msg)):
+            warmup_runner.run_once()
+        skips = [r for r in reasons if r.startswith("skip #2")]
+        self.assertTrue(skips, "the dead account should have been skipped")
+        self.assertIn("re-login required", skips[0])
+        self.assertNotIn("stale", skips[0])
+
+
 if __name__ == "__main__":
     unittest.main()
