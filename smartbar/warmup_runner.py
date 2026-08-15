@@ -23,7 +23,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-from smartbar.core import cswap, paths, portable, warmup
+from smartbar.core import branding, cswap, paths, portable, warmup
 from smartbar.core.cswap import CswapError
 
 CACHE_DIR = paths.cache_dir()
@@ -200,7 +200,12 @@ def notify_failure(title: str, body: str) -> None:
                             "-Command", script],
                            timeout=10, check=False, **portable.no_window())
         else:
-            subprocess.run(["notify-send", "-u", "normal", title, body],
+            # -a/-i name the sender and give it the project's logo; the
+            # WinRT arm above already names itself via CreateToastNotifier.
+            # An icon-theme miss degrades to an iconless notification.
+            subprocess.run(["notify-send", "-u", "normal",
+                            "-a", branding.APP_NAME, "-i", branding.ICON_NAME,
+                            title, body],
                            timeout=10, check=False)
     except (OSError, subprocess.TimeoutExpired):
         # TimeoutExpired is a SubprocessError, not an OSError. Every branch
