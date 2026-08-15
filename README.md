@@ -139,7 +139,8 @@ The panel — the same layout on macOS, Linux and Windows:
   at login and every 6 hours, then rebuilds, re-installs its agents and
   restarts itself. A **red dot appears on the bar icon** the moment one is
   waiting, and **Update to vX.Y.Z** (popover on macOS, menu row on
-  Linux and Windows) applies it immediately. Rolls itself back if a
+  Linux and Windows — a short commit sha on `--channel main`, where the
+  target is a commit) applies it immediately. Rolls itself back if a
   release fails to build, and never touches a checkout with
   uncommitted work — see [Updating](#updating-and-releases).
 - **The same panel on Linux and Windows.** Cards, filling bars, the ACTIVE
@@ -553,6 +554,15 @@ rewritten too.)
 |---|---|---|---|
 | `release` (default) | newest `vX.Y.Z` tag | detached at the tag | ordinary devices — HEAD names the release it runs |
 | `main` | `origin/main` | fast-forward only | a development checkout |
+
+On `main` the offer names a **commit**, not a release. The version only moves
+when `install/release.sh` cuts a tag, so a development checkout can sit many
+commits ahead of the number it prints — the button reads **Update to da43ea0**
+there. macOS **About** names both, `v1.0.1 (da43ea0)`: the release it was built
+for, and the commit it was built from. The sha is stamped into the app bundle's
+`Info.plist` at build time, so it identifies the **bundle**, not the checkout —
+which is the pair that can disagree, since a `git pull` moves the checkout and
+only a rebuild moves the app.
 
 ```bash
 ai-smartbar --check-update     # report only; exit 10 when a release is waiting

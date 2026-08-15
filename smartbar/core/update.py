@@ -34,6 +34,8 @@ CURRENT = "current"
 BLOCKED = "blocked"
 
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+REF_ABBREV = 7                     # git's own default abbreviation
 
 # Installers re-run after a successful checkout, in apply order: the UI
 # this device actually runs, then the side agents (whose plist bodies only
@@ -282,10 +284,34 @@ def clear_failures(state: dict, ref: str, now=None) -> None:
     state.get("failures", {}).get(_day(now), {}).pop(ref, None)
 
 
+def short_ref(ref: str) -> str:
+    """A full sha abbreviated for display; anything else returned as-is.
+
+    Deliberately narrow: on channel=release `pendingRef` holds a TAG, and
+    truncating `v0.11.0` to `v0.11.` would be worse than not shortening at all.
+    """
+    return ref[:REF_ABBREV] if _FULL_SHA.match(ref) else ref
+
+
 def pending_version(state: dict) -> str:
-    """The release a UI should offer, or "" — read from the runner's state."""
+    """What a UI should offer to move to, or "" — from the runner's state.
+
+    Usually a release ("0.4.0"). On channel=main it is a short sha, because
+    that channel's target IS a commit: ui_state leaves `pendingVersion` empty
+    there and puts the target in `pendingRef`. Reading only the version field
+    meant every front-end — the Mac popover, both trays, the preview — told a
+    main-channel device it was up to date while its own updater had already
+    decided to rebuild it, so the upgrade button and the icon badge could
+    never appear on that channel at all.
+
+    No "already running this" guard here, unlike the Mac's reader: these UIs
+    run FROM the checkout, so there is no built artifact that can lag it.
+    """
     pending = state.get("pendingVersion") or ""
-    return pending if isinstance(pending, str) else ""
+    if isinstance(pending, str) and pending:
+        return pending
+    ref = state.get("pendingRef") or ""
+    return short_ref(ref) if isinstance(ref, str) else ""
 
 
 @dataclass
