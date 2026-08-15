@@ -440,14 +440,21 @@ def verify(targets) -> str:
     return ""
 
 
-def _plan(repo, state, channel, force, reset):
-    """Plan twice: the brake is keyed by target ref, which planning reveals."""
+def _plan(repo, state, channel, force, reset, applied_ref=None):
+    """Plan twice: the brake is keyed by target ref, which planning reveals.
+
+    `applied_ref` defaults to whatever the last successful apply recorded;
+    the post-update re-plan passes the NEW head explicitly, because the
+    state it is handed still carries the old one.
+    """
+    if applied_ref is None:
+        applied_ref = str(state.get("appliedRef") or "")
     provisional = update.plan_update(repo, channel=channel, force=force,
-                                     reset=reset)
+                                     reset=reset, applied_ref=applied_ref)
     failures = (update.failure_count(state, provisional.target_ref)
                 if provisional.target_ref else 0)
     return update.plan_update(repo, channel=channel, force=force, reset=reset,
-                              failures=failures)
+                              failures=failures, applied_ref=applied_ref)
 
 
 def check_now():
@@ -588,12 +595,13 @@ def run_once(*, reset: bool = False, force: bool = False,
         return 1
 
     drop_backup()
+    new_repo = update_git.repo_state()
     new_version = update_git.version_in_checkout()
     update.clear_failures(state, plan.target_ref)
-    state.update(update.ui_state(_plan(update_git.repo_state(), state, channel,
-                                       False, False),
+    state.update(update.ui_state(_plan(new_repo, state, channel, False, False,
+                                       applied_ref=new_repo.head),
                                  new_version, applied=new_version,
-                                 channel=channel))
+                                 applied_ref=new_repo.head, channel=channel))
     save_state(state)
     log.info("updated to %s (version %s)", plan.target_ref, new_version)
     notify("AI smartbar updated",
