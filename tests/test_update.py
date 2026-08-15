@@ -4,6 +4,7 @@ These cover the decisions that can destroy work or brick a device, so they
 are deliberately exhaustive: nothing here touches a real git repository.
 """
 import os
+import re
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -199,6 +200,51 @@ class TestEnvironment(Env):
         os.environ["SMARTBAR_UPDATE_CHANNEL"] = "nonsense"
         self.assertEqual(update.channel(), update.CHANNEL_RELEASE)
 
+    def test_a_recorded_channel_is_used_before_the_default(self):
+        """The regression `fallback` exists for.
+
+        The channel is baked into the update AGENT, deliberately not into
+        config.env (device_config.RESERVED), so ONLY the agent's own process
+        inherits it. The popover's manual check is a child of the app — a
+        different agent, no such variable — so it planned on `release` for a
+        device configured `main`, and then wrote that plan into the state
+        file both of them read. Same checkout, same minute, opposite answers:
+        "0.11.0 available" to the user, "already up to date" to the log.
+        """
+        self.assertEqual(update.channel(fallback="main"), update.CHANNEL_MAIN)
+
+    def test_an_explicit_variable_still_outranks_a_recorded_channel(self):
+        # How --channel and the agent's own plist keep overriding it.
+        os.environ["SMARTBAR_UPDATE_CHANNEL"] = "release"
+        self.assertEqual(update.channel(fallback="main"),
+                         update.CHANNEL_RELEASE)
+
+    def test_a_junk_variable_does_not_veto_the_recorded_channel(self):
+        # Unreadable is the same as unset; it must not shove the device back
+        # onto the default when the device's real answer is known.
+        os.environ["SMARTBAR_UPDATE_CHANNEL"] = "nonsense"
+        self.assertEqual(update.channel(fallback="main"), update.CHANNEL_MAIN)
+
+    def test_an_unusable_recorded_channel_still_reaches_the_default(self):
+        for junk in ("", None, "   ", "nonsense", "releases"):
+            with self.subTest(fallback=junk):
+                self.assertEqual(update.channel(fallback=junk),
+                                 update.CHANNEL_RELEASE)
+
+    def test_a_recorded_channel_is_normalised_like_the_variable(self):
+        # It comes back out of JSON that some older build wrote, so it gets
+        # exactly the tolerance the environment variable has always had.
+        self.assertEqual(update.channel(fallback=" MAIN "), update.CHANNEL_MAIN)
+
+    def test_what_ui_state_records_is_what_channel_reads_back(self):
+        """The two halves of the fix, joined. A round-trip through the state
+        file is the whole mechanism: if either side renames the key or
+        normalises differently, the manual check silently resumes guessing."""
+        payload = update.ui_state(update.plan_update(state()), "0.2.0", NOW,
+                                  channel=update.CHANNEL_MAIN)
+        self.assertEqual(update.channel(fallback=payload["channel"]),
+                         update.CHANNEL_MAIN)
+
     def test_interval_has_a_floor(self):
         self.assertEqual(update.check_interval(), update.DEFAULT_CHECK_INTERVAL)
         os.environ["SMARTBAR_UPDATE_INTERVAL"] = "10"
@@ -306,6 +352,19 @@ class TestUiState(unittest.TestCase):
         payload = update.ui_state(plan, "0.3.0", NOW, applied="0.3.0")
         self.assertEqual(payload["appliedVersion"], "0.3.0")
         self.assertEqual(payload["appliedAt"], payload["checkedAt"])
+
+    def test_the_channel_is_left_where_the_next_run_can_find_it(self):
+        plan = update.plan_update(state())
+        payload = update.ui_state(plan, "0.2.0", NOW,
+                                  channel=update.CHANNEL_MAIN)
+        self.assertEqual(payload["channel"], update.CHANNEL_MAIN)
+
+    def test_no_channel_key_when_the_caller_did_not_resolve_one(self):
+        # An older state file simply has no "channel". Writing "" instead of
+        # omitting it would be indistinguishable at the read end from a
+        # device that really had recorded something.
+        payload = update.ui_state(update.plan_update(state()), "0.2.0", NOW)
+        self.assertNotIn("channel", payload)
 
 
 class TestDotStyle(unittest.TestCase):
@@ -566,6 +625,51 @@ class TestManualCheckOutcome(unittest.TestCase):
         self.assertFalse(outcome.found)          # nothing to click
         self.assertIn("2 unpushed commit(s)", outcome.body)
 
+    def test_an_upgrade_to_the_running_version_is_not_announced(self):
+        """"⬆ 0.11.0 available" beside a footer with no button.
+
+        Every front-end refuses to offer an upgrade to the version it is
+        already running — applying it restarts the app to arrive exactly
+        where it started. So the announcement had nothing behind it: an inert
+        status line that reads like an offer, and a notification naming a
+        control that was never drawn. The suppression belongs here, with the
+        wording, rather than in each UI where it can drift out of step.
+        """
+        outcome = update.check_outcome(pending="0.11.0", current="0.11.0")
+        self.assertFalse(outcome.found)
+        self.assertNotIn("available", outcome.label)
+        self.assertIn("Up to date", outcome.label)
+
+    def test_a_genuinely_newer_release_is_still_announced(self):
+        outcome = update.check_outcome(pending="0.12.0", current="0.11.0")
+        self.assertTrue(outcome.found)
+        self.assertIn("0.12.0", outcome.label)
+
+    def test_an_unknown_running_version_does_not_suppress_the_offer(self):
+        # current="" means "not told", not "running nothing" — a state file
+        # from an older build must not silence a real release.
+        self.assertTrue(update.check_outcome(pending="0.12.0").found)
+
+    def test_a_blocked_hold_still_wins_once_the_offer_is_suppressed(self):
+        # pending == current removes the offer, so the next honest thing to
+        # say is why the device is held, not a bare "up to date".
+        outcome = update.check_outcome(pending="0.11.0", current="0.11.0",
+                                       blocked="2 unpushed commit(s)")
+        self.assertFalse(outcome.found)
+        self.assertIn("2 unpushed commit(s)", outcome.body)
+
+    def test_the_offer_names_a_control_rather_than_a_surface(self):
+        """It used to read "Pick '⬆ Update to X' in the tray menu".
+
+        The Mac app has never had a tray menu — its update control is a
+        button in the popover footer — so the one surface that raises this
+        notification sent the user hunting for a menu item that does not
+        exist. The label all four front-ends really draw is "Update to X".
+        """
+        outcome = update.check_outcome(pending="0.12.0", current="0.11.0")
+        self.assertNotIn("tray menu", outcome.body)
+        self.assertIn("Update to 0.12.0", outcome.body)
+
     def test_every_outcome_is_something_a_menu_row_can_show(self):
         for kwargs in ({}, {"pending": "1.0.0"}, {"blocked": "dirty"},
                        {"failed": True}, {"ran": False}):
@@ -573,6 +677,95 @@ class TestManualCheckOutcome(unittest.TestCase):
             for field in (outcome.label, outcome.title, outcome.body):
                 self.assertTrue(field.strip(), kwargs)
             self.assertNotIn("\n", outcome.label, kwargs)
+
+
+class TestTheOfferNamesAControlThatExists(unittest.TestCase):
+    """check_outcome tells the user to pick "Update to X". Pin that all five
+    surfaces really draw that label.
+
+    The wording lives in one place precisely so it can be trusted by four
+    front-ends at once — which only holds while they all still render it. The
+    previous text named the tray menu, was true for three of them, and was a
+    dead end on the fourth for as long as the Swift app has existed.
+    """
+
+    SURFACES = (
+        os.path.join(REPO, "smartbar", "macos", "menubar.py"),
+        os.path.join(REPO, "smartbar", "linux", "tray.py"),
+        os.path.join(REPO, "smartbar", "windows", "tray.py"),
+        os.path.join(REPO, "smartbar", "core", "popover_layout.py"),
+        SWIFT_POPOVER,
+    )
+
+    def test_every_front_end_draws_the_label_the_notification_names(self):
+        for path in self.SURFACES:
+            with self.subTest(surface=os.path.basename(path)):
+                if not os.path.exists(path):
+                    self.skipTest(f"{path} not in this checkout")
+                with open(path, encoding="utf-8") as handle:
+                    self.assertIn("Update to ", handle.read(),
+                                  "check_outcome tells the user to pick "
+                                  "“Update to X” and this surface no longer "
+                                  "renders anything by that name")
+
+
+class TestTheUpdateButtonCannotSilentlyDoNothing(unittest.TestCase):
+    """installUpdate() switches the spinner on BEFORE it launches anything.
+
+    It has two launch arms — kickstart the update agent, or run the updater
+    detached from a known repoRoot — and a device with neither fell through
+    both, having already committed to "Updating…". Nothing ran, nothing could
+    report that nothing ran, and the state only cleared at the 10-minute
+    grace. A button that starts nothing has to say so.
+    """
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_spawn_helper_reports_whether_it_launched(self):
+        # Scoped to spawn's own body on purpose: runCheck() also spells
+        # `try? process.run()`, and there it is correct — that one returns
+        # [:] on failure, so the outcome is not discarded.
+        swift = self.source(SWIFT_UPDATE)
+        body = re.search(r"static func spawn\(.*?\n    \}", swift, re.DOTALL)
+        self.assertIsNotNone(body, "spawn() has been renamed or reshaped")
+        self.assertIn("-> Bool", body.group(0),
+                      "spawn() no longer reports whether the process started")
+        self.assertNotIn("try? process.run()", body.group(0),
+                         "spawn() is swallowing whether the process started; "
+                         "installUpdate() cannot tell a launch from a no-op")
+
+    def test_the_launch_result_is_actually_branched_on(self):
+        self.assertIn("if Self.startUpdater(", self.source(SWIFT_UPDATE),
+                      "installUpdate() no longer checks whether anything "
+                      "started — a click that launches nothing will pin the "
+                      "spinner for the full grace period again")
+
+    def test_the_footer_draws_what_a_failed_launch_records(self):
+        # The other half: a flag nothing renders is the same silence with
+        # more code behind it. Scoped to the footer's own body — merely
+        # appearing somewhere in the file (in showsFooter, say) is not the
+        # same as being drawn.
+        popover = self.source(SWIFT_POPOVER)
+        body = re.search(r"private var footer: some View \{(.*?)\n    \}",
+                         popover, re.DOTALL)
+        self.assertIsNotNone(body, "the footer has been renamed or reshaped")
+        self.assertIn("updates.launchError", body.group(1),
+                      "UpdateStatus records a failed launch that the popover "
+                      "never shows, so the click looks like a no-op again")
+
+    def test_a_failed_launch_is_not_hidden_behind_the_footer_gate(self):
+        popover = self.source(SWIFT_POPOVER)
+        gate = re.search(r"private var showsFooter: Bool \{(.*?)\n    \}",
+                         popover, re.DOTALL)
+        self.assertIsNotNone(gate, "showsFooter has been renamed or reshaped")
+        self.assertIn("launchError", gate.group(1),
+                      "the footer can record a launch failure and then "
+                      "decline to draw itself, which is how the message "
+                      "would never be seen")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,11 @@ final class UpdateStatus: ObservableObject {
     @Published private(set) var blockedReason = ""    // policy hold, e.g. dirty tree
     @Published private(set) var isUpdating = false
     @Published private(set) var isChecking = false
+    /// Set when the button could not even launch the updater. Shown NEXT to
+    /// the button rather than instead of it: the offer is still valid and
+    /// still worth retrying, so replacing it would take away the only
+    /// control that could recover.
+    @Published private(set) var launchError = ""
     /// What the last manual check found, shown for a moment then cleared. The
     /// TEXT comes from Python — see checkNow().
     @Published private(set) var checkResult = ""
@@ -105,6 +110,7 @@ final class UpdateStatus: ObservableObject {
         guard !isChecking, !isUpdating else { return }
         isChecking = true
         checkResult = ""
+        launchError = ""      // a fresh interaction supersedes the last one
         let root = repoRoot
         Task.detached(priority: .userInitiated) {
             let answer = Self.runCheck(root)
@@ -159,21 +165,46 @@ final class UpdateStatus: ObservableObject {
         guard !isUpdating else { return }
         isUpdating = true
         triggeredAt = Date()
+        launchError = ""
+        checkResult = ""
         let uid = getuid()
         let root = repoRoot
         Task.detached(priority: .userInitiated) {
-            if Self.agentInstalled() {
-                // launchd owns the job, so it survives this app being
-                // restarted by the update it is performing.
-                Self.spawn("/bin/launchctl",
-                           ["kickstart", "-k", "gui/\(uid)/\(Self.label)"])
-            } else if !root.isEmpty {
-                // Device opted out of the agent: run the updater detached.
-                Self.spawn("/bin/sh",
-                           ["-c", "nohup \"\(root)/bin/ai-smartbar\" --update "
-                                + ">/dev/null 2>&1 &"])
+            if Self.startUpdater(uid: uid, root: root) { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // Nothing is running, so the spinner must come down NOW
+                // rather than at the 10-minute grace: a click that silently
+                // starts nothing and then shows "Updating…" for ten minutes
+                // is worse than one that plainly failed.
+                self.isUpdating = false
+                self.triggeredAt = nil
+                // Same class as "✕ Could not check" below — the updater was
+                // never reached, so Python has no wording for this either.
+                self.launchError = "Could not start the updater"
             }
         }
+    }
+
+    /// Launches the updater out-of-process; true when something really started.
+    ///
+    /// Both arms are unwaitable by design (the callee restarts this app), so
+    /// "did it work" can only mean "did the process spawn" — but that much
+    /// has to be reported, because the no-agent-and-no-repoRoot case used to
+    /// fall through both branches and launch nothing at all.
+    nonisolated private static func startUpdater(uid: uid_t,
+                                                 root: String) -> Bool {
+        if agentInstalled() {
+            // launchd owns the job, so it survives this app being restarted
+            // by the update it is performing.
+            return spawn("/bin/launchctl",
+                         ["kickstart", "-k", "gui/\(uid)/\(label)"])
+        }
+        guard !root.isEmpty else { return false }
+        // Device opted out of the agent: run the updater detached.
+        return spawn("/bin/sh",
+                     ["-c", "nohup \"\(root)/bin/ai-smartbar\" --update "
+                          + ">/dev/null 2>&1 &"])
     }
 
     nonisolated private static func agentInstalled() -> Bool {
@@ -183,11 +214,13 @@ final class UpdateStatus: ObservableObject {
     }
 
     /// Fire and forget — never waited on: the callee restarts this process.
+    /// Returns whether it was launched, which is all we can honestly observe.
     nonisolated private static func spawn(_ executable: String,
-                                          _ arguments: [String]) {
+                                          _ arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        try? process.run()
+        do { try process.run() } catch { return false }
+        return true
     }
 }
