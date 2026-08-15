@@ -13,7 +13,11 @@ exhausted at 100%. Gray is NOT part of that ramp: it means no measurement.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from smartbar.core.reset_countdown_format import parse_iso
 
 DEFAULT_YELLOW_USED = 50.0
 DEFAULT_LOW_USED = 75.0
@@ -26,9 +30,9 @@ DEFAULT_RED_USED = 90.0
 # be able to run (tests/test_model.py asserts parity).
 DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴",
        "full": "🟣", "gray": "⚪"}
-RGB = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
-       "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
-       "full": (0.545, 0.361, 0.965), "gray": (0.45, 0.45, 0.45)}
+RGB = {"green": (0.239, 0.745, 0.545), "yellow": (0.847, 0.651, 0.290),
+       "low": (0.867, 0.478, 0.271), "critical": (0.851, 0.325, 0.310),
+       "full": (0.486, 0.420, 0.910), "gray": (0.361, 0.400, 0.447)}
 
 # cswap usageStatus values other than "ok", mapped to the short explanation
 # UIs put on the account's card/row (instead of a bare "No usage data").
@@ -172,6 +176,56 @@ def color(pct: float) -> str:
     return "green"
 
 
+# "<n>h" / "<n>d" — cswap's own 5h/7d buckets and every window key
+# core/codex.py._window_key can emit (it derives the very same shape from
+# window_minutes, not just the two literals Claude Code happens to use), so
+# one regex covers both providers instead of a table that would drift the
+# moment Codex reports a window neither of us hardcoded.
+_WINDOW_KEY = re.compile(r"(\d+)([hd])")
+
+
+def window_seconds(key: str) -> float | None:
+    """Length of the reset window a metric KEY names, in seconds, or None.
+
+    Only "<n>h"/"<n>d" keys (Claude Code's "5h"/"7d", and whatever shape
+    core/codex.py._window_key emits for a Codex rate-limit window — it
+    follows this exact pattern) have a stated length. "spend" and every
+    "scoped:<Name>" per-model bucket carry a reset TIME (resets_at) but no
+    window LENGTH cswap tells us — there is no "the Fable bucket is N days
+    wide" number anywhere in the payload — so they get None here rather
+    than a guessed length pace_fraction() could silently be wrong about.
+    """
+    match = _WINDOW_KEY.fullmatch(key)
+    if not match:
+        return None
+    amount, unit = match.groups()
+    return float(amount) * (86400.0 if unit == "d" else 3600.0)
+
+
+def pace_fraction(metric, now=None) -> float | None:
+    """How far through its reset window `metric` is, 0..1, or None.
+
+    None when window_seconds(metric.key) says the window has no stated
+    length, when metric.resets_at is empty or unparseable, or when the
+    reset has already passed (a window that's already over has nothing left
+    to pace against). Otherwise `1 - (time left) / (window length)`, clamped
+    to 0..1 — 0 right after a reset, 1 right before the next one, so the
+    caret reads as "how far through this window are we", independent of how
+    much of the budget is actually spent (that's the fill).
+    """
+    window = window_seconds(metric.key)
+    if window is None:
+        return None
+    resets = parse_iso(metric.resets_at)
+    if resets is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    remaining = (resets - now).total_seconds()
+    if remaining <= 0:
+        return None
+    return min(max(1.0 - remaining / window, 0.0), 1.0)
+
+
 def general_worst(account):
     """Worst non-scoped metric (5h/7d/spend) — the account-wide limits."""
     if account is None:
@@ -231,6 +285,23 @@ def state_text(account) -> str:
     if account.ok:
         return "" if account.metrics else "No usage data"
     return STATE_TEXT.get(account.status, "No usage data")
+
+
+def state_summary(account) -> str:
+    """state_text's opening clause — the name of the state, without its
+    instruction ("Re-login required", "Signed out", "Token expired").
+
+    The Overview row has room for a word, not a sentence: at caption size
+    its free span fits about sixteen characters, and middle-truncating the
+    full text there produced "Re-lo…once", which names nothing and reads
+    as a rendering bug. The account's own card still carries the whole
+    sentence, so the short form only has to identify the state.
+
+    DERIVED from state_text rather than a second table keyed by status:
+    a parallel dict is how the wording on two surfaces drifts apart, and
+    STATE_TEXT's entries are already written as "<state> — <what to do>".
+    """
+    return state_text(account).split(" — ")[0]
 
 
 def dot_style(account) -> str:
@@ -294,27 +365,52 @@ def metrics_text(account) -> str:
     return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
 
 
+def account_address(account) -> str:
+    """The bare email, with no plan badge or device count riding on it."""
+    return account.email
+
+
+def account_badge(account) -> str:
+    """The plan/device suffix alone: "20x (2)", "Pro", "(2)", or "" when
+    there is nothing to say.
+
+    A count of 0 contributes nothing: an absent badge reads as "nobody is
+    on it", whereas "(0)" on four idle cards is noise that also lies
+    whenever the other devices simply could not be reached — see
+    core/presence.py. An empty plan likewise contributes nothing (unknown
+    tier, managed API-key account, or SMARTBAR_PLANS=off — see
+    core/plan.py). account_label composes this with account_address, so
+    the two representations can never drift apart.
+    """
+    badge = getattr(account, "plan", "") or ""
+    count = getattr(account, "devices", 0) or 0
+    if count > 0:
+        badge = f"{badge} ({count})" if badge else f"({count})"
+    return badge
+
+
 def account_label(account) -> str:
     """The address, plan badge, and device count: "a@b.com · 20x (2)".
 
     Every UI names an account through here so the badges appear in all of
     them at once (mirrored by the Swift card header — pinned by
-    TestPlanParity). A count of 0 prints nothing: an absent badge reads as
-    "nobody is on it", whereas "(0)" on four idle cards is noise that also
-    lies whenever the other devices simply could not be reached — see
-    core/presence.py. An empty plan likewise prints nothing (unknown tier,
-    managed API-key account, or SMARTBAR_PLANS=off — see core/plan.py).
+    TestPlanParity). Composed from account_address()/account_badge() rather
+    than repeating their logic, so the three can never say different things
+    about the same account.
 
     Appending rather than prefixing is deliberate: both the cairo painter
     and SwiftUI truncate a long address in the MIDDLE, so the badges
-    survive even on a card too narrow to show the address itself.
+    survive even on a card too narrow to show the address itself. A badge
+    that is only a device count ("(2)") sits directly after the address —
+    no " · ", because there is no plan word for the dot to separate it
+    from; a badge that starts with a plan word gets the " · ".
     """
-    label = account.email
-    badge = getattr(account, "plan", "") or ""
-    if badge:
-        label = f"{label} · {badge}"
-    count = getattr(account, "devices", 0) or 0
-    return f"{label} ({count})" if count > 0 else label
+    address = account_address(account)
+    badge = account_badge(account)
+    if not badge:
+        return address
+    separator = " " if badge.startswith("(") else " · "
+    return f"{address}{separator}{badge}"
 
 
 def title_line(account) -> str:

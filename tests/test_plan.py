@@ -166,9 +166,13 @@ class TestPlanParity(unittest.TestCase):
             p.read_text(encoding="utf-8") for p in sorted(SWIFT_DIR.glob("*.swift")))
 
     def test_badge_composition_matches_python(self):
-        # Swift renders exactly " · <plan>" between email and device count,
-        # which is what model.account_label produces.
-        self.assertIn('Text(" \\u{00B7} \\(plan)")', self.card)
+        # Stage 03: the plan/device badge moved off the header string and
+        # into its own micro-chip (accountBadge / planBadge in Swift,
+        # model.account_badge in Python) — pinned in full, alongside the
+        # Swift literals it composes, by tests/test_account_card_parity.py.
+        # account_label (the un-chipped, full-identity form the remove
+        # confirmation still uses) is untouched by that move.
+        self.assertIn("private var accountBadge: String", self.card)
         self.assertEqual(
             model.account_label(_account(plan_label="20x", devices=2)),
             "a@x.com · 20x (2)")

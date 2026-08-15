@@ -225,6 +225,24 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
         self.assertIs(kwargs["refreshing"], True)
         self.assertEqual(kwargs["stale_reason"], "connection reset")
 
+    def test_forwards_the_active_accounts_usage_history(self):
+        """Without this the 30-day strip is dead code on this platform.
+
+        build() takes `history` and defaults it to None (it stays pure and
+        does no file I/O of its own), so a front-end that simply never
+        passes it renders the Overview tab with no strip — and every
+        layout-level test still passes, because they all call build()
+        directly with a history of their own.
+        """
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(mod.usage_history, "active_series",
+                               return_value=[1.0, 2.0]) as series:
+            with mock.patch.object(mod.popover_layout, "build") as build:
+                mod.Tray._popover_layout(tray)
+        self.assertEqual(build.call_args.kwargs["history"], [1.0, 2.0])
+        self.assertIs(series.call_args.args[0], tray.controller.snapshot)
+
     def test_stale_reason_is_empty_once_a_fetch_has_succeeded(self):
         # last_error is cleared by the controller's _apply_snapshot on
         # success, so a healthy panel must not show a stale reason left
@@ -245,6 +263,35 @@ class TestDismissErrorHit(GuiStubbedTestCase):
         mod.Tray._on_popover_action(tray, "dismiss-error")
         self.assertEqual(tray.controller.action_error, "")
         tray.popover.refresh_layout.assert_called_once()
+
+
+class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
+    """A "tab:..." hit must update self.provider, and the very next popover
+    layout must be built with that provider -- mirroring linux/tray.py's
+    _popover_layout's `provider=self.provider` passthrough (see
+    tests/test_windows_tray.py's twin of this class). Proven by mutation: a
+    dispatcher that recognises "tab:" but forgets to write self.provider
+    would pass every hit-name-recognition test above while leaving the panel
+    permanently stuck on whichever provider auto-resolves first.
+    """
+
+    def test_overview_tab_hit_sets_provider_and_next_layout_uses_it(self):
+        # Stage 05's new first tab: "tab:overview" is just another `name.
+        # startswith("tab:")` hit as far as this dispatcher is concerned --
+        # nothing here special-cases it to exactly "claude"/"openai", and
+        # this pins that a third value keeps flowing through untouched.
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+
+        mod.Tray._on_popover_action(tray, "tab:overview")
+        self.assertEqual(tray.provider, "overview")
+
+        # The next layout build must carry the provider just set above --
+        # this is what actually makes the click switch panel tabs.
+        with mock.patch.object(mod.popover_layout, "build") as fake_build:
+            mod.Tray._popover_layout(tray, hover="quit")
+        _args, kwargs = fake_build.call_args
+        self.assertEqual(kwargs.get("provider"), "overview")
 
 
 class TestOptimisticFlip(GuiStubbedTestCase):

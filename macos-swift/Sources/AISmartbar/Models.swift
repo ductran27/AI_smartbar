@@ -131,6 +131,38 @@ struct Metric: Identifiable, Equatable {
     func liveCountdown(now: Date = Date()) -> String {
         TimeRemaining.countdown(to: resetsAt, now: now) ?? countdown
     }
+
+    /// How far through its reset window this metric is, 0...1, or nil —
+    /// mirror of model.pace_fraction. nil when metricWindowSeconds(key)
+    /// says the window has no stated length, when resetsAt is empty or
+    /// unparseable, or when the reset has already passed (nothing left to
+    /// pace against). Otherwise `1 - (time left) / (window length)`,
+    /// clamped to 0...1: 0 right after a reset, 1 right before the next
+    /// one — "how far through this window are we", independent of how
+    /// much of the budget is actually spent (that's `fraction`).
+    func paceFraction(now: Date = Date()) -> Double? {
+        guard let window = metricWindowSeconds(forKey: key) else { return nil }
+        guard let resets = TimeRemaining.parseISO(resetsAt) else { return nil }
+        let remaining = resets.timeIntervalSince(now)
+        guard remaining > 0 else { return nil }
+        return min(max(1 - remaining / window, 0), 1)
+    }
+}
+
+/// Mirror of model.window_seconds: the length of the reset window a metric
+/// KEY names, in seconds, or nil when the window has no stated length.
+/// Only "<n>h"/"<n>d" keys (Claude Code's "5h"/"7d", and whatever shape
+/// core/codex.py._window_key emits for a Codex rate-limit window — it
+/// follows this exact pattern) have one. "spend" and every "scoped:<Name>"
+/// per-model bucket carry a reset TIME (resetsAt) but no window LENGTH
+/// cswap tells us, so they get nil here rather than a guessed length
+/// paceFraction() could silently be wrong about.
+private func metricWindowSeconds(forKey key: String) -> Double? {
+    guard let range = key.range(of: #"^(\d+)[hd]$"#, options: .regularExpression)
+    else { return nil }
+    let digits = key[range.lowerBound..<key.index(before: range.upperBound)]
+    guard let amount = Double(digits) else { return nil }
+    return amount * (key.hasSuffix("d") ? 86400 : 3600)
 }
 
 struct Account: Identifiable, Equatable {
@@ -160,6 +192,17 @@ struct Account: Identifiable, Equatable {
         return AccountState.text(forStatus: status)
     }
 
+    /// stateText's opening clause — the NAME of the state, without its
+    /// instruction ("Re-login required", "Signed out"). The Overview row
+    /// has room for a word, not a sentence; the account's own card still
+    /// carries the whole thing. Split on the same " — " separator every
+    /// AccountState.text entry is written with, rather than kept as a
+    /// second table beside them, so the two can never drift (mirror of
+    /// model.state_summary, pinned by TestStateSummaryParity).
+    var stateSummary: String {
+        stateText.components(separatedBy: " — ").first ?? stateText
+    }
+
     /// Activating this slot would restore a dead stored credential.
     var switchBlocked: Bool { AccountState.switchBlocked(status: status) }
 
@@ -170,6 +213,13 @@ struct Account: Identifiable, Equatable {
     var scopedWorst: Metric? {
         metrics.filter { $0.isScoped }.max(by: { $0.pct < $1.pct })
     }
+
+    /// The metric closest to its limit, or nil without data (mirror of
+    /// model.worst). worstPct/worstStatus below answer "how bad" without
+    /// the metric itself; OverviewView needs the metric ITSELF (its key,
+    /// for the bar's pace caret), which is why this exists as its own
+    /// property rather than just being folded into worstPct's expression.
+    var worstMetric: Metric? { metrics.max(by: { $0.pct < $1.pct }) }
 
     var worstPct: Double { metrics.map { $0.pct }.max() ?? 0 }
     var worstUsedPct: Int { Int(max(0, worstPct).rounded()) }

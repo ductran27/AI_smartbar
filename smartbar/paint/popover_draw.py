@@ -11,6 +11,8 @@ inheriting whatever widget style the host happens to supply.
 """
 from __future__ import annotations
 
+from math import cos, sin
+
 import cairo
 
 from smartbar.core import popover_theme as t
@@ -118,37 +120,166 @@ def _draw_label(ctx, label) -> None:
     ctx.new_path()
 
 
+def _draw_refresh(ctx, glyph) -> None:
+    radius = glyph.size / 2 * 0.72
+    ctx.arc(glyph.cx, glyph.cy, radius, 0.45, TAU - 0.85)
+    ctx.stroke()
+    tipx = glyph.cx + radius
+    head = glyph.size * 0.22
+    ctx.move_to(tipx - head * 0.5, glyph.cy - head * 0.25)
+    ctx.line_to(tipx + head * 0.45, glyph.cy - head * 0.15)
+    ctx.line_to(tipx - head * 0.1, glyph.cy + head * 0.75)
+    ctx.close_path()
+    ctx.fill()
+
+
+def _draw_close(ctx, glyph) -> None:  # the per-card remove ✕
+    radius = glyph.size / 2 * 0.72
+    arm = radius * 0.9
+    ctx.move_to(glyph.cx - arm, glyph.cy - arm)
+    ctx.line_to(glyph.cx + arm, glyph.cy + arm)
+    ctx.move_to(glyph.cx + arm, glyph.cy - arm)
+    ctx.line_to(glyph.cx - arm, glyph.cy + arm)
+    ctx.stroke()
+
+
+def _draw_power(ctx, glyph) -> None:  # ring open at the top, plus the stem
+    radius = glyph.size / 2 * 0.72
+    ctx.arc(glyph.cx, glyph.cy, radius, -TAU / 4 + 0.62, -TAU / 4 - 0.62 + TAU)
+    ctx.stroke()
+    ctx.move_to(glyph.cx, glyph.cy - radius * 1.25)
+    ctx.line_to(glyph.cx, glyph.cy - radius * 0.15)
+    ctx.stroke()
+
+
+def _draw_overview(ctx, glyph) -> None:
+    """Four rounded squares in a 2x2 grid, filled — an "everything at once"
+    mark, solid rather than stroked so it still reads at TAB_MARK's size."""
+    cell = glyph.size * 0.38
+    gap = glyph.size * 0.12
+    corner = cell * 0.3
+    for dx in (-1, 1):
+        for dy in (-1, 1):
+            x = glyph.cx + dx * (cell + gap) / 2 - cell / 2
+            y = glyph.cy + dy * (cell + gap) / 2 - cell / 2
+            rounded_rect(ctx, x, y, cell, cell, corner)
+            ctx.fill()
+
+
+def _draw_claude(ctx, glyph) -> None:
+    """A simplified wordless "A": two strokes from an apex plus a
+    crossbar. Deliberately not a reproduction of Anthropic's mark — just a
+    short shape recognisable enough to tell the Claude tab apart at a
+    glance, the way the label beside it already does in words."""
+    half = glyph.size * 0.34
+    top = glyph.cy - glyph.size * 0.38
+    bottom = glyph.cy + glyph.size * 0.38
+    ctx.move_to(glyph.cx, top)
+    ctx.line_to(glyph.cx - half, bottom)
+    ctx.move_to(glyph.cx, top)
+    ctx.line_to(glyph.cx + half, bottom)
+    bar_y = glyph.cy + glyph.size * 0.12
+    bar_half = half * 0.55
+    ctx.move_to(glyph.cx - bar_half, bar_y)
+    ctx.line_to(glyph.cx + bar_half, bar_y)
+    ctx.stroke()
+
+
+def _draw_openai(ctx, glyph) -> None:
+    """A hollow hexagon with two internal spokes, stroked — a short,
+    generic "knot" for the OpenAI tab, not a reproduction of their logo."""
+    r = glyph.size * 0.42
+    points = []
+    for i in range(6):
+        angle = TAU / 6 * i - TAU / 4
+        points.append((glyph.cx + r * cos(angle), glyph.cy + r * sin(angle)))
+    ctx.move_to(*points[0])
+    for x, y in points[1:]:
+        ctx.line_to(x, y)
+    ctx.close_path()
+    ctx.stroke()
+    ctx.move_to(glyph.cx, glyph.cy)
+    ctx.line_to(*points[0])
+    ctx.move_to(glyph.cx, glyph.cy)
+    ctx.line_to(*points[3])
+    ctx.stroke()
+
+
+def _draw_clock(ctx, glyph) -> None:
+    """A stroked circle with hour and minute hands — sits immediately left
+    of a countdown, marking "this number is a duration"."""
+    r = glyph.size * 0.42
+    ctx.arc(glyph.cx, glyph.cy, r, 0, TAU)
+    ctx.stroke()
+    ctx.move_to(glyph.cx, glyph.cy)
+    ctx.line_to(glyph.cx, glyph.cy - r * 0.55)          # hour hand
+    ctx.move_to(glyph.cx, glyph.cy)
+    ctx.line_to(glyph.cx + r * 0.6, glyph.cy - r * 0.1)  # minute hand
+    ctx.stroke()
+
+
+def _draw_pause(ctx, glyph) -> None:
+    """Two rounded vertical bars, filled — prefixes the footer's "update
+    held" label."""
+    bar_w = glyph.size * 0.22
+    bar_h = glyph.size * 0.78
+    gap = glyph.size * 0.18
+    top = glyph.cy - bar_h / 2
+    for dx in (-1, 1):
+        x = glyph.cx + dx * (gap / 2 + bar_w / 2) - bar_w / 2
+        rounded_rect(ctx, x, top, bar_w, bar_h, bar_w / 2)
+        ctx.fill()
+
+
+def _draw_warn(ctx, glyph) -> None:
+    """A stroked triangle with a vertical stem and a filled dot — prefixes
+    a blocked account's explanatory line."""
+    r = glyph.size * 0.46
+    top = (glyph.cx, glyph.cy - r)
+    left = (glyph.cx - r * 0.92, glyph.cy + r * 0.75)
+    right = (glyph.cx + r * 0.92, glyph.cy + r * 0.75)
+    ctx.move_to(*top)
+    ctx.line_to(*right)
+    ctx.line_to(*left)
+    ctx.close_path()
+    ctx.stroke()
+    ctx.move_to(glyph.cx, glyph.cy - r * 0.35)
+    ctx.line_to(glyph.cx, glyph.cy + r * 0.2)
+    ctx.stroke()
+    ctx.arc(glyph.cx, glyph.cy + r * 0.5, glyph.size * 0.05, 0, TAU)
+    ctx.fill()
+
+
+# kind -> drawing function. A dict instead of a growing if/elif chain, so a
+# tenth kind is one more entry rather than one more branch to read past.
+_GLYPH_DRAWERS = {
+    "refresh": _draw_refresh,
+    "close": _draw_close,
+    "power": _draw_power,
+    "quit": _draw_power,   # the header's Quit button; same shape as
+                           # "power" under its own name (see t.Glyph).
+    "overview": _draw_overview,
+    "claude": _draw_claude,
+    "openai": _draw_openai,
+    "clock": _draw_clock,
+    "pause": _draw_pause,
+    "warn": _draw_warn,
+}
+
+
 def _draw_glyph(ctx, glyph) -> None:
     """SF Symbols have no portable twin and no font can be assumed to carry
-    "⟳"/"⏻", so the two icon buttons are stroked from paths."""
-    radius = glyph.size / 2 * 0.72
+    "⟳"/"⏻", so every symbol on the panel is drawn from a path rather
+    than typeset. Handles every kind t.Glyph's docstring lists; a kind not
+    in _GLYPH_DRAWERS falls through to "power" rather than raising, so a
+    typo never crashes the panel — it just paints the wrong icon, which is
+    exactly the failure tests/test_popover_draw.py's dispatch-coverage
+    test exists to catch before it ships.
+    """
     _set(ctx, glyph.color)
     ctx.set_line_width(1.5)
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
-    if glyph.kind == "refresh":
-        ctx.arc(glyph.cx, glyph.cy, radius, 0.45, TAU - 0.85)
-        ctx.stroke()
-        tipx = glyph.cx + radius
-        head = glyph.size * 0.22
-        ctx.move_to(tipx - head * 0.5, glyph.cy - head * 0.25)
-        ctx.line_to(tipx + head * 0.45, glyph.cy - head * 0.15)
-        ctx.line_to(tipx - head * 0.1, glyph.cy + head * 0.75)
-        ctx.close_path()
-        ctx.fill()
-    elif glyph.kind == "close":  # the per-card remove ✕
-        arm = radius * 0.9
-        ctx.move_to(glyph.cx - arm, glyph.cy - arm)
-        ctx.line_to(glyph.cx + arm, glyph.cy + arm)
-        ctx.move_to(glyph.cx + arm, glyph.cy - arm)
-        ctx.line_to(glyph.cx - arm, glyph.cy + arm)
-        ctx.stroke()
-    else:  # "power": ring open at the top, plus the stem
-        ctx.arc(glyph.cx, glyph.cy, radius, -TAU / 4 + 0.62,
-                -TAU / 4 - 0.62 + TAU)
-        ctx.stroke()
-        ctx.move_to(glyph.cx, glyph.cy - radius * 1.25)
-        ctx.line_to(glyph.cx, glyph.cy - radius * 0.15)
-        ctx.stroke()
+    _GLYPH_DRAWERS.get(glyph.kind, _draw_power)(ctx, glyph)
     ctx.new_path()
 
 
