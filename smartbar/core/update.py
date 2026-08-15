@@ -171,11 +171,16 @@ class UpdatePlan:
 
 
 def plan_update(state, *, channel=CHANNEL_RELEASE, force=False, reset=False,
-                failures=0):
+                failures=0, applied_ref=""):
     """Decide what (if anything) this device should check out.
 
     `reset` is the repair hammer and the ONLY flag allowed to discard local
     work; `force` re-applies the target even when already sitting on it.
+
+    `applied_ref` is the sha the installers last ran for — see the main
+    channel's use of it below. It is ignored on the release channel, where
+    the target is a tag and `appliedVersion` already answers the same
+    question.
     """
     if channel == CHANNEL_MAIN:
         if not state.remote_main:
@@ -185,7 +190,16 @@ def plan_update(state, *, channel=CHANNEL_RELEASE, force=False, reset=False,
                 "channel=main needs the main branch checked out (on "
                 f"{state.branch or 'a detached HEAD'})"))
         target_ref, target_version, detach = state.remote_main, "", False
-        at_target = bool(state.head) and state.head == state.remote_main
+        # Sitting on the target sha is not the same as having BUILT it. An
+        # update is checkout-then-install, and a checkout that arrives by
+        # other means — a hand-run `git pull` on a dev box — satisfies the
+        # first half only, leaving the installers (and so the macOS app
+        # bundle) a commit behind while this reported "already up to date".
+        # An UNRECORDED applied_ref still counts as converged: it means the
+        # state file predates this field, not that the bundle is stale, and
+        # the first apply after that backfills it.
+        at_target = (bool(state.head) and state.head == state.remote_main
+                     and applied_ref in ("", state.head))
     else:
         tag = newest_tag(state.tags)
         if tag is None:
@@ -339,7 +353,7 @@ def check_outcome(*, pending: str = "", blocked: str = "",
 
 
 def ui_state(plan, version: str, now=None, applied: str = "",
-             channel: str = "") -> dict:
+             applied_ref: str = "", channel: str = "") -> dict:
     """The JSON blob the UIs read to offer their one-click upgrade button."""
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     payload = {
@@ -360,4 +374,9 @@ def ui_state(plan, version: str, now=None, applied: str = "",
     if applied:
         payload["appliedVersion"] = applied
         payload["appliedAt"] = payload["checkedAt"]
+    if applied_ref:
+        # The sha the installers just ran for. appliedVersion cannot stand in
+        # for it on channel=main, where versions only move on a release and
+        # so say nothing about which commit the bundle was built from.
+        payload["appliedRef"] = applied_ref
     return payload

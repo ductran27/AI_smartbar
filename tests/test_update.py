@@ -107,6 +107,40 @@ class TestMainChannel(Env):
             channel=update.CHANNEL_MAIN)
         self.assertEqual(plan.action, update.CURRENT)
 
+
+class TestTheBundleIsBuiltNotJustCheckedOut(Env):
+    """An update is checkout THEN install, so being on the target sha only
+    proves the first half happened. A dev box that ran `git pull` by hand
+    satisfies it without ever rebuilding, which is how a stale app bundle
+    came to report itself up to date."""
+
+    def synced(self, **kwargs):
+        return update.plan_update(state(branch="main", head="sha-remote"),
+                                  channel=update.CHANNEL_MAIN, **kwargs)
+
+    def test_a_checkout_nothing_was_installed_for_is_not_current(self):
+        plan = self.synced(applied_ref="sha-older")
+        self.assertTrue(plan.should_apply)
+        self.assertEqual(plan.target_ref, "sha-remote")
+
+    def test_a_checkout_the_installers_ran_for_is_current(self):
+        self.assertEqual(self.synced(applied_ref="sha-remote").action,
+                         update.CURRENT)
+
+    def test_an_unrecorded_applied_ref_is_treated_as_built(self):
+        # A state file written before appliedRef existed says nothing about
+        # the bundle. Reading that silence as "stale" would rebuild every
+        # dev box once on upgrade for no reason; the first apply backfills
+        # the field and every run after this one is decided on evidence.
+        self.assertEqual(self.synced(applied_ref="").action, update.CURRENT)
+
+    def test_the_release_channel_ignores_it(self):
+        # There the target is a tag and appliedVersion already answers this,
+        # so a stale sha must not drag a pinned device into a rebuild.
+        plan = update.plan_update(state(head_tags=["v0.3.0"]),
+                                  applied_ref="sha-older")
+        self.assertEqual(plan.action, update.CURRENT)
+
     def test_detached_or_feature_branch_blocks(self):
         for branch in ("", "feature/x"):
             plan = update.plan_update(state(branch=branch),
@@ -352,6 +386,20 @@ class TestUiState(unittest.TestCase):
         payload = update.ui_state(plan, "0.3.0", NOW, applied="0.3.0")
         self.assertEqual(payload["appliedVersion"], "0.3.0")
         self.assertEqual(payload["appliedAt"], payload["checkedAt"])
+
+    def test_applied_ref_is_recorded(self):
+        plan = update.plan_update(state(head_tags=["v0.3.0"]))
+        payload = update.ui_state(plan, "0.3.0", NOW, applied="0.3.0",
+                                  applied_ref="sha-built")
+        self.assertEqual(payload["appliedRef"], "sha-built")
+
+    def test_no_applied_ref_key_when_the_caller_passed_none(self):
+        # Same reason as "channel" below: an absent key means "never
+        # recorded", which plan_update reads as "assume built". Writing ""
+        # would be indistinguishable from it at the read end, so it must
+        # stay absent rather than empty.
+        payload = update.ui_state(update.plan_update(state()), "0.2.0", NOW)
+        self.assertNotIn("appliedRef", payload)
 
     def test_the_channel_is_left_where_the_next_run_can_find_it(self):
         plan = update.plan_update(state())

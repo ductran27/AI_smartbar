@@ -91,6 +91,12 @@ grep -q "updated to v0.0.2" "$SMARTBAR_CACHE_DIR/update.log" \
   || fail "B: success not logged"
 grep -q '"currentVersion": "0.0.2"' "$SMARTBAR_CACHE_DIR/update-state.json" \
   || fail "B: state file does not report the new version"
+# The sha the installers actually ran for. Nothing else in the state file
+# records it — appliedVersion only moves on a release — and channel=main
+# reads it to tell "checked out" apart from "checked out AND built".
+grep -q "\"appliedRef\": \"$(device rev-parse HEAD)\"" \
+  "$SMARTBAR_CACHE_DIR/update-state.json" \
+  || fail "B: appliedRef is not the sha that was checked out"
 
 # --- C: nothing to do the second time -------------------------------------
 set +e; run_update --check-update >/dev/null; CODE=$?; set -e
