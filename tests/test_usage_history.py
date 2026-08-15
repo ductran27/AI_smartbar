@@ -180,5 +180,55 @@ class TestAtomicWrite(UsageHistoryTest):
         self.assertEqual(leftovers, [])
 
 
+class TestActiveSeries(UsageHistoryTest):
+    """active_series() is the seam the popover's three build() callers use.
+
+    It exists so "the ACTIVE Claude account's 7d window" is decided once
+    rather than spelled out at each of the two trays and the preview
+    renderer — the shape of duplication this repo's parity tests keep
+    catching between the painted front-ends.
+    """
+
+    def _snapshot_with_active(self, email="a@example.com"):
+        metrics = [model.Metric(key="7d", label="7d", short="7d", pct=42.0)]
+        return model.Snapshot(accounts=[
+            model.Account(number=1, email="other@example.com", metrics=[]),
+            model.Account(number=2, email=email, active=True, metrics=metrics),
+        ])
+
+    def test_returns_the_active_accounts_own_seven_day_series(self):
+        uh.record(self._snapshot_with_active(), now=NOW, path=self.path)
+        got = uh.active_series(self._snapshot_with_active(), days=3,
+                               path=self.path)
+        self.assertEqual(len(got), 3)
+        # record() stamped TODAY, and series() ends today, so the reading
+        # must land on the LAST entry — an off-by-one here would draw the
+        # strip a day out of step with the card above it.
+        self.assertEqual(got[-1], 42.0)
+
+    def test_no_active_account_returns_empty_not_thirty_nones(self):
+        """[] and [None] * 30 render differently: _history_present() omits
+        the card for the first and draws thirty stubs for the second."""
+        snap = model.Snapshot(accounts=[
+            model.Account(number=1, email="a@example.com", metrics=[])])
+        self.assertEqual(uh.active_series(snap, path=self.path), [])
+
+    def test_no_snapshot_at_all_returns_empty(self):
+        # The popover builds before the first fetch lands.
+        self.assertEqual(uh.active_series(None, path=self.path), [])
+
+    def test_an_openai_only_snapshot_has_no_active_claude_account(self):
+        self.assertEqual(uh.active_series(snapshot(provider="openai"),
+                                          path=self.path), [])
+
+    def test_a_read_failure_costs_the_card_not_the_panel(self):
+        # Same best-effort contract as record(): this sits on the build
+        # path, so it must degrade to "no strip", never raise into the UI.
+        with mock.patch.object(uh, "series", side_effect=OSError("nope")):
+            self.assertEqual(
+                uh.active_series(self._snapshot_with_active(),
+                                 path=self.path), [])
+
+
 if __name__ == "__main__":
     unittest.main()

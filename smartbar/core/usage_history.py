@@ -168,3 +168,30 @@ def series(provider: str, email: str, key: str, days: int = 30,
     today = datetime.now(timezone.utc).astimezone().date()
     return [by_date.get((today - timedelta(days=offset)).strftime("%Y-%m-%d"))
             for offset in range(days - 1, -1, -1)]
+
+
+def active_series(snapshot, days: int = 30, path=None) -> list:
+    """The one series the strip draws: the ACTIVE Claude account's "7d".
+
+    Which account and which window the strip shows is a policy decision,
+    and it lives here rather than at each `popover_layout.build()` caller
+    because there are three of them (both trays and the preview renderer).
+    Spelling `series(active.provider, active.email, "7d")` out at each site
+    is exactly how the two painted front-ends drift apart from each other,
+    which is the failure this repo's parity tests exist to catch.
+
+    Returns [] — not thirty Nones — when there is no active account to
+    describe, so `_history_present` omits the card rather than drawing a
+    row of stubs for an account the panel isn't showing.
+
+    Best-effort like record(): this sits on the popover's build path, and a
+    strip that cannot be drawn must cost the user a card, never the panel.
+    """
+    try:
+        active = snapshot.active_account if snapshot is not None else None
+        if active is None:
+            return []
+        return series(active.provider, active.email, "7d", days, path)
+    except Exception:
+        log.exception("could not read usage history")
+        return []

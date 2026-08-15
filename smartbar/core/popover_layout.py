@@ -334,15 +334,22 @@ def _overview_card(shapes, snapshot, top, now):
     suggestion = model.best_switch(snapshot)
     if suggestion is not None:
         w = model.worst(suggestion)
-        lead = (f"Most headroom: {model.account_address(suggestion)} — "
+        # "Best switch", NOT "most headroom": best_switch only ever
+        # considers non-active CLAUDE slots, because switching is the one
+        # thing this app does and it can only ever target a Claude slot.
+        # The rows below are ranked across BOTH providers and include the
+        # active account, so the two genuinely disagree — an OpenAI login
+        # or the account you are already on can sit above this one. Naming
+        # the lead line after what it actually computes is what keeps that
+        # from reading as a sorting bug.
+        lead = (f"Best switch: {model.account_address(suggestion)} — "
                 f"{round(w.pct)}% used")
     else:
         # True whether there are simply no other Claude accounts to offer,
-        # or every one of them is blocked/data-less/active — best_switch
-        # collapses those cases on purpose (see its own docstring), and
-        # "no spare headroom" is honest about all of them without claiming
-        # to know which.
-        lead = "No account has spare headroom"
+        # or every one of them is blocked/data-less — best_switch collapses
+        # those cases on purpose (see its own docstring), and this is
+        # honest about all of them without claiming to know which.
+        lead = "No account to switch to"
     shapes.append(t.Label(inner_l, lead_cy, lead, size=t.SIZE_EMAIL, bold=True,
                           color=t.TEXT, max_width=inner_r - inner_l))
 
@@ -369,13 +376,16 @@ def _overview_card(shapes, snapshot, top, now):
         if metric is None:
             blocked = model.switch_blocked(account)
             color = t.WARNING if blocked else t.TEXT_SECONDARY
-            shapes.append(t.Label(bar_l, row_cy,
-                                  model.state_text(account) or "No usage data",
+            # The short state name, right-anchored across BOTH the bar and
+            # percentage columns rather than squeezed into the bar's own
+            # 56pt: there is no bar and no percentage to collide with, and
+            # the full sentence truncated inside 56pt rendered as
+            # "Re-lo…once" — see model.state_summary.
+            shapes.append(t.Label(pct_r, row_cy,
+                                  model.state_summary(account)
+                                  or "No usage data",
                                   size=t.SIZE_CAPTION, color=color,
-                                  max_width=bar_r - bar_l))
-            shapes.append(t.Label(pct_r, row_cy, "—", size=t.SIZE_ROW_VALUE,
-                                  mono=True, anchor="right",
-                                  color=t.TEXT_TERTIARY))
+                                  anchor="right", max_width=pct_r - bar_l))
         else:
             _bar(shapes, bar_l, row_cy - t.BAR_H / 2, t.OVERVIEW_BAR_W,
                 metric, now)

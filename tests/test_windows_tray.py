@@ -972,6 +972,23 @@ class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
         _args, kwargs = fake_build.call_args
         self.assertEqual(kwargs.get("provider"), "overview")
 
+    def test_forwards_the_active_accounts_usage_history(self):
+        """Twin of the linux tray's test of the same name.
+
+        build()'s `history` defaults to None so the builder can stay pure,
+        which means a host that never passes it silently renders the
+        Overview tab with no 30-day strip while every layout-level test
+        keeps passing — they all hand build() a history directly.
+        """
+        mod = _reimport("smartbar.windows.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(mod.usage_history, "active_series",
+                               return_value=[3.0, 4.0]) as series:
+            with mock.patch.object(mod.popover_layout, "build") as fake_build:
+                tray._popover_layout()
+        self.assertEqual(fake_build.call_args.kwargs["history"], [3.0, 4.0])
+        self.assertIs(series.call_args.args[0], tray.controller.snapshot)
+
 
 class TestOptimisticFlip(GuiStubbedTestCase):
     """TrayController.on_switch owns WHEN the optimistic flip runs (pinned

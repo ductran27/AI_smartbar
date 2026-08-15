@@ -225,6 +225,24 @@ class TestPopoverLayoutWiring(GuiStubbedTestCase):
         self.assertIs(kwargs["refreshing"], True)
         self.assertEqual(kwargs["stale_reason"], "connection reset")
 
+    def test_forwards_the_active_accounts_usage_history(self):
+        """Without this the 30-day strip is dead code on this platform.
+
+        build() takes `history` and defaults it to None (it stays pure and
+        does no file I/O of its own), so a front-end that simply never
+        passes it renders the Overview tab with no strip — and every
+        layout-level test still passes, because they all call build()
+        directly with a history of their own.
+        """
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(mod.usage_history, "active_series",
+                               return_value=[1.0, 2.0]) as series:
+            with mock.patch.object(mod.popover_layout, "build") as build:
+                mod.Tray._popover_layout(tray)
+        self.assertEqual(build.call_args.kwargs["history"], [1.0, 2.0])
+        self.assertIs(series.call_args.args[0], tray.controller.snapshot)
+
     def test_stale_reason_is_empty_once_a_fetch_has_succeeded(self):
         # last_error is cleared by the controller's _apply_snapshot on
         # success, so a healthy panel must not show a stale reason left
