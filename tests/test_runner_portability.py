@@ -262,8 +262,11 @@ class TestUpdateNotifyOnWindows(unittest.TestCase):
         self.assertEqual(argv[0], "C:\\pwsh.exe")
         self.assertNotIn("notify-send", argv)
         # Untrusted text rides as its own argv slots, never spliced into the
-        # script text where PowerShell would parse it as code.
-        self.assertEqual(argv[-2:], ["title", "body"])
+        # script text where PowerShell would parse it as code. The logo path
+        # is a third such slot, so the balloon wears this app's icon instead
+        # of the generic system one.
+        self.assertEqual(argv[-3:-1], ["title", "body"])
+        self.assertTrue(argv[-1].endswith("ai-smartbar.png"), argv[-1])
 
     def test_notify_off_still_short_circuits_on_win32(self):
         update_runner.sys.platform = "win32"

@@ -28,7 +28,7 @@ import tempfile
 import time
 
 from smartbar import update_git
-from smartbar.core import paths, portable, update
+from smartbar.core import branding, paths, portable, update
 
 CACHE_DIR = paths.cache_dir()
 STATE_FILE = os.path.join(CACHE_DIR, "update-state.json")
@@ -131,7 +131,13 @@ def _win32_notify(title: str, body: str) -> None:
       characters-in-a-string" contract every other subprocess.run() argv
       slot already gets. There is no quoting/escaping step for a crafted
       title or body to break out of, because the two are never joined into
-      one string PowerShell has to parse as code.
+      one string PowerShell has to parse as code. The icon path is a third
+      such slot ($args[2]) for the same reason, and it is Test-Path'd rather
+      than trusted: an -Icon pointing at nothing throws out of the whole
+      script, losing the notification the icon was only meant to decorate.
+      GetHicon() leaks its handle by design here -- the process is about to
+      exit, and DestroyIcon needs a P/Invoke declaration that would cost
+      more than the handle does.
     * portable.no_window() suppresses the console flash a GUI-less update
       pass should never produce.
     * pwsh (7+) is preferred, falling back to the always-present
@@ -161,6 +167,10 @@ def _win32_notify(title: str, body: str) -> None:
             "Add-Type -AssemblyName System.Drawing; "
             "$n = New-Object System.Windows.Forms.NotifyIcon; "
             "$n.Icon = [System.Drawing.SystemIcons]::Information; "
+            "if ($args[2] -and (Test-Path -LiteralPath $args[2])) { try { "
+            "$b = New-Object System.Drawing.Bitmap $args[2]; "
+            "$n.Icon = [System.Drawing.Icon]::FromHandle($b.GetHicon()) "
+            "} catch { } }; "
             "$n.Visible = $true; "
             "$n.ShowBalloonTip(10000, $args[0], $args[1], "
             "[System.Windows.Forms.ToolTipIcon]::Info); "
@@ -169,7 +179,7 @@ def _win32_notify(title: str, body: str) -> None:
         )
         subprocess.run([shell, "-NoProfile", "-NonInteractive",
                         "-ExecutionPolicy", "Bypass", "-Command", script,
-                        title, body],
+                        title, body, branding.icon_path()],
                        timeout=15, check=False, **portable.no_window())
     except Exception:
         log.exception("Windows notification failed")
@@ -187,7 +197,13 @@ def notify(title: str, body: str) -> None:
         elif sys.platform == "win32":
             _win32_notify(title, body)
         else:
-            subprocess.run(["notify-send", "-u", "normal", title, body],
+            # -a/-i are what put this project's own name and logo on the
+            # notification instead of leaving it anonymous. -i takes the
+            # icon-theme name install/linux.sh publishes the asset under;
+            # a theme miss degrades to no icon, which is what we had.
+            subprocess.run(["notify-send", "-u", "normal",
+                            "-a", branding.APP_NAME, "-i", branding.ICON_NAME,
+                            title, body],
                            timeout=10, check=False)
     except (OSError, subprocess.TimeoutExpired):
         # TimeoutExpired is a SubprocessError, NOT an OSError, so the bare

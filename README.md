@@ -540,6 +540,19 @@ pill, since a pill's top is where "nearly at the limit" is read. A desktop
 notification also fires once the update has been applied. Both UIs learn
 this from `~/.cache/ai-smartbar/update-state.json`, written by the updater.
 
+On macOS that notification arrives wearing **Script Editor's** name and
+icon, and that is not a bug you can report away. macOS credits a
+notification to the *bundle* of the process that posted it; the updater is
+a launchd Python agent with no bundle, so its only mechanism is
+`osascript`, which is not an app either — the system credits Script Editor
+on its behalf. The app bundle cannot lend out its identity to fix this:
+`UNUserNotificationCenter` refuses an ad-hoc signature outright
+("Notifications are not allowed for this application", no prompt, measured
+on macOS 26.5), and the deprecated `NSUserNotificationCenter` accepts the
+call and delivers nothing. A correct sender is bought with a Developer ID
+signature, not with code. Linux and Windows have no such rule and do carry
+the real name and logo.
+
 **What a pass does.** Fetch tags → pick the target for this device's
 channel → check it out → **re-run whichever installers this device has** →
 verify → notify. Re-running the real installers *is* the apply step, so a
@@ -759,6 +772,23 @@ tail ~/.cache/ai-smartbar/update.log      # update decisions, applies, rollbacks
   and the last data stays visible marked stale.
 
 ## Development
+
+**The logo** is one committed asset, `assets/ai-smartbar.png`, drawn by
+`smartbar/paint/app_icon.py` — the menu-bar mark at icon scale, using the
+same pill proportions and the same colour ramp, so the thing in your Dock
+is recognisably the thing in your menu bar. It is a *generated* artifact
+like `Version.swift`: edit the painter, never the PNG, and regenerate with
+
+```bash
+python3 -m smartbar.paint.app_icon assets/ai-smartbar.png
+```
+
+`tests/test_branding.py` fails if the two drift apart, and pins the three
+installers that consume it (a macOS `.icns` built with `iconutil`, a
+freedesktop icon-theme entry, a Windows `.ico`) to the same filename.
+Committing it is what lets those installers place an icon before any of
+this project's Python dependencies exist — macOS never `pip install`s
+anything, and Windows needs the icon while it is still building the venv.
 
 ```bash
 python3 -m unittest discover -s tests -v   # whole suite, no external deps
