@@ -40,29 +40,41 @@ class SwiftPresent(unittest.TestCase):
 
 
 class TestHairlineBorderParity(SwiftPresent):
-    """Every card — active or not — shares one hairline now (CARD_BORDER);
-    the old account.active ? 0.92 : 0.07 branch is gone."""
+    """Every card — active or not — shares one hairline (card_border); the
+    old account.active ? 0.92 : 0.07 branch is gone.
 
-    def test_every_card_strokes_the_shared_hairline_alpha(self):
+    The alpha itself moved into the Palette when the panel gained a light
+    appearance (a white-alpha literal is invisible on white), so it is
+    pinned by test_popover_theme_parity.py now. What is left to pin HERE is
+    that the card takes it from the palette at all, rather than reintroducing
+    a hardcoded colour that only happens to look right in one appearance.
+    """
+
+    def test_every_card_strokes_the_palettes_hairline(self):
         match = re.search(
-            r"strokeBorder\(Color\.white\.opacity\(([\d.]+)\), "
-            r"lineWidth: ([\d.]+)\)", _read(CARD_SOURCE))
+            r"strokeBorder\(palette\.cardBorder, lineWidth: ([\d.]+)\)",
+            _read(CARD_SOURCE))
         self.assertIsNotNone(match, "could not find the card's strokeBorder")
-        alpha, width = match.groups()
-        self.assertEqual(float(alpha), theme.CARD_BORDER[3])
-        self.assertEqual(float(width), 1.0)
+        self.assertEqual(float(match.group(1)), 1.0)
+
+    def test_the_card_ground_is_the_palettes_too(self):
+        """The pace notch is drawn as this exact colour showing through a
+        bar, so a card that went back to `.thinMaterial` (or any other
+        ground) would leave the notch painting a near-miss grey stripe."""
+        self.assertIn(".fill(palette.cardBG)", _read(CARD_SOURCE))
 
 
 class TestRailParity(SwiftPresent):
     """The active-card leading rail: RAIL_W/RAIL_INSET as SwiftUI frame/
-    padding literals, filled from Palette.chalk (== theme.RAIL == theme.TEXT,
-    pinned separately by test_popover_theme_parity.py)."""
+    padding literals, filled from the appearance's own `rail` (which each
+    Scheme points at its own `text`, pinned by
+    test_popover_theme_parity.py)."""
 
     def test_rail_geometry_matches_rail_w_and_rail_inset(self):
         text = _read(CARD_SOURCE)
         match = re.search(
             r"RoundedRectangle\(cornerRadius: ([\d.]+), style: \.continuous\)\s+"
-            r"\.fill\(Palette\.chalk\)\s+"
+            r"\.fill\(palette\.rail\)\s+"
             r"\.frame\(width: ([\d.]+)\)\s+"
             r"\.padding\(\.vertical, ([\d.]+)\)", text)
         self.assertIsNotNone(match, "could not find the rail RoundedRectangle")

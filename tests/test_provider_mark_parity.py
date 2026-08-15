@@ -85,11 +85,16 @@ class TestTabMarkParity(SwiftPresent):
         self.assertEqual(width, theme.TAB_MARK)
         self.assertEqual(height, theme.TAB_MARK)
 
-    def test_the_gap_before_the_label_matches_tab_mark_gap(self):
+    def test_the_gap_below_the_mark_matches_tab_mark_gap(self):
+        """A VStack now, not an HStack: the mark stacks ABOVE its label, so
+        TAB_MARK_GAP is a vertical gap. Pinning the container type as well
+        as the number is deliberate — flipping the stack back would leave
+        the spacing "correct" while the tab looked nothing like the shared
+        layout's."""
         match = re.search(
-            r'HStack\(spacing: ([\d.]+)\) \{\s+ProviderMark\(kind: id\)',
+            r'VStack\(spacing: ([\d.]+)\) \{\s+ProviderMark\(kind: id\)',
             _read(POPOVER_SOURCE))
-        self.assertIsNotNone(match, "could not find the tab HStack spacing")
+        self.assertIsNotNone(match, "could not find the tab VStack spacing")
         self.assertEqual(float(match.group(1)), theme.TAB_MARK_GAP)
 
 
@@ -99,7 +104,8 @@ class TestCountdownIconParity(SwiftPresent):
 
     def test_the_clocks_frame_and_gap_match_countdown_icon_constants(self):
         match = re.search(
-            r'HStack\(spacing: ([\d.]+)\) \{\s+if !countdown\.isEmpty \{\s+'
+            r'if !countdown\.isEmpty \{[\s\S]*?'
+            r'HStack\(spacing: ([\d.]+)\) \{\s+'
             r'ProviderMark\(kind: "clock"\)\s+\.frame\(width: ([\d.]+), '
             r'height: ([\d.]+)\)', _read(ROW_SOURCE))
         self.assertIsNotNone(match, "could not find the countdown's clock mark")

@@ -291,8 +291,17 @@ def _draw_glyph(ctx, glyph) -> None:
     ctx.new_path()
 
 
-def draw(layout, ctx, background=t.WINDOW_BG, radius: float = 14.0) -> None:
-    """Paint a whole panel; `radius` rounds the window itself."""
+def draw(layout, ctx, background=None, radius: float = 14.0) -> None:
+    """Paint a whole panel; `radius` rounds the window itself.
+
+    The ground defaults to the layout's OWN `background` — the window colour
+    of the Scheme that built it — so switching appearance is one argument to
+    popover_layout.build() and the painter follows automatically. Passing
+    `background` overrides it, which only a caller compositing the panel onto
+    something other than a window should need.
+    """
+    if background is None:
+        background = getattr(layout, "background", t.DARK.window_bg)
     ctx.save()
     ctx.set_operator(cairo.OPERATOR_SOURCE)
     ctx.set_source_rgba(0, 0, 0, 0)
@@ -313,13 +322,13 @@ def draw(layout, ctx, background=t.WINDOW_BG, radius: float = 14.0) -> None:
             _draw_glyph(ctx, shape)
 
 
-def render_png(layout, path: str, scale: float = 2.0) -> str:
+def render_png(layout, path: str, scale: float = 2.0, background=None) -> str:
     """Rasterise to a PNG — the review path for a UI with no desktop here."""
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
                                  int(layout.width * scale),
                                  int(layout.height * scale))
     ctx = cairo.Context(surface)
     ctx.scale(scale, scale)
-    draw(layout, ctx)
+    draw(layout, ctx, background=background)
     surface.write_to_png(path)
     return path

@@ -8,33 +8,40 @@ with one-click Claude account switching. A cross-platform companion for
 Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills, fill =
                                              % used, each its own color)
 
-The panel — identical on macOS, Linux and Windows:
+The panel — the same layout on macOS, Linux and Windows:
 
  AI smartbar  Updated 9:56 PM              ⟳ ⏻
- [✳ Claude]  ❁ OpenAI
+    ✳         ❁
+ [ Claude ]  OpenAI
   ┌──────────────────────────────────────────┐
-  │ ● ios8build@gmail.com   20x [Make Active]│
-  │ 5h                           45% ◷ 2h 43m│
-  │ ██████████████████──────┊─────────────── │
-  │ 7d                           24% ◷ 6d 14h│
-  │ ██████████───────────────────────┊────── │
-  │ Fable                        34% ◷ 6d 14h│
+  │ ● ios8build@gmail.com  20x [Make Active] │
+  │ 5-hour                                   │
+  │ ██████████████████──────╎─────────────── │
+  │ 45% used                        ◷ 2h 43m │
+  │ Weekly                                   │
+  │ ██████████─────────────╎──────────────── │
+  │ 24% used                        ◷ 6d 14h │
+  │ Fable                                    │
   │ ██████████████────────────────────────── │
+  │ 34% used                        ◷ 6d 14h │
   └──────────────────────────────────────────┘
  ▌┌──────────────────────────────────────────┐
  ▌│ ● other@account          (2)    [ACTIVE] │
- ▌│ 5h                           62% ◷ 1h 02m│
- ▌│ █████████████████████████───────┊─────── │
+ ▌│ 5-hour                                   │
+ ▌│ ███████████████████╎█████─────────────── │
+ ▌│ 62% used                        ◷ 1h 02m │
  ▌└──────────────────────────────────────────┘
    v1.0.0                    [Update to 1.1.0]
 
- (numbers are % USED — the /usage scale; every row is a label line over a
-  full-width bar; ▌ = the white rail marking the ACTIVE account; ┊ = the
-  pace caret, how far through that window you are; ◷ = time to reset;
-  one chip carries the plan and the device count; [✳ Claude] ❁ OpenAI =
-  provider tabs, each with its provider's mark, the selected pill bright
-  and the other faded, row only present when both providers have
-  accounts; dark-only UI)
+ (numbers are % USED — the /usage scale; each limit is three lines, its
+  name over a full-width bar over the readout; ▌ = the rail marking the
+  ACTIVE account; ╎ = the pace notch, how far through that window you are
+  — past the fill means you are under budget, inside it means you are
+  burning faster than the clock; ◷ = time to reset; one chip carries the
+  plan and the device count; the tabs stack each provider's mark over its
+  label and the selected one is a filled accent pill, a row only present
+  when both providers have accounts; follows the system's light/dark
+  appearance)
 ```
 
 ## Features
@@ -48,23 +55,33 @@ The panel — identical on macOS, Linux and Windows:
 - **Every number is "% used"** — exactly what Claude Code's `/usage`
   shows, no mental arithmetic. Promo-boosted limits are already baked
   into the API's percentages, so both read the same scale.
-- **Native macOS popover** (SwiftUI, macOS 13+). One card per account,
-  one row per window (5h / 7d / per-model): a label line
-  (`5h    45% ◷ 2h 43m`) over a bar that gets the card's full width,
-  countdowns ticking live from the absolute reset time, the active card
-  marked by a white leading rail and a green `ACTIVE` chip, and an
-  "Updated" stamp that shows when the usage was actually measured at the
-  API — not when the app last polled. It is the ACTIVE account's
+- **Native macOS popover** (SwiftUI, macOS 13+). One card per account, and
+  each limit (5h / 7d / per-model) gets three lines: its name, a bar the
+  card's full width, then the readout — `45% used` on the left, the
+  countdown on the right. Countdowns tick live from the absolute reset
+  time, the active card is marked by a leading rail and a green `ACTIVE`
+  chip, and the "Updated" stamp shows when the usage was actually measured
+  at the API — not when the app last polled. It is the ACTIVE account's
   measurement time, the same account `/usage` describes; cswap refreshes
   each slot on its own plan, so the others in the same payload can be
   much older.
-- **The pace caret.** A faint hairline sits in each bar at how far
+- **Follows your appearance.** Light and dark are both first-class: the
+  panel reads the system setting and paints from the matching palette,
+  including a status ramp retuned for a light ground (the dark green and
+  amber were picked against a near-black panel and wash out on white).
+  Only colour changes — every position, size and hit target is identical
+  in both, so the two can never drift into different layouts. The Linux
+  and Windows panels stay dark for now; the appearance is a parameter they
+  simply don't pass yet.
+- **The pace notch.** A hairline cut through each bar marks how far
   through that window you currently are, so one bar answers two
-  questions: the fill is how much you have spent, the caret is whether
-  that is ahead of schedule. Fill behind the caret means you are under
-  budget for the window; fill past it means you are burning faster than
-  the clock. Rows that state no window length — a per-model bucket like
-  Fable — get no caret rather than a guessed one.
+  questions: the fill is how much you have spent, the notch is whether
+  that is ahead of schedule. Notch past the fill means you are under
+  budget for the window; notch inside the fill means you are burning
+  faster than the clock. It is drawn as a hole rather than a line over the
+  top, so it stays legible against both the bare track and a saturated
+  fill. Rows that state no window length — a per-model bucket like
+  Fable — get no notch rather than a guessed one.
 - **One-click switching.** `Make Active` flips the account instantly
   (optimistic UI; failures surface in the popover and the next fetch
   corrects the display). New Claude Code sessions use the new account;
@@ -107,10 +124,10 @@ The panel — identical on macOS, Linux and Windows:
   app) and within ~2 min an **OpenAI** tab appears next to Claude — one
   card per ChatGPT account (`you@…` with a `Pro` chip, same 5h / 7d /
   per-model %-used bars), read entirely from Codex's own local files.
-  Each pill carries its provider's mark to the left of its label, so the
-  row is readable both by shape and by name. The tab row only exists when
-  both providers have accounts, so a single-provider machine looks
-  exactly like before — see
+  Each tab stacks its provider's mark over its label, so the row is
+  readable both by shape and by name, and the selected one is a filled
+  accent pill. The tab row only exists when both providers have accounts,
+  so a single-provider machine looks exactly like before — see
   [The OpenAI tab](#the-openai-tab-chatgptcodex-accounts).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
@@ -201,11 +218,12 @@ On Windows the same flags are PowerShell-style: `-NoAutoUpdate` and
 > key with an `git@github.com:` remote. The installer probes this and
 > refuses loudly rather than letting updates fail silently forever.
 
-> **Status:** the native macOS app is live-verified (2026-08-15: v1.0.0
-> builds, installs and runs — its redesigned card, provider tab marks and
-> pace caret were reviewed through `--preview-popover` rather than on the
-> native popover itself; 2026-07-25: v0.8.0 OpenAI tab with faded tab
-> pills; 2026-07-22: v3 %-used UI, re-login card + blocked switch,
+> **Status:** the native macOS app is live-verified (2026-08-15:
+> light/dark appearances, three-line metric sections and stacked provider
+> tabs are UNRELEASED — reviewed through `--preview-popover` in both
+> schemes and the Swift builds clean, but not yet seen on the native
+> popover; 2026-08-15: v1.0.0 builds, installs and runs; 2026-07-25:
+> v0.8.0 OpenAI tab with faded tab pills; 2026-07-22: v3 %-used UI, re-login card + blocked switch,
 > re-capture, warmup agent with fixed PATH). The Linux tray is written to
 > spec from the unit-tested core but has not been re-run on a Linux box
 > since v2. The Windows tray is further behind than that: it has never
@@ -464,15 +482,17 @@ screen-reader support in the panel; the tray menu remains fully native.
 **Look at it without a Linux box:**
 
 ```bash
-ai-smartbar --preview-popover out.png          # your real accounts
-ai-smartbar --preview-popover out.png --demo   # every card state, no cswap needed
+ai-smartbar --preview-popover out.png                  # your real accounts
+ai-smartbar --preview-popover out.png --demo          # every card state, no cswap needed
+ai-smartbar --preview-popover out.png --scheme light  # the light appearance
 ```
 
 Needs `pycairo` only — it never imports GTK, so this works on macOS too and
-is how the panel is reviewed during development.
+is how the panel is reviewed during development. `--scheme` exists because
+the panel follows the SYSTEM appearance at run time, which means the one you
+are not currently in is the one that rots unnoticed.
 
-Notes: cards are a solid dark fill rather than macOS's translucent material
-(cairo has no portable blur); under Wayland the compositor places the window
+Notes: under Wayland the compositor places the window
 because clients cannot position themselves, while on X11 it appears next to
 the pointer. If the window cannot be created at all, the tray menu falls
 back to the old text rows so nothing is lost.
