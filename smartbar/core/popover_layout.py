@@ -210,7 +210,8 @@ def _bar(shapes, s, x, y, w, metric, now):
     if fraction > 0:
         # The floor is the bar's own height, so the smallest possible fill is
         # a dot the track's width rather than a sliver clipped by its own
-        # corner radius — BAR_H grew, so a fixed 6.0 would now under-run it.
+        # corner radius. Derived from BAR_H rather than hardcoded, so it
+        # cannot fall out of step with the track if the bar is resized.
         shapes.append(t.Box(x, y, max(t.BAR_H, w * fraction), t.BAR_H,
                             radius=t.BAR_H / 2,
                             fill=s.status_rgba(model.color(metric.pct))))
@@ -375,9 +376,9 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
     """Metric rows, or the explanatory line on a data-less card — shared by
     the normal header and the (possibly taller) remove-confirm header.
 
-    A metric row is three stacked lines: its NAME, the bar, then the
-    readout. See ROW_HEAD_H's comment in popover_theme for why the name
-    left the readout's line.
+    A metric row is two stacked lines: label/pct/countdown, then the bar.
+    See ROW_LABEL_H's comment in popover_theme for why the readout stayed on
+    the label's line rather than moving under the bar.
     """
     body_top = top + t.CARD_PAD_V + header_h + t.CARD_INNER_GAP
     if not account.metrics:
@@ -403,45 +404,53 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
         return
 
     bar_l, bar_w = inner_l, inner_r - inner_l
+    pct_r = inner_r - t.VALUE_COUNTDOWN_W
     for index, metric in enumerate(account.metrics):
         row_top = body_top + index * (t.ROW_H + t.ROW_GAP)
-        # 1. The name, alone on its line and free to use the full width —
-        #    metric_title turns cswap's key into a word ("5h" -> "5-hour").
-        shapes.append(t.Label(inner_l, row_top + t.ROW_HEAD_H / 2,
-                              model.metric_title(metric),
-                              size=t.SIZE_ROW_HEAD, bold=True, color=s.text,
-                              max_width=bar_w))
-        # 2. The bar.
-        bar_top = row_top + t.ROW_HEAD_H + t.ROW_HEAD_GAP
-        _bar(shapes, s, bar_l, bar_top, bar_w, metric, now)
-        # 3. The readout, anchored to OPPOSITE edges: what is spent on the
-        #    left, when it comes back on the right. Neither needs a reserved
-        #    column to hold still — see BAR_H's comment in popover_theme for
-        #    why that retires FINDING 3 rather than working around it.
-        meta_cy = bar_top + t.BAR_H + t.ROW_META_GAP + t.ROW_META_H / 2
-        spent = metric.pct >= 100
-        # "45%" alone never said WHICH scale it was on; the row has room for
-        # the word now, so it says so rather than leaving the README to.
-        shapes.append(t.Label(inner_l, meta_cy, f"{round(metric.pct)}% used",
-                              size=t.SIZE_ROW_META, mono=True,
-                              color=s.text_spent if spent else s.text))
+        label_cy = row_top + t.ROW_LABEL_H / 2
+        shapes.append(t.Label(inner_l, label_cy, metric.label,
+                              size=t.SIZE_ROW_LABEL, bold=True, color=s.text,
+                              max_width=t.LABEL_W))
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
+        # One ink for the whole readout: percentage and countdown are one
+        # fact read left to right, so a step between them would imply a
+        # hierarchy the row does not have. It comes from the scheme rather
+        # than the ink-with-alpha literal it used to be, because that
+        # literal was white and a white readout is invisible on a light card.
+        color = s.text_spent if metric.pct >= 100 else s.text
+        # Percentage and countdown are two INDEPENDENTLY right-anchored
+        # labels, not one concatenated string right-anchored at inner_r —
+        # a single string makes the percentage slide sideways every time
+        # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
+        # exactly what FINDING 3 measured (a 19pt swing on the "·").
+        shapes.append(t.Label(pct_r, label_cy, f"{round(metric.pct)}%",
+                              size=t.SIZE_ROW_VALUE, mono=True,
+                              anchor="right", color=color))
         if countdown:
-            color = s.text_spent if spent else s.text_secondary
-            shapes.append(t.Label(inner_r, meta_cy, countdown,
-                                  size=t.SIZE_ROW_META, mono=True,
+            # The leading " · " is gone: a clock glyph fills the space
+            # that space used to reserve, so "· 🕐 2h 5m" never doubles up
+            # the separator.
+            countdown_text = f" {countdown}"
+            shapes.append(t.Label(inner_r, label_cy, countdown_text,
+                                  size=t.SIZE_ROW_VALUE, mono=True,
                                   anchor="right", color=color))
-            # The clock sits immediately left of where the countdown text
-            # actually STARTS. The layout has no font engine, so
-            # t.text_width is the same estimate the label itself is
-            # measured by — a wrong estimate stays cosmetic.
-            text_w = t.text_width(countdown, t.SIZE_ROW_META, mono=True)
+            # The clock sits immediately left of wherever the countdown
+            # text actually STARTS, not the reserved column's nominal edge
+            # (inner_r - VALUE_COUNTDOWN_W) — that column is sized for the
+            # widest realistic countdown ("23h 59m"), so anchoring there
+            # would leave a visible gap before a short one like "9m". The
+            # layout has no font engine, so t.text_width is the same
+            # estimate the countdown label itself is measured by.
+            text_w = t.text_width(countdown_text, t.SIZE_ROW_VALUE, mono=True)
             clock_cx = (inner_r - text_w - t.COUNTDOWN_ICON_GAP
                         - t.COUNTDOWN_ICON / 2)
-            shapes.append(t.Glyph("clock", clock_cx, meta_cy,
+            shapes.append(t.Glyph("clock", clock_cx, label_cy,
                                   t.COUNTDOWN_ICON, color))
+
+        bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
+        _bar(shapes, s, bar_l, bar_top, bar_w, metric, now)
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
@@ -545,46 +554,38 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
-        tab_top = cursor
-        # The mark stacks ABOVE its label and the selected tab is a filled
-        # accent pill. Accent is admissible here even though colour on this
-        # panel is otherwise reserved for how much budget is left: blue sits
-        # outside the used-ramp entirely (green/amber/orange/red/purple), so
-        # it reads as chrome — "you are here" — and cannot be misread as a
-        # budget state the way a tinted rail or a coloured chip could.
+        cy = cursor + t.TAB_H / 2
         for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
             current = name == selected
             label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
-            width = max(t.TAB_MIN_W, label_w + t.BUTTON_PAD_H * 2)
+            width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
             hit_name = f"tab:{name}"
+            # Faded / not-faded, not colored: the selected provider is full
+            # strength and the other recedes (mirrored by tabButton in
+            # PopoverView.swift). A filled accent pill was tried and reverted
+            # — it was the loudest thing on a panel whose only job is to
+            # colour-code how much budget is left, and it won that contest.
             if current:
-                fill = s.accent_hover if hover == hit_name else s.accent
-                color = s.accent_text
+                fill, color = s.tab_bg_selected, s.text
             elif hover == hit_name:
                 fill, color = s.tab_bg_hover, s.text
             else:
                 fill, color = s.tab_bg, s.text_tertiary
-            shapes.append(t.Box(x, tab_top, width, t.TAB_H,
-                                radius=t.TAB_RADIUS, fill=fill))
-            # The mark never REPLACES the label — a tab has to stay readable
-            # to anyone who doesn't recognise the provider's mark on sight,
-            # so this never becomes an icon-only button. It takes the
-            # label's own colour, so an unselected tab recedes mark-and-all
-            # rather than the mark competing with the fade as a second
-            # signal. Both are centred on the pill and vertically centred as
-            # ONE block, so the pair reads as a unit at any TAB_H.
-            block_h = t.TAB_MARK + t.TAB_MARK_GAP + t.SIZE_CAPTION
-            block_top = tab_top + (t.TAB_H - block_h) / 2
-            center_x = x + width / 2
-            shapes.append(t.Glyph(name, center_x, block_top + t.TAB_MARK / 2,
-                                  t.TAB_MARK, color))
-            shapes.append(t.Label(
-                center_x,
-                block_top + t.TAB_MARK + t.TAB_MARK_GAP + t.SIZE_CAPTION / 2,
-                text, size=t.SIZE_CAPTION, bold=current, anchor="center",
-                color=color))
-            hits.append(t.Hit(hit_name, x, tab_top, width, t.TAB_H,
-                              tooltip=f"Show {text} accounts"))
+            shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
+                                radius=t.BUTTON_H / 2, fill=fill))
+            # The mark sits BESIDE the label, never instead of it — a tab
+            # has to stay readable to anyone who doesn't recognise the
+            # provider's mark on sight, so it never becomes an icon-only
+            # button. It takes the label's own color, so a faded tab reads
+            # as faded mark-and-all rather than the mark competing with the
+            # fade as a second signal.
+            mark_cx = x + t.BUTTON_PAD_H + t.TAB_MARK / 2
+            shapes.append(t.Glyph(name, mark_cx, cy, t.TAB_MARK, color))
+            label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
+            shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
+                                  bold=current, color=color))
+            hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
+                              t.BUTTON_H, tooltip=f"Show {text} accounts"))
             x += width + t.TAB_GAP
         cursor += t.TAB_H + t.SECTION_GAP
     if action_error:
