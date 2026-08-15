@@ -40,25 +40,22 @@ CARD_INNER_GAP = 7.0
 RAIL_W = 2.5                # active-card leading rail width
 RAIL_INSET = 3.0            # vertical inset so the rail reads as a mark,
                             # not a second border
-# A row is three stacked lines: the metric's NAME on its own line, the bar
-# under it at the card's full inner width, then the readout ("45% used" on
-# the left, the countdown on the right) under that. ROW_H is their sum
-# (13 + 4 + 8 + 5 + 12 = 42), so card_height's row-counting arithmetic needs
-# no change of its own beyond these constants moving.
+# A row is two stacked lines: the label/pct/countdown line, then a bar that
+# gets the card's FULL inner width instead of splitting it with a label
+# column (see popover_layout._card_body). ROW_H is their sum
+# (12 + 2 + 6 = 20), so card_height's row-counting arithmetic needs no
+# change of its own beyond this constant moving.
 #
-# The name used to SHARE a line with the readout. That forced the two into
-# one optical size (a step between two words on one line reads as a
-# hierarchy that isn't there) and gave the name a 40pt column to truncate
-# inside. Splitting them lets the name be a heading, lets the bar be the
-# full-width object it always wanted to be, and moves the hierarchy into a
-# real size step — which is also why SIZE_ROW_HEAD and SIZE_ROW_META are
-# now deliberately DIFFERENT where their predecessors were pinned equal.
-ROW_HEAD_H = 13.0         # the metric's name, alone on its line
-ROW_HEAD_GAP = 4.0        # name -> bar
-ROW_META_GAP = 5.0        # bar -> readout
-ROW_META_H = 12.0         # "45% used" / countdown
-ROW_H = 42.0
-ROW_GAP = 9.0
+# A three-line row — name, bar, then a "45% used" readout under it — was
+# tried and reverted. It read well in isolation and cost more than it was
+# worth in place: at four accounts the panel it produced was over 700pt
+# tall, so a card that used to be glanceable became something to scroll,
+# and the whole point of a menu-bar panel is that it answers a question
+# before you have finished opening it. Density IS the feature here.
+ROW_LABEL_H = 12.0        # the label/pct/countdown line
+ROW_LABEL_GAP = 2.0       # gap between that line and the bar under it
+ROW_H = 20.0
+ROW_GAP = 7.0
 STATE_ROW_H = 16.0         # "Re-login required…" line on a data-less card
 STATE_LINE_H = 13.0        # extra height per wrapped line (.lineLimit(2))
 STATE_MAX_LINES = 2
@@ -69,17 +66,22 @@ CONFIRM_MAX_LINES = 2
 CONFIRM_LINE_H = 15.0
 DOT_R = 3.5                # 7pt circle
 DOT_STROKE = 1.5
-# The readout's two halves now sit at OPPOSITE ends of their own line —
-# "45% used" anchored to the card's left inner edge, the countdown anchored
-# to its right — so neither needs a reserved sub-column any more. FINDING 3
-# (the percentage sliding sideways every time the countdown changed length,
-# "1h 0m" -> "59m") was a symptom of the two being one right-anchored group
-# that had to be split into fixed columns to hold still; anchoring them to
-# opposite edges dissolves the problem instead of measuring around it, and
-# LABEL_W/VALUE_PCT_W/VALUE_COUNTDOWN_W/BAR_GAP retire with it.
-BAR_H = 8.0                # The bar is the row's primary object now, not a
-                           # strip squeezed between a label and a value, so
-                           # it is sized to be read at a glance.
+# MetricBarRow's label/pct/countdown line has a label column and two value
+# sub-columns — only the BAR sits on its own line below (see
+# popover_layout._card_body). LABEL_W caps the label's truncation width;
+# VALUE_PCT_W/VALUE_COUNTDOWN_W split the value into two independently
+# right-anchored sub-columns — percentage, then countdown — instead of one
+# right-anchored string (a single string jitters sideways every time the
+# countdown's length changes, FINDING 3). Sized from real cairo metrics for
+# the widest realistic value ("100%" / " · 23h 59m"), each with a few points
+# of margin for other platforms' default mono fonts.
+LABEL_W = 40.0             # MetricBarRow label column
+VALUE_PCT_W = 28.0
+VALUE_COUNTDOWN_W = 66.0
+BAR_H = 6.0
+# Gap between the label and the value area on the label line — the bar on
+# the line below it has no such gap; it spans the card's full inner width.
+BAR_GAP = 9.0              # Spacer(minLength: 9) in MetricBarRow's label line
 # One "small glyph beside a line of text" size shared by every spot that
 # needs it — the countdown's clock, a blocked account's warn triangle, and
 # the footer's pause mark — rather than three near-identical pairs of
@@ -107,23 +109,22 @@ COUNTDOWN_ICON_GAP = 3.0
 # as a bar cut into two segments rather than one bar with a mark on it.
 PACE_W = 1.5
 BUTTON_H = 18.0
-TAB_H = 40.0               # provider tab row (Claude | OpenAI), shown only
+TAB_H = 20.0               # provider tab row (Claude | OpenAI), shown only
                            # when both providers actually have accounts
 TAB_GAP = 6.0              # gap between adjacent tab pills
 TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
-# Each tab stacks its provider's mark ABOVE its label, and the selected one
-# is a filled accent pill rather than a brighter grey one. The mark still
-# never REPLACES the label — a label-less pill stops being readable to
-# anyone who doesn't know the provider's mark on sight — but stacking buys
-# it enough room (TAB_MARK, up from 11) to actually be recognised instead of
-# merely present. TAB_MARK_GAP is now a VERTICAL gap (see popover_layout.
-# build).
-TAB_MARK = 16.0
-TAB_MARK_GAP = 3.0
-TAB_MIN_W = 76.0           # a floor, so two tabs read as one segmented
-                           # control rather than two differently-sized blobs
-TAB_RADIUS = 9.0
+# Each tab pill carries its provider's mark to the LEFT of its label, not
+# instead of it: the mark alone is not how most people tell Claude and
+# OpenAI's tabs apart, and a label-less pill would stop being readable to
+# anyone who doesn't recognise it on sight. TAB_MARK sizes the Glyph;
+# TAB_MARK_GAP is the gap before the label starts (see popover_layout.build).
+#
+# Stacking the mark ABOVE the label at 16pt was tried and reverted with the
+# three-line row: a 40pt tab row is a lot of the panel's height spent on a
+# control that is only shown at all when two providers are installed.
+TAB_MARK = 11.0
+TAB_MARK_GAP = 5.0
 CHIP_H = 15.0
 REMOVE_HIT = 18.0          # square hit target for the per-card remove ✕
 REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
@@ -140,15 +141,13 @@ ICON_BUTTON_W = 22.0
 SIZE_TITLE = 13.0          # .headline
 SIZE_EMAIL = 12.0          # .callout.weight(.semibold)
 SIZE_CAPTION = 10.0        # .caption2
-# The name and the readout no longer share a line, so they deliberately no
-# longer share a size. The step between them IS the hierarchy — a heading
-# over its data — where an equal size used to be what stopped two words on
-# ONE line from implying a hierarchy that wasn't there. The old
-# SIZE_ROW_LABEL/SIZE_ROW_VALUE pair was pinned EQUAL by a parity test; its
-# replacement pins the step, for the same reason: whichever relationship
-# the design depends on is the one worth failing a build over.
-SIZE_ROW_HEAD = 12.0       # the metric's name
-SIZE_ROW_META = 10.5       # "45% used" / countdown, monospaced digits
+# Label and value share one optical size on purpose: they sit on the SAME
+# line, and a size step between them would read as a hierarchy that isn't
+# there — they are one fact ("5h: 42% · 3h 12m"), not a heading over a body.
+# A parity test pins the equality, because it is the relationship the row
+# depends on rather than either number on its own.
+SIZE_ROW_LABEL = 10.5
+SIZE_ROW_VALUE = 10.5      # monospaced
 SIZE_CHIP = 9.0
 SIZE_ICON = 12.5
 
@@ -194,8 +193,14 @@ class Scheme:
     button_bg_hover: tuple
     button_border: tuple
     button_disabled: tuple
-    tab_bg: tuple
+    # Tab pills read as faded / not-faded rather than coloured: the selected
+    # provider is full strength, the other recedes. These are ink-over-ground
+    # overlays and therefore genuinely different per appearance — the dark
+    # scheme's white-alpha values are invisible on a light card, which is the
+    # single reason they had to leave module scope and move in here.
+    tab_bg_selected: tuple
     tab_bg_hover: tuple
+    tab_bg: tuple
     accent: tuple
     accent_hover: tuple
     accent_text: tuple
@@ -249,8 +254,9 @@ DARK = Scheme(
     button_bg_hover=(1.0, 1.0, 1.0, 0.20),
     button_border=(1.0, 1.0, 1.0, 0.18),
     button_disabled=(1.0, 1.0, 1.0, 0.05),
-    tab_bg=(0.0, 0.0, 0.0, 0.0),            # unselected tabs carry no fill
-    tab_bg_hover=(1.0, 1.0, 1.0, 0.08),
+    tab_bg_selected=(1.0, 1.0, 1.0, 0.16),
+    tab_bg_hover=(1.0, 1.0, 1.0, 0.12),
+    tab_bg=(1.0, 1.0, 1.0, 0.06),
     accent=(0.0, 0.48, 1.0, 1.0),           # .borderedProminent
     accent_hover=(0.15, 0.56, 1.0, 1.0),
     accent_text=(1.0, 1.0, 1.0, 1.0),
@@ -282,8 +288,9 @@ LIGHT = Scheme(
     button_bg_hover=(0.0, 0.0, 0.0, 0.11),
     button_border=(0.0, 0.0, 0.0, 0.14),
     button_disabled=(0.0, 0.0, 0.0, 0.05),
-    tab_bg=(0.0, 0.0, 0.0, 0.0),
-    tab_bg_hover=(0.0, 0.0, 0.0, 0.06),
+    tab_bg_selected=(0.0, 0.0, 0.0, 0.12),
+    tab_bg_hover=(0.0, 0.0, 0.0, 0.09),
+    tab_bg=(0.0, 0.0, 0.0, 0.05),
     accent=(0.0, 0.42, 0.90, 1.0),
     accent_hover=(0.0, 0.36, 0.82, 1.0),
     accent_text=(1.0, 1.0, 1.0, 1.0),
