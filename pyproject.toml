@@ -3,6 +3,21 @@ line-length = 92
 target-version = "py39"
 
 [tool.ruff.lint]
+# Ruff's default set (E4/E7/E9 + F) plus FA, spelled out because naming any
+# `select` replaces the default rather than extending it.
+#
+# FA (flake8-future-annotations) is what keeps `target-version = "py39"`
+# above honest. The floor is real — the macOS python fallback runs under
+# whatever `python3` the OS ships, which is 3.9 on Ventura and older — but
+# nothing enforced it: CI has no 3.9 leg (GitHub's ubuntu-24.04 runners
+# cache 3.10 upward, and the pinned pycairo is itself 3.10+), and E/F rules
+# say nothing about version compatibility. FA102 closes the one gap that
+# actually reaches users: `x: str | None` is valid syntax that raises
+# TypeError at import time on 3.9 unless the module carries
+# `from __future__ import annotations`. Every module in smartbar/ now does,
+# so this rule is what keeps the next one from forgetting.
+select = ["E4", "E7", "E9", "F", "FA"]
+
 # E402 ("module level import not at top of file") is silenced ONLY for the
 # one module where it is unavoidable by design, never for the whole repo:
 #

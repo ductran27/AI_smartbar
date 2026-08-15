@@ -20,6 +20,15 @@ optimistic-switch flip's own repaint (supplied to TrayController.on_switch
 as a callable, per the design's own divergence note on why that step cannot
 be shared).
 """
+# Must stay the first statement after the docstring — above even the
+# gi.require_version dance below, which is what Python requires of any
+# __future__ import. Present for the same reason every other module in this
+# package has it: the repo floor is 3.9 (pyproject target-version), where
+# `str | None` in an annotation is a runtime TypeError without it. ruff's
+# FA102 enforces that, but a front-end this file's size should not be one
+# `X | Y` away from failing to import on the oldest Mac we support.
+from __future__ import annotations
+
 import os
 
 # Prefer X11 (XWayland, on a Wayland desktop) over the native Wayland
