@@ -21,17 +21,17 @@ The panel — the same layout on macOS, Linux and Windows:
   │ Fable                       34% ◷ 6d 14h │
   │ ██████████████────────────────────────── │
   └──────────────────────────────────────────┘
- ▌┌──────────────────────────────────────────┐
- ▌│ ● other@account          (2)    [ACTIVE] │
- ▌│ 5h                          62% ◷ 1h 02m │
- ▌│ ███████████████████╎█████─────────────── │
- ▌└──────────────────────────────────────────┘
+  ┌──────────────────────────────────────────┐
+  │ ● other@account          (2)    [ACTIVE] │
+  │ 5h                          62% ◷ 1h 02m │
+  │ ███████████████████╎█████─────────────── │
+  └──────────────────────────────────────────┘
    v1.0.0                    [Update to 1.1.0]
 
  (numbers are % USED — the /usage scale; each limit is a label line over a
-  full-width bar; ▌ = the rail marking the ACTIVE account; ╎ = the pace
-  notch, how far through that window you are — past the fill means you are
-  under budget, inside it means you are burning faster than the clock;
+  full-width bar; the [ACTIVE] chip is the only mark on the active card;
+  ╎ = the pace notch, how far through that window you are — past the fill
+  means you are under budget, inside it means you are burning faster;
   ◷ = time to reset; one chip carries the plan and the device count;
   [✳ Claude] ❁ OpenAI = provider tabs, each with its provider's mark, the
   selected pill bright and the other faded, row only present when both
@@ -53,7 +53,7 @@ The panel — the same layout on macOS, Linux and Windows:
   one row per window (5h / 7d / per-model): a label line
   (`5h    45% ◷ 2h 43m`) over a bar that gets the card's full width,
   countdowns ticking live from the absolute reset time, the active card
-  marked by a leading rail and a green `ACTIVE` chip, and an "Updated"
+  marked by a green `ACTIVE` chip and nothing else, and an "Updated"
   stamp that shows when the usage was actually measured at the API — not
   when the app last polled. It is the ACTIVE account's measurement time,
   the same account `/usage` describes; cswap refreshes each slot on its

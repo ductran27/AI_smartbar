@@ -1,7 +1,7 @@
 // One card per Claude account: status dot, email, ACTIVE chip or switch
 // button, and one metric section (name, bar, readout) per limit (5h / 7d /
-// per-model). Every card wears the same quiet hairline; the active one is
-// told apart by a leading rail instead of a loud outline. Accounts whose
+// per-model). Every card wears the same quiet hairline — the active one is
+// told apart by its ACTIVE chip alone, not by extra chrome. Accounts whose
 // stored credential is dead say so and cannot be switched to. Colours come
 // from the appearance's Palette — the panel follows the system now.
 import SwiftUI
@@ -141,26 +141,14 @@ struct AccountCardView: View {
                 .fill(palette.cardBG)
         )
         .overlay(
-            // Every card gets the same quiet hairline now — the active one
-            // used to wear a 1.5pt pure-white outline instead, the loudest
-            // mark on the panel for information the ACTIVE chip already
-            // carries. CARD_BORDER in the shared theme.
+            // Every card gets the same quiet hairline — active or not. The
+            // active one used to wear a 1.5pt pure-white outline, then a
+            // leading rail; both were the brightest mark on the panel spent
+            // on what the ACTIVE chip already says in words. CARD_BORDER in
+            // the shared theme.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(palette.cardBorder, lineWidth: 1)
         )
-        .overlay(alignment: .leading) {
-            if account.active {
-                // The rail replaces the outline as the active mark: a
-                // quiet ink line rather than a colour, because colour on
-                // this panel is reserved for how much budget is left —
-                // see Scheme.rail's comment in the shared theme. RAIL_W/
-                // RAIL_INSET there.
-                RoundedRectangle(cornerRadius: 1.25, style: .continuous)
-                    .fill(palette.rail)
-                    .frame(width: 2.5)
-                    .padding(.vertical, 3)
-            }
-        }
         .onHover { hovering = $0 }
     }
 

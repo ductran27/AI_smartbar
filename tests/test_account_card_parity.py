@@ -2,11 +2,12 @@
 languages. Pin them together.
 
 Stage 03 replaced the active card's 1.5pt pure-white outline with a hairline
-border shared by every card plus a leading rail on the active one, and moved
-the plan/device badge off the header string into its own micro-chip — three
-new numbers/behaviours duplicated as SwiftUI literals in
-AccountCardView.swift: the hairline's opacity (CARD_BORDER), the rail's
-width/inset (RAIL_W/RAIL_INSET), and the badge composition (account_badge).
+border shared by every card, and moved the plan/device badge off the header
+string into its own micro-chip — behaviours duplicated as SwiftUI literals
+in AccountCardView.swift: the hairline (CARD_BORDER) and the badge
+composition (account_badge). The leading rail that briefly marked the active
+card lived here too; it is gone, and TestNoActiveCardChrome keeps it gone in
+both languages at once.
 Same approach as test_popover_theme_parity.py and
 test_metric_bar_row_parity.py: read the Swift as SOURCE TEXT, so a value or
 formula drifting on one side fails the ordinary unit suite with no Swift
@@ -20,7 +21,6 @@ import unittest
 
 import smartbar
 from smartbar.core import model
-from smartbar.core import popover_theme as theme
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(smartbar.__file__)))
 SWIFT_DIR = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar")
@@ -64,29 +64,23 @@ class TestHairlineBorderParity(SwiftPresent):
         self.assertIn(".fill(palette.cardBG)", _read(CARD_SOURCE))
 
 
-class TestRailParity(SwiftPresent):
-    """The active-card leading rail: RAIL_W/RAIL_INSET as SwiftUI frame/
-    padding literals, filled from the appearance's own `rail` (which each
-    Scheme points at its own `text`, pinned by
-    test_popover_theme_parity.py)."""
+class TestNoActiveCardChrome(SwiftPresent):
+    """The active card carries no chrome of its own in EITHER language —
+    the ACTIVE chip states it in words.
 
-    def test_rail_geometry_matches_rail_w_and_rail_inset(self):
-        text = _read(CARD_SOURCE)
-        match = re.search(
-            r"RoundedRectangle\(cornerRadius: ([\d.]+), style: \.continuous\)\s+"
-            r"\.fill\(palette\.rail\)\s+"
-            r"\.frame\(width: ([\d.]+)\)\s+"
-            r"\.padding\(\.vertical, ([\d.]+)\)", text)
-        self.assertIsNotNone(match, "could not find the rail RoundedRectangle")
-        corner_radius, width, inset = (float(v) for v in match.groups())
-        self.assertEqual(width, theme.RAIL_W)
-        self.assertEqual(corner_radius, theme.RAIL_W / 2)
-        self.assertEqual(inset, theme.RAIL_INSET)
+    This is a "stayed deleted" guard rather than a value comparison. Two
+    marks have been tried and removed here (a 1.5pt pure-white outline,
+    then a leading rail), and either could plausibly come back on one side
+    only: SwiftUI makes an active-gated overlay a two-line change, while
+    the cairo painter would need a new Box — so the two renderers would
+    disagree about what an active card even looks like, on a difference no
+    colour or geometry test would notice.
+    """
 
-    def test_the_rail_is_gated_on_account_active(self):
+    def test_no_active_gated_leading_overlay_remains(self):
         text = _read(CARD_SOURCE)
-        overlay = text[text.index(".overlay(alignment: .leading)"):]
-        self.assertIn("if account.active {", overlay[:120])
+        self.assertNotIn(".overlay(alignment: .leading)", text)
+        self.assertNotIn("palette.rail", text)
 
 
 class TestBadgeChipParity(SwiftPresent):
