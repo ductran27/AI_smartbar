@@ -154,6 +154,11 @@ class GuiStubbedTestCase(stubs.GuiStubbedTestCase):
     """
 
     def setUp(self):
+        # Before install_gi, not after: the guard is about the REAL cairo
+        # install_gi deliberately does not fake, and skipping first leaves
+        # sys.modules untouched on the way out (setUp raising means tearDown
+        # never runs, so there must be no snapshot left half-taken).
+        stubs.skip_without_pycairo()
         super().setUp()
         self.gi = stubs.install_gi()
 
