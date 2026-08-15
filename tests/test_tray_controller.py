@@ -160,6 +160,8 @@ class ControllerTestCase(unittest.TestCase):
             mock.patch.object(tc.plan, "plans_by_email", return_value={}))
         self._patches.enter_context(
             mock.patch.object(tc.codex, "accounts", return_value=[]))
+        self.fake_usage_history = self._patches.enter_context(
+            mock.patch.object(tc, "usage_history"))
         self.thread_cls = self._patches.enter_context(
             mock.patch.object(tc.threading, "Thread"))
 
@@ -290,6 +292,30 @@ class TestApplySnapshotOrdering(ControllerTestCase):
             controller._apply_snapshot(_snapshot(), 1)
         host.panel_visible.assert_not_called()
         host.refresh_panel.assert_not_called()
+
+
+class TestUsageHistoryRecording(ControllerTestCase):
+    """Stage 06: every fresh snapshot folds into the local usage-history
+    store, best-effort — see usage_history.record's own docstring for why
+    a failure there must never be able to take a refresh down with it."""
+
+    def test_apply_snapshot_records_the_fresh_snapshot(self):
+        account = _account(1, "a@x.com", active=True)
+        snap = _snapshot(account)
+        self.controller.generation = 1
+        self.controller.presence_started = True
+        with mock.patch.object(self.controller, "_pending_update",
+                               return_value=""):
+            self.controller._apply_snapshot(snap, 1)
+        self.fake_usage_history.record.assert_called_once_with(snap)
+
+    def test_not_called_on_a_superseded_generation(self):
+        # The generation guard is checked before anything else in
+        # _apply_snapshot, recording included -- a stale fetch must not be
+        # able to write a superseded snapshot's numbers into today's record.
+        self.controller.generation = 5
+        self.controller._apply_snapshot(_snapshot(), 1)
+        self.fake_usage_history.record.assert_not_called()
 
 
 # --- the manual "check for updates" flow ------------------------------------

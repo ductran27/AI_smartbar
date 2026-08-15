@@ -218,6 +218,70 @@ def _bar(shapes, x, y, w, metric, now):
                             radius=0.0, fill=t.PACE))
 
 
+def _history_present(history) -> bool:
+    """True once `history` holds at least one real reading.
+
+    A fresh install (or an account never seen before) has no recorded day
+    at all — every entry None — and that is the ONE case the strip card
+    omits itself entirely for, rather than drawing thirty empty stubs (see
+    _strip_card's own docstring for why a single None day, inside an
+    otherwise-populated history, draws a stub instead of nothing).
+    """
+    return bool(history) and any(v is not None for v in history)
+
+
+def strip_height(history) -> float:
+    """Height of the 30-day usage-history strip card, or 0.0 when there is
+    no history yet — folded into overview_height() so the panel's total
+    height stays computable without building, the same relationship
+    card_height() already has with _card()."""
+    if not _history_present(history):
+        return 0.0
+    return t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + t.STRIP_H
+
+
+def _strip_card(shapes, history, top) -> float:
+    """The Overview tab's second card: one bar per day of the ACTIVE
+    account's 7-day window, over the last 30 days (see
+    core/usage_history.series, which `history` is the direct output of).
+
+    A day with no recorded value draws a 1pt stub in BAR_TRACK rather than
+    a bar of height 0 — "0% used" and "never measured" are different facts,
+    and only the stub tells the truth about the second one. TODAY (the
+    last entry) is drawn in TEXT chalk rather than the status ramp: it is
+    still moving, so coloring it as though the day were over would claim a
+    verdict on a reading that hasn't finished happening yet.
+    """
+    height = strip_height(history)
+    left, right = t.PAD, t.WIDTH - t.PAD
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=t.CARD_BG, stroke=t.CARD_BORDER, line_width=1.0))
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+
+    head_cy = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H / 2
+    shapes.append(t.Label(inner_l, head_cy, "Active account · 30 days",
+                          size=t.SIZE_EMAIL, bold=True, color=t.TEXT))
+    shapes.append(t.Label(inner_r, head_cy, "7-day window, % used",
+                          size=t.SIZE_CAPTION, color=t.TEXT_TERTIARY,
+                          anchor="right"))
+
+    bars_top = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP
+    baseline = bars_top + t.STRIP_H
+    last = len(history) - 1
+    for index, value in enumerate(history):
+        x = inner_l + index * (t.STRIP_BAR_W + t.STRIP_GAP)
+        if value is None:
+            shapes.append(t.Box(x, baseline - 1.0, t.STRIP_BAR_W, 1.0,
+                                radius=t.STRIP_BAR_W / 2, fill=t.BAR_TRACK))
+            continue
+        fraction = min(max(value, 0.0), 100.0) / 100.0
+        bar_h = max(1.0, t.STRIP_H * fraction)
+        color = t.TEXT if index == last else t.status_rgba(model.color(value))
+        shapes.append(t.Box(x, baseline - bar_h, t.STRIP_BAR_W, bar_h,
+                            radius=t.STRIP_BAR_W / 2, fill=color))
+    return height
+
+
 def _overview_row_key(account):
     """Sort key for _overview_card's rows: most headroom first, then
     accounts with no usable data last (see model.worst's None-without-data
@@ -226,19 +290,23 @@ def _overview_row_key(account):
     return (0, metric.pct) if metric is not None else (1, 0.0)
 
 
-def overview_height(snapshot) -> float:
-    """Height of the Overview tab's single card: the lead line plus one
-    compact row per account across BOTH providers. Kept alongside
-    card_height() so the panel height stays computable without building —
-    see build()'s `selected == "overview"` branch, which renders exactly
-    this many rows via _overview_card().
+def overview_height(snapshot, history=None) -> float:
+    """Height of the Overview tab's whole body: the account-summary card,
+    plus (stage 06) the 30-day usage-history strip card below it when
+    `history` has anything to show. Kept alongside card_height() so the
+    panel height stays computable without building — see build()'s
+    `selected == "overview"` branch, which renders exactly this via
+    _overview_card() and, conditionally, _strip_card().
     """
     accounts = list(snapshot.accounts) if snapshot is not None else []
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
     count = len(accounts) + len(openai)
     body = (count * t.OVERVIEW_ROW_H + max(count - 1, 0) * t.OVERVIEW_ROW_GAP
             if count else 0.0)
-    return t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + body
+    height = t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + body
+    if _history_present(history):
+        height += t.CARD_GAP + strip_height(history)
+    return height
 
 
 def _overview_card(shapes, snapshot, top, now):
@@ -536,7 +604,7 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
           provider="", confirm="", action_error="", refreshing=False,
-          stale_reason="") -> t.Layout:
+          stale_reason="", history=None) -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
     `provider` selects the visible tab ("claude"/"openai"/"overview"); ""
@@ -571,6 +639,15 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     likewise surfaced on hover of the footer's "update held" label
     (mirrors `.help("Update held back: …")`). Both were previously
     computed and then thrown away (FINDING 7).
+
+    `history` (stage 06) is the active Claude account's own
+    `usage_history.series(..., "7d")` result — 30 floats-or-None, oldest
+    first, ending today — already computed by the caller. build() stays
+    pure and does no file I/O of its own (see this module's own docstring),
+    the same reason `now` is injected rather than read off the wall clock;
+    the difference is `history` has no meaningful "read it yourself"
+    default, so callers that never pass it simply render the Overview tab
+    without its strip card, same as a fresh install with nothing recorded.
     """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
@@ -721,6 +798,9 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         cursor += block_h + t.CARD_GAP
     elif selected == "overview":
         cursor += _overview_card(shapes, snapshot, cursor, now)
+        if _history_present(history):
+            cursor += t.CARD_GAP
+            cursor += _strip_card(shapes, history, cursor)
     for account in cards:
         cursor += _card(shapes, hits, account, cursor, now, hover,
                         confirm) + t.CARD_GAP

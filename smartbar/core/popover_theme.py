@@ -132,6 +132,20 @@ OVERVIEW_PCT_W = 28.0       # same "100%" budget as VALUE_PCT_W, its own
 # junction that would all just be spelled "6.0" anyway.
 OVERVIEW_GAP = 6.0
 
+# The Overview tab's second card, below the account rows (see
+# popover_layout._strip_card and core/usage_history.py): thirty daily bars
+# for the active account's 7-day window, tallest at 100% used. STRIP_BAR_W
+# and STRIP_GAP are sized so all thirty bars plus their gaps fit inside a
+# card's own inner width (WIDTH - 2*PAD - 2*CARD_PAD_H = 286pt) with a few
+# points to spare, rather than being derived from that width at draw time
+# and drifting the moment PAD or CARD_PAD_H change. The header line above
+# the bars reuses OVERVIEW_LEAD_H — it is the same "one line, lead text at
+# the top of a card" job the Overview card's own lead line already has, so
+# it gets no constant of its own.
+STRIP_H = 28.0
+STRIP_BAR_W = 7.5
+STRIP_GAP = 2.0
+
 # Tab pills read as faded / not-faded rather than colored: the selected
 # provider is full strength, the other recedes (user-picked over an accent
 # fill). Mirrored by PopoverView.tabButton.
