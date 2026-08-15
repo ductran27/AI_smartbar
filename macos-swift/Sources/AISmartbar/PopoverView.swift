@@ -85,17 +85,26 @@ struct PopoverView: View {
 
     /// Faded / not-faded rather than colored: the selected provider reads
     /// full strength, the other recedes (mirror of the cairo tab pills —
-    /// popover_theme.TAB_BG*).
+    /// popover_theme.TAB_BG*). The mark sits BESIDE the label, never
+    /// instead of it — a tab must stay readable to anyone who doesn't
+    /// recognise the provider's mark on sight (mirror of
+    /// popover_layout.build's TAB_MARK/TAB_MARK_GAP), and it takes the
+    /// label's own color so a faded tab reads as faded mark-and-all.
     private func tabButton(_ title: String, id: String) -> some View {
         let selected = selectedProvider == id
+        let color = selected ? Palette.chalk : Palette.dim
         return Button { providerTab = id } label: {
-            Text(title)
-                .font(.caption.weight(selected ? .semibold : .regular))
-                .foregroundStyle(selected ? Palette.chalk : Palette.dim)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Capsule()
-                    .fill(Color.white.opacity(selected ? 0.16 : 0.06)))
+            HStack(spacing: 5) {
+                ProviderMark(kind: id)
+                    .frame(width: 11, height: 11)
+                Text(title)
+                    .font(.caption.weight(selected ? .semibold : .regular))
+            }
+            .foregroundStyle(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule()
+                .fill(Color.white.opacity(selected ? 0.16 : 0.06)))
         }
         .buttonStyle(.plain)
     }

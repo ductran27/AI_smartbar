@@ -111,9 +111,18 @@ def _lines_for_width(text, width, *, size=t.SIZE_CAPTION, bold=False,
 
 def state_lines(account) -> int:
     """How many lines an account's explanatory caption needs inside a card
-    (SwiftUI wraps at 2 via .lineLimit(2))."""
+    (SwiftUI wraps at 2 via .lineLimit(2)).
+
+    A blocked account's line makes room for a warn glyph in front of it
+    (see _card_body), narrower by the same COUNTDOWN_ICON/
+    COUNTDOWN_ICON_GAP the glyph and its gap reserve there — otherwise this
+    could estimate one line for text that, indented past the glyph, wraps
+    to two, silently overflowing the card height reserved for it.
+    """
     text = model.state_text(account) or "No usage data"
     room = t.WIDTH - 2 * t.PAD - 2 * t.CARD_PAD_H
+    if model.switch_blocked(account):
+        room -= t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
     return _lines_for_width(text, room)
 
 
@@ -339,11 +348,22 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
         blocked = model.switch_blocked(account)
         lines = state_lines(account)
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
-        shapes.append(t.Label(inner_l, body_top + block_h / 2,
+        color = t.WARNING if blocked else t.TEXT_SECONDARY
+        text_l = inner_l
+        if blocked:
+            # A dead credential is the one data-less state that needs a
+            # glyph as well as a color — WARNING alone reads as just this
+            # account's usual shade, not "you need to act". Same
+            # icon/gap the countdown's clock uses, reused rather than
+            # giving this its own pair of constants for the same job.
+            shapes.append(t.Glyph("warn", inner_l + t.COUNTDOWN_ICON / 2,
+                                  body_top + block_h / 2, t.COUNTDOWN_ICON,
+                                  color))
+            text_l = inner_l + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+        shapes.append(t.Label(text_l, body_top + block_h / 2,
                               model.state_text(account) or "No usage data",
-                              size=t.SIZE_CAPTION,
-                              color=t.WARNING if blocked else t.TEXT_SECONDARY,
-                              max_width=inner_r - inner_l, max_lines=lines))
+                              size=t.SIZE_CAPTION, color=color,
+                              max_width=inner_r - text_l, max_lines=lines))
         return
 
     bar_l, bar_w = inner_l, inner_r - inner_l
@@ -367,12 +387,24 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
                               size=t.SIZE_ROW_VALUE, mono=True,
                               anchor="right", color=color))
         if countdown:
-            # The leading " · " is gone: the countdown is about to gain a
-            # clock glyph of its own (stage 04) in the space that space
-            # reserves, and "· 🕐 2h 5m" would double up the separator.
-            shapes.append(t.Label(inner_r, label_cy, f" {countdown}",
+            # The leading " · " is gone: a clock glyph fills the space
+            # that space used to reserve, so "· 🕐 2h 5m" never doubles up
+            # the separator.
+            countdown_text = f" {countdown}"
+            shapes.append(t.Label(inner_r, label_cy, countdown_text,
                                   size=t.SIZE_ROW_VALUE, mono=True,
                                   anchor="right", color=color))
+            # The clock sits immediately left of wherever the countdown
+            # text actually STARTS, not the reserved column's nominal edge
+            # (inner_r - VALUE_COUNTDOWN_W) — that column is sized for the
+            # widest realistic countdown ("23h 59m"), so anchoring there
+            # would leave a visible gap before a short one like "9m". The
+            # layout has no font engine, so t.text_width is the same
+            # estimate the countdown label itself is measured by.
+            text_w = t.text_width(countdown_text, t.SIZE_ROW_VALUE, mono=True)
+            clock_cx = inner_r - text_w - t.COUNTDOWN_ICON_GAP - t.COUNTDOWN_ICON / 2
+            shapes.append(t.Glyph("clock", clock_cx, label_cy,
+                                  t.COUNTDOWN_ICON, color))
 
         bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
         shapes.append(t.Box(bar_l, bar_top, bar_w, t.BAR_H,
@@ -487,8 +519,8 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         cy = cursor + t.TAB_H / 2
         for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
             current = name == selected
-            width = (t.text_width(text, t.SIZE_CAPTION, bold=current)
-                     + t.BUTTON_PAD_H * 2)
+            label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
+            width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
             hit_name = f"tab:{name}"
             # Faded / not-faded, not colored: the selected provider is full
             # strength and the other recedes (mirrored by tabButton in
@@ -501,9 +533,17 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                 fill, color = t.TAB_BG, t.TEXT_TERTIARY
             shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
                                 radius=t.BUTTON_H / 2, fill=fill))
-            shapes.append(t.Label(x + width / 2, cy, text,
-                                  size=t.SIZE_CAPTION, bold=current,
-                                  anchor="center", color=color))
+            # The mark sits BESIDE the label, never instead of it — a tab
+            # has to stay readable to anyone who doesn't recognise the
+            # provider's mark on sight, so it never becomes an icon-only
+            # button. It takes the label's own color, so a faded tab reads
+            # as faded mark-and-all rather than the mark competing with the
+            # fade as a second signal.
+            mark_cx = x + t.BUTTON_PAD_H + t.TAB_MARK / 2
+            shapes.append(t.Glyph(name, mark_cx, cy, t.TAB_MARK, color))
+            label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
+            shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
+                                  bold=current, anchor="left", color=color))
             hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
                               t.BUTTON_H, tooltip=f"Show {text} accounts"))
             x += width + t.TAB_GAP
@@ -563,15 +603,26 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     if blocked_reason:
         label = (label + " · update held").strip(" ·")
     if label:
-        shapes.append(t.Label(t.PAD, foot_cy, label, size=t.SIZE_CAPTION,
+        label_x = t.PAD
+        if blocked_reason:
+            # Mirrors PopoverView.footer's "pause.circle" SF Symbol in
+            # front of "Update held" — same icon/gap the countdown's clock
+            # and a blocked card's warn triangle use, reused rather than
+            # a fourth pair of constants for the same "glyph beside a line
+            # of text" job.
+            shapes.append(t.Glyph("pause", t.PAD + t.COUNTDOWN_ICON / 2,
+                                  foot_cy, t.COUNTDOWN_ICON, t.TEXT_TERTIARY))
+            label_x = t.PAD + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+        shapes.append(t.Label(label_x, foot_cy, label, size=t.SIZE_CAPTION,
                               color=t.TEXT_TERTIARY))
         if blocked_reason:
             # Non-action hit: PopoverView.footer's "Update held" label's
             # .help() shows the actual reason on hover rather than a bare
-            # "update held" label.
+            # "update held" label. Starts at t.PAD, not label_x, so the
+            # glyph is inside the hoverable area too.
             label_w = t.text_width(label, t.SIZE_CAPTION)
             hits.append(t.Hit("update-held", t.PAD, foot_cy - t.FOOTER_H / 2,
-                              label_w, t.FOOTER_H,
+                              label_x - t.PAD + label_w, t.FOOTER_H,
                               tooltip=f"Update held back: {blocked_reason}"))
     if pending_version:
         _button(shapes, hits, "update", right, foot_cy,

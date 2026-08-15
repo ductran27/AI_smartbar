@@ -80,12 +80,22 @@ struct MetricBarRow: View {
                 .fontWeight(.bold)
                 // VALUE_PCT_W in the shared theme.
                 .frame(width: 28, alignment: .trailing)
-            // The leading " · " is gone (stage 02): the space it leaves is
-            // reserved for stage 04's clock glyph rather than a redundant
-            // separator ("· 🕐 2h 5m" would double up).
-            Text(countdown.isEmpty ? "" : " \(countdown)")
-                // VALUE_COUNTDOWN_W in the shared theme.
-                .frame(width: 66, alignment: .trailing)
+            // The leading " · " is gone (stage 02); a clock mark fills the
+            // space it used to reserve instead of a redundant separator
+            // ("· 🕐 2h 5m" would double up). An HStack gets "immediately
+            // left of the countdown's own text" for free from real text
+            // metrics, where the shared layout has to fake it with
+            // text_width() because cairo has no font engine to ask ahead
+            // of time (see popover_layout._card_body's own comment on it).
+            HStack(spacing: 3) {
+                if !countdown.isEmpty {
+                    ProviderMark(kind: "clock")
+                        .frame(width: 9, height: 9)
+                }
+                Text(countdown.isEmpty ? "" : " \(countdown)")
+            }
+            // VALUE_COUNTDOWN_W in the shared theme.
+            .frame(width: 66, alignment: .trailing)
         }
         // Tabular figures via a font FEATURE (.monospacedDigit()) rather
         // than the monospaced DESIGN this row used to ask for: cairo has

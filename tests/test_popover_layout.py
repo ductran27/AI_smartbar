@@ -286,6 +286,26 @@ class TestCardContent(unittest.TestCase):
         self.assertIn("5%", labels(built))
         self.assertIn(" 3h 1m", labels(built))
 
+    def test_a_countdown_gets_a_clock_glyph_immediately_left_of_it(self):
+        resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(pct=79.0, resets_at=resets)])),
+            now=NOW)
+        clocks = [s for s in built.shapes
+                 if isinstance(s, t.Glyph) and s.kind == "clock"]
+        self.assertEqual(len(clocks), 1)
+        countdown_label = next(s for s in built.shapes
+                               if isinstance(s, t.Label) and s.text == " 2h 5m")
+        text_edge = countdown_label.x - t.text_width(
+            countdown_label.text, t.SIZE_ROW_VALUE, mono=True)
+        self.assertLess(clocks[0].cx, text_edge)
+
+    def test_a_row_with_no_countdown_draws_no_clock_glyph(self):
+        built = layout.build(snap(account(metrics=[metric(pct=50.0)])),
+                             now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "clock"
+                             for s in built.shapes))
+
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
         # ONE string with the countdown, so it visibly slid sideways every
@@ -374,6 +394,22 @@ class TestDataless(unittest.TestCase):
         # the card's non-action hover region instead of any control.
         self.assertEqual(built.hit(blocked[0].x + 2, blocked[0].y + 2).name,
                          "card:claude:1")
+
+    def test_a_blocked_account_gets_a_warn_glyph_and_the_text_indents_past_it(self):
+        built = layout.build(
+            snap(account(metrics=[], ok=False, status="relogin_required")),
+            now=NOW)
+        warn = next(s for s in built.shapes
+                   if isinstance(s, t.Glyph) and s.kind == "warn")
+        state = next(s for s in built.shapes if isinstance(s, t.Label)
+                    and "Re-login required" in s.text)
+        self.assertLess(warn.cx, state.x)
+        self.assertEqual(warn.color, state.color)
+
+    def test_an_unblocked_dataless_account_gets_no_warn_glyph(self):
+        built = layout.build(snap(account(metrics=[])), now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "warn"
+                             for s in built.shapes))
 
     def test_dataless_dot_is_hollow(self):
         built = layout.build(snap(account(metrics=[])), now=NOW)
@@ -556,6 +592,29 @@ class TestProviderTabs(unittest.TestCase):
         self.assertIn("gpt@example.com", labels(built))
         self.assertIn("Pro Lite", labels(built))
         self.assertEqual(len(chips(built)), 1)
+
+    def test_each_tab_carries_exactly_one_provider_mark(self):
+        # The mark sits BESIDE the label, not instead of it: this pins
+        # "exactly one", not "at least one", so a stray extra glyph (or a
+        # kind mismatch that duplicates one tab's mark on the other) would
+        # fail here too.
+        built = layout.build(self.snap_both(), now=NOW)
+        marks = [s for s in built.shapes
+                if isinstance(s, t.Glyph) and s.kind in ("claude", "openai")]
+        self.assertEqual({m.kind for m in marks}, {"claude", "openai"})
+        self.assertEqual(len(marks), 2)
+        claude_label = next(s for s in built.shapes
+                            if isinstance(s, t.Label) and s.text == "Claude")
+        claude_mark = next(m for m in marks if m.kind == "claude")
+        self.assertLess(claude_mark.cx, claude_label.x)
+
+    def test_a_single_provider_machine_gets_no_tab_marks_either(self):
+        # No tab row at all here (see test_claude_only_layout_is_byte_
+        # identical_to_before) — so there is nothing to carry a mark.
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph)
+                             and s.kind in ("claude", "openai")
+                             for s in built.shapes))
 
 
 class TestRemoveAffordance(unittest.TestCase):
@@ -754,6 +813,20 @@ class TestHeaderAndFooter(unittest.TestCase):
         built = layout.build(snap(account()), version="1.0.0",
                              blocked_reason="2 unpushed commit(s)", now=NOW)
         self.assertIn("v1.0.0 · update held", labels(built))
+
+    def test_a_blocked_update_prefixes_the_footer_with_a_pause_glyph(self):
+        built = layout.build(snap(account()), version="1.0.0",
+                             blocked_reason="2 unpushed commit(s)", now=NOW)
+        pause = next(s for s in built.shapes
+                    if isinstance(s, t.Glyph) and s.kind == "pause")
+        label = next(s for s in built.shapes if isinstance(s, t.Label)
+                    and s.text == "v1.0.0 · update held")
+        self.assertLess(pause.cx, label.x)
+
+    def test_no_blocked_update_means_no_pause_glyph(self):
+        built = layout.build(snap(account()), version="1.0.0", now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "pause"
+                             for s in built.shapes))
 
 
 class TestClockConvention(unittest.TestCase):
