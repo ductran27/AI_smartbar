@@ -211,32 +211,6 @@ def window_seconds(key: str) -> float | None:
     return float(amount) * (86400.0 if unit == "d" else 3600.0)
 
 
-def metric_title(metric) -> str:
-    """The heading a metric wears in the popover — a word, not a key.
-
-    The name sits on its own line above the bar now, where "5h" reads as a
-    token rather than as a thing you have. Stated windows get spelled out;
-    "7d" becomes "Weekly" because that is both what it is and what Claude
-    Code's /usage calls it. A per-model bucket already carries a real name
-    (the model), and anything this doesn't recognise keeps whatever cswap
-    labelled it rather than being mangled by a rule not written for it —
-    the same refusal-to-guess window_seconds() makes just above.
-    """
-    key = (getattr(metric, "key", "") or "").strip()
-    label = (getattr(metric, "label", "") or "").strip() or key
-    if key.startswith("scoped:"):
-        return label
-    if key == "spend":
-        return "Spend"
-    match = _WINDOW_KEY.fullmatch(key)
-    if not match:
-        return label
-    amount, unit = int(match.group(1)), match.group(2)
-    if unit == "d":
-        return "Weekly" if amount == 7 else f"{amount}-day"
-    return f"{amount}-hour"
-
-
 def pace_fraction(metric, now=None) -> float | None:
     """How far through its reset window `metric` is, 0..1, or None.
 

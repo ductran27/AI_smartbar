@@ -11,37 +11,31 @@ Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills,
 The panel — the same layout on macOS, Linux and Windows:
 
  AI smartbar  Updated 9:56 PM              ⟳ ⏻
-    ✳         ❁
- [ Claude ]  OpenAI
+ [✳ Claude]  ❁ OpenAI
   ┌──────────────────────────────────────────┐
   │ ● ios8build@gmail.com  20x [Make Active] │
-  │ 5-hour                                   │
+  │ 5h                          45% ◷ 2h 43m │
   │ ██████████████████──────╎─────────────── │
-  │ 45% used                        ◷ 2h 43m │
-  │ Weekly                                   │
+  │ 7d                          24% ◷ 6d 14h │
   │ ██████████─────────────╎──────────────── │
-  │ 24% used                        ◷ 6d 14h │
-  │ Fable                                    │
+  │ Fable                       34% ◷ 6d 14h │
   │ ██████████████────────────────────────── │
-  │ 34% used                        ◷ 6d 14h │
   └──────────────────────────────────────────┘
  ▌┌──────────────────────────────────────────┐
  ▌│ ● other@account          (2)    [ACTIVE] │
- ▌│ 5-hour                                   │
+ ▌│ 5h                          62% ◷ 1h 02m │
  ▌│ ███████████████████╎█████─────────────── │
- ▌│ 62% used                        ◷ 1h 02m │
  ▌└──────────────────────────────────────────┘
    v1.0.0                    [Update to 1.1.0]
 
- (numbers are % USED — the /usage scale; each limit is three lines, its
-  name over a full-width bar over the readout; ▌ = the rail marking the
-  ACTIVE account; ╎ = the pace notch, how far through that window you are
-  — past the fill means you are under budget, inside it means you are
-  burning faster than the clock; ◷ = time to reset; one chip carries the
-  plan and the device count; the tabs stack each provider's mark over its
-  label and the selected one is a filled accent pill, a row only present
-  when both providers have accounts; follows the system's light/dark
-  appearance)
+ (numbers are % USED — the /usage scale; each limit is a label line over a
+  full-width bar; ▌ = the rail marking the ACTIVE account; ╎ = the pace
+  notch, how far through that window you are — past the fill means you are
+  under budget, inside it means you are burning faster than the clock;
+  ◷ = time to reset; one chip carries the plan and the device count;
+  [✳ Claude] ❁ OpenAI = provider tabs, each with its provider's mark, the
+  selected pill bright and the other faded, row only present when both
+  providers have accounts; follows the system's light/dark appearance)
 ```
 
 ## Features
@@ -55,16 +49,17 @@ The panel — the same layout on macOS, Linux and Windows:
 - **Every number is "% used"** — exactly what Claude Code's `/usage`
   shows, no mental arithmetic. Promo-boosted limits are already baked
   into the API's percentages, so both read the same scale.
-- **Native macOS popover** (SwiftUI, macOS 13+). One card per account, and
-  each limit (5h / 7d / per-model) gets three lines: its name, a bar the
-  card's full width, then the readout — `45% used` on the left, the
-  countdown on the right. Countdowns tick live from the absolute reset
-  time, the active card is marked by a leading rail and a green `ACTIVE`
-  chip, and the "Updated" stamp shows when the usage was actually measured
-  at the API — not when the app last polled. It is the ACTIVE account's
-  measurement time, the same account `/usage` describes; cswap refreshes
-  each slot on its own plan, so the others in the same payload can be
-  much older.
+- **Native macOS popover** (SwiftUI, macOS 13+). One card per account,
+  one row per window (5h / 7d / per-model): a label line
+  (`5h    45% ◷ 2h 43m`) over a bar that gets the card's full width,
+  countdowns ticking live from the absolute reset time, the active card
+  marked by a leading rail and a green `ACTIVE` chip, and an "Updated"
+  stamp that shows when the usage was actually measured at the API — not
+  when the app last polled. It is the ACTIVE account's measurement time,
+  the same account `/usage` describes; cswap refreshes each slot on its
+  own plan, so the others in the same payload can be much older. The row
+  stays this dense on purpose: a taller three-line variant read better in
+  isolation and turned a glanceable panel into one you scroll.
 - **Follows your appearance.** Light and dark are both first-class: the
   panel reads the system setting and paints from the matching palette,
   including a status ramp retuned for a light ground (the dark green and
@@ -124,10 +119,10 @@ The panel — the same layout on macOS, Linux and Windows:
   app) and within ~2 min an **OpenAI** tab appears next to Claude — one
   card per ChatGPT account (`you@…` with a `Pro` chip, same 5h / 7d /
   per-model %-used bars), read entirely from Codex's own local files.
-  Each tab stacks its provider's mark over its label, so the row is
-  readable both by shape and by name, and the selected one is a filled
-  accent pill. The tab row only exists when both providers have accounts,
-  so a single-provider machine looks exactly like before — see
+  Each pill carries its provider's mark to the left of its label, so the
+  row is readable both by shape and by name. The tab row only exists when
+  both providers have accounts, so a single-provider machine looks
+  exactly like before — see
   [The OpenAI tab](#the-openai-tab-chatgptcodex-accounts).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
@@ -219,11 +214,14 @@ On Windows the same flags are PowerShell-style: `-NoAutoUpdate` and
 > refuses loudly rather than letting updates fail silently forever.
 
 > **Status:** the native macOS app is live-verified (2026-08-15:
-> light/dark appearances, three-line metric sections and stacked provider
-> tabs are UNRELEASED — reviewed through `--preview-popover` in both
-> schemes and the Swift builds clean, but not yet seen on the native
-> popover; 2026-08-15: v1.0.0 builds, installs and runs; 2026-07-25:
-> v0.8.0 OpenAI tab with faded tab pills; 2026-07-22: v3 %-used UI, re-login card + blocked switch,
+> light/dark appearances are UNRELEASED — reviewed through
+> `--preview-popover` in both schemes and the Swift builds clean, but the
+> light one has not yet been seen on the native popover. The three-line
+> metric sections and stacked provider tabs that shipped alongside them
+> were reverted the same day, on the live app: the rows were ~2x taller
+> and the panel stopped being glanceable; 2026-08-15: v1.0.0 builds,
+> installs and runs; 2026-07-25: v0.8.0 OpenAI tab with faded tab pills;
+> 2026-07-22: v3 %-used UI, re-login card + blocked switch,
 > re-capture, warmup agent with fixed PATH). The Linux tray is written to
 > spec from the unit-tested core but has not been re-run on a Linux box
 > since v2. The Windows tray is further behind than that: it has never
@@ -482,7 +480,7 @@ screen-reader support in the panel; the tray menu remains fully native.
 **Look at it without a Linux box:**
 
 ```bash
-ai-smartbar --preview-popover out.png                  # your real accounts
+ai-smartbar --preview-popover out.png                # your real accounts
 ai-smartbar --preview-popover out.png --demo          # every card state, no cswap needed
 ai-smartbar --preview-popover out.png --scheme light  # the light appearance
 ```

@@ -108,50 +108,47 @@ struct PopoverView: View {
         id == "openai" ? "OpenAI" : "Claude"
     }
 
-    /// The mark stacks ABOVE its label and the selected tab is a filled
-    /// accent pill (mirror of popover_layout.build's tab row — TAB_H,
-    /// TAB_MARK, TAB_MARK_GAP, TAB_MIN_W, TAB_RADIUS).
+    /// The mark sits BESIDE its label and the tabs read as faded /
+    /// not-faded rather than coloured (mirror of popover_layout.build's tab
+    /// row — TAB_H, TAB_MARK, TAB_MARK_GAP).
     ///
-    /// Accent is admissible here even though colour on this panel is
-    /// otherwise reserved for how much budget is left: blue sits outside the
-    /// used-ramp entirely, so it reads as chrome — "you are here" — and
-    /// cannot be misread as a budget state the way a tinted rail or chip
-    /// could. The mark never REPLACES the label, so a tab stays readable to
-    /// anyone who doesn't recognise the provider's mark on sight, and it
-    /// takes the label's own colour so an unselected tab recedes
-    /// mark-and-all rather than the mark competing with the fade.
+    /// A stacked mark over a filled accent pill was tried and reverted: it
+    /// was the loudest thing on a panel whose only job is to colour-code how
+    /// much budget is left, and it won that contest. The mark never REPLACES
+    /// the label, so a tab stays readable to anyone who doesn't recognise the
+    /// provider's mark on sight, and it takes the label's own colour so an
+    /// unselected tab recedes mark-and-all rather than the mark competing
+    /// with the fade as a second signal.
     private func tabButton(_ title: String, id: String) -> some View {
         let selected = selectedProvider == id
-        let color = selected ? palette.accentText : palette.textTertiary
+        let color = selected ? palette.text : palette.textTertiary
         return Button { providerTab = id } label: {
-            VStack(spacing: 3) {
+            HStack(spacing: 5) {
                 ProviderMark(kind: id)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 11, height: 11)
                 Text(title)
                     .font(.caption.weight(selected ? .semibold : .regular))
             }
             .foregroundStyle(color)
-            .frame(minWidth: 76, maxWidth: .infinity)
-            .frame(height: 40)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(selected ? palette.accent : palette.tabBG))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule()
+                .fill(selected ? palette.tabBGSelected : palette.tabBG))
         }
         .buttonStyle(.plain)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// How tall the card list may grow before it starts scrolling, and how
     /// many cards are worth wrapping in a ScrollView at all.
     ///
-    /// A three-metric card is ~189pt now (18 padding + 20 header + 7 gap +
-    /// 3x42 rows + 2x9 row gaps), where the single-line-row design made it
-    /// ~110. Everything else on the panel — header, tab row, footer, outer
-    /// padding — comes to ~117pt, so ~620 keeps the whole popover near 740pt
-    /// and three cards (581) still fit without scrolling; the fourth is what
-    /// starts to slide. The old pair (scroll past 4 accounts, cap 440) was
-    /// tuned for the short cards and would now clip the THIRD one.
-    private static let listMaxHeight: CGFloat = 620
-    private static let listScrollsPast = 2
+    /// A three-metric card is ~110pt (18 padding + 20 header + 7 gap + 3x20
+    /// rows + 2x7 row gaps), so 440 is four of them — the point past which
+    /// the panel would be taller than it is useful. These are named rather
+    /// than repeated at both call sites below, which is the one thing the
+    /// three-line-row experiment left behind: the pair has to move together,
+    /// and it did not when the cards got taller.
+    private static let listMaxHeight: CGFloat = 440
+    private static let listScrollsPast = 4
 
     @ViewBuilder
     private var openAIList: some View {

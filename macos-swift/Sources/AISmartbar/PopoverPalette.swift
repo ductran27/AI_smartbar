@@ -26,8 +26,9 @@ struct Palette {
     let buttonBGHover: Color
     let buttonBorder: Color
     let buttonDisabled: Color
-    let tabBG: Color
+    let tabBGSelected: Color
     let tabBGHover: Color
+    let tabBG: Color
     let accent: Color
     let accentHover: Color
     let accentText: Color
@@ -50,8 +51,9 @@ struct Palette {
         buttonBGHover: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.20),
         buttonBorder: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.18),
         buttonDisabled: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.05),
-        tabBG: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.0),
-        tabBGHover: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.08),
+        tabBGSelected: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.16),
+        tabBGHover: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.12),
+        tabBG: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.06),
         accent: Color(red: 0.0, green: 0.48, blue: 1.0, opacity: 1.0),
         accentHover: Color(red: 0.15, green: 0.56, blue: 1.0, opacity: 1.0),
         accentText: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 1.0),
@@ -74,8 +76,9 @@ struct Palette {
         buttonBGHover: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.11),
         buttonBorder: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.14),
         buttonDisabled: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.05),
-        tabBG: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.0),
-        tabBGHover: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.06),
+        tabBGSelected: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.12),
+        tabBGHover: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.09),
+        tabBG: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.05),
         accent: Color(red: 0.0, green: 0.42, blue: 0.90, opacity: 1.0),
         accentHover: Color(red: 0.0, green: 0.36, blue: 0.82, opacity: 1.0),
         accentText: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 1.0),

@@ -121,7 +121,7 @@ struct AccountCardView: View {
                 }
             } else {
                 // ROW_GAP in the shared theme.
-                VStack(spacing: 9) {
+                VStack(spacing: 7) {
                     ForEach(account.metrics) { metric in
                         MetricBarRow(metric: metric)
                     }
