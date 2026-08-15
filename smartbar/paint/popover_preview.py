@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from smartbar import __version__
-from smartbar.core import model, paths, popover_layout, usage_history
+from smartbar.core import model, paths, popover_layout
 
 CACHE_DIR = paths.cache_dir()
 DEFAULT_PATH = os.path.join(CACHE_DIR, "popover-preview.png")
@@ -72,24 +72,6 @@ def demo_snapshot():
     return snapshot
 
 
-def demo_history() -> list:
-    """Thirty days of made-up 7-day readings for the demo strip.
-
-    Same reason demo_snapshot() exists: the strip is only reviewable if the
-    preview actually draws one, and a real store is empty on the machine a
-    reviewer is most likely to run this from. Two days are None on purpose
-    — a device that was switched off records nothing, and the stub that
-    represents it is a state worth looking at.
-
-    The last entry matches the demo active account's 7d metric, because the
-    strip's final bar IS today's reading and a preview that disagreed with
-    the card above it would send a reviewer hunting a bug that isn't there.
-    """
-    return [31.0, 44.0, 39.0, 22.0, 15.0, 28.0, 52.0, 61.0, 74.0, 48.0,
-            None, None, 26.0, 41.0, 57.0, 63.0, 81.0, 55.0, 37.0, 29.0,
-            44.0, 51.0, 68.0, 72.0, 46.0, 34.0, 42.0, 90.0, 64.0, 10.0]
-
-
 def _pending() -> tuple:
     """(pending_version, blocked_reason) from the updater — best effort."""
     try:
@@ -122,17 +104,10 @@ def render(path: str = "", *, scale: float = 2.0, demo: bool = False) -> str:
             except Exception:             # the preview must never crash
                 pass
     pending, blocked = _pending()
-    # `error` is only ever set on the demo fallback above, so it marks the
-    # same "these numbers are invented" case `demo` does — and invented
-    # numbers deserve an invented history rather than this machine's real
-    # one, which would read as the demo account's past.
-    history = (demo_history() if demo or error
-               else usage_history.active_series(snapshot))
     layout = popover_layout.build(snapshot, version=__version__,
                                   pending_version=pending,
                                   blocked_reason=blocked,
-                                  fetched_at=snapshot.fetched_at,
-                                  history=history)
+                                  fetched_at=snapshot.fetched_at)
     path = path or DEFAULT_PATH
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     popover_draw.render_png(layout, path, scale=scale)

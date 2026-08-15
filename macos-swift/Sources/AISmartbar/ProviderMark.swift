@@ -1,4 +1,4 @@
-// Six small marks — overview, claude, openai, clock, pause, warn — drawn
+// Five small marks — claude, openai, clock, pause, warn — drawn
 // from Path geometry rather than SF Symbols. SF Symbols exist only on
 // macOS, and every one of these marks also has to run through Linux's
 // cairo painter (popover_draw._draw_glyph, one drawing function per kind);
@@ -40,12 +40,11 @@ struct ProviderMark: View {
     }
 
     /// Everything drawn with `.fill()` — solid marks read as "presence"
-    /// (overview's grid, pause's bars), or, for `warn`, the one filled dot
-    /// under an otherwise stroked triangle.
+    /// (claude's starburst, pause's bars), or, for `warn`, the one filled
+    /// dot under an otherwise stroked triangle.
     private func filledPath(size: CGFloat) -> Path {
         switch kind {
         case "claude": return claudePath(size: size)
-        case "overview": return overviewPath(size: size)
         case "pause": return pausePath(size: size)
         case "warn": return warnDotPath(size: size)
         default: return Path()
@@ -167,30 +166,6 @@ struct ProviderMark: View {
         let dotR = size * 0.05
         return Path(ellipseIn: CGRect(x: cx - dotR, y: cy + r * 0.5 - dotR,
                                       width: dotR * 2, height: dotR * 2))
-    }
-
-    // MARK: - overview — four rounded squares in a 2x2 grid, filled
-    // (mirror of popover_draw._draw_overview). Stage 04 drew this without
-    // wiring it into any view yet; stage 05's Overview tab is that "future
-    // tab" — its pill in PopoverView.tabButton reaches for it exactly like
-    // the claude/openai marks do.
-
-    private func overviewPath(size: CGFloat) -> Path {
-        var path = Path()
-        let cell = size * 0.38
-        let gap = size * 0.12
-        let corner = cell * 0.3
-        let cx = size / 2, cy = size / 2
-        let signs: [CGFloat] = [-1, 1]
-        for dx in signs {
-            for dy in signs {
-                let x = cx + dx * (cell + gap) / 2 - cell / 2
-                let y = cy + dy * (cell + gap) / 2 - cell / 2
-                path.addPath(Path(roundedRect: CGRect(x: x, y: y, width: cell, height: cell),
-                                  cornerRadius: corner))
-            }
-        }
-        return path
     }
 
     // MARK: - pause — two rounded vertical bars, filled (mirror of

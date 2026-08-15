@@ -25,13 +25,7 @@ struct PopoverView: View {
                     .foregroundStyle(.orange)
                     .lineLimit(2)
             }
-            // Loading/error trumps any tab selection, same as the Claude
-            // branch below (mirror of popover_layout.build's if/elif chain:
-            // a snapshot-less Overview falls through to loadingOrError too,
-            // not to an Overview card claiming zero accounts have headroom).
-            if selectedProvider == "overview", store.snapshot != nil {
-                OverviewView()
-            } else if selectedProvider == "openai" {
+            if selectedProvider == "openai" {
                 openAIList
             } else if let snapshot = store.snapshot {
                 if snapshot.activeAccount == nil {
@@ -68,37 +62,25 @@ struct PopoverView: View {
         !(store.snapshot?.accounts.isEmpty ?? true)
     }
 
-    /// The tab row now appears whenever there is more than one account in
-    /// total, across both providers — not, as before, only when BOTH
-    /// providers have at least one (mirror of popover_layout.build's rule
-    /// change in stage 05). A single-provider Mac with several accounts
-    /// therefore now gets a two-tab row (Overview + its one provider) where
-    /// it previously got none; a Mac with exactly one account total still
-    /// gets no tab row, same as before.
+    /// The tab row exists to choose BETWEEN providers, so it appears only
+    /// when both of them actually have accounts (mirror of
+    /// popover_layout.build). One provider means one pill, which is a
+    /// button that changes nothing.
     private var showsTabs: Bool {
-        (store.snapshot?.accounts.count ?? 0) + openai.accounts.count > 1
+        hasClaudeAccounts && !openai.accounts.isEmpty
     }
 
-    /// Which tab ids actually get a pill: Overview whenever the row shows
-    /// at all, then whichever of Claude/OpenAI has accounts to show under
-    /// it — a provider with none would be a button to a blank list.
-    private var visibleTabIDs: [String] {
-        var ids = ["overview"]
-        if hasClaudeAccounts { ids.append("claude") }
-        if !openai.accounts.isEmpty { ids.append("openai") }
-        return ids
-    }
+    private static let tabIDs = ["claude", "openai"]
 
     /// The provider a returning user last picked, but only honoured while
-    /// it is one of the tabs actually on screen right now — stale
-    /// AppStorage from before this Mac had a second provider, or from
-    /// before Overview existed, falls back to the plain auto-resolve
-    /// instead (never "overview": Overview is opt-in only, so a returning
-    /// user must not find their panel rearranged by an update they didn't
-    /// ask for).
+    /// the tab row is on screen — stale AppStorage from before this Mac
+    /// had a second provider (or naming a tab that no longer exists) falls
+    /// back to the plain auto-resolve instead.
     private var selectedProvider: String {
-        guard showsTabs else { return autoSelectedProvider }
-        return visibleTabIDs.contains(providerTab) ? providerTab : autoSelectedProvider
+        guard showsTabs, Self.tabIDs.contains(providerTab) else {
+            return autoSelectedProvider
+        }
+        return providerTab
     }
 
     private var autoSelectedProvider: String {
@@ -107,7 +89,7 @@ struct PopoverView: View {
 
     private var providerTabs: some View {
         HStack(spacing: 6) {
-            ForEach(visibleTabIDs, id: \.self) { id in
+            ForEach(Self.tabIDs, id: \.self) { id in
                 tabButton(tabTitle(for: id), id: id)
             }
             Spacer()
@@ -115,11 +97,7 @@ struct PopoverView: View {
     }
 
     private func tabTitle(for id: String) -> String {
-        switch id {
-        case "overview": return "Overview"
-        case "openai": return "OpenAI"
-        default: return "Claude"
-        }
+        id == "openai" ? "OpenAI" : "Claude"
     }
 
     /// Faded / not-faded rather than colored: the selected provider reads

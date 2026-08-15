@@ -287,23 +287,6 @@ def state_text(account) -> str:
     return STATE_TEXT.get(account.status, "No usage data")
 
 
-def state_summary(account) -> str:
-    """state_text's opening clause — the name of the state, without its
-    instruction ("Re-login required", "Signed out", "Token expired").
-
-    The Overview row has room for a word, not a sentence: at caption size
-    its free span fits about sixteen characters, and middle-truncating the
-    full text there produced "Re-lo…once", which names nothing and reads
-    as a rendering bug. The account's own card still carries the whole
-    sentence, so the short form only has to identify the state.
-
-    DERIVED from state_text rather than a second table keyed by status:
-    a parallel dict is how the wording on two surfaces drifts apart, and
-    STATE_TEXT's entries are already written as "<state> — <what to do>".
-    """
-    return state_text(account).split(" — ")[0]
-
-
 def dot_style(account) -> str:
     """"solid" or "hollow" for an account's status dot.
 
