@@ -257,10 +257,16 @@ struct Snapshot: Equatable {
                                           countdown: window.countdown ?? ""))
                 }
                 if let window = usage.spend {
+                    // resetsAt/countdown carried through like every other
+                    // window: MetricBarRow renders a countdown for whatever
+                    // it is given, so dropping them here was the Spend row
+                    // showing a reset time on Linux/Windows and nothing on
+                    // macOS. Pinned by test_cswap_parity.py's
+                    // TestEveryWindowKeepsItsResetTime.
                     metrics.append(Metric(key: "spend", label: "Spend", short: "$",
                                           pct: window.pct ?? 0,
-                                          resetsAt: "",
-                                          countdown: ""))
+                                          resetsAt: window.resetsAt ?? "",
+                                          countdown: window.countdown ?? ""))
                 }
                 for scoped in usage.scoped ?? [] {
                     let name = (scoped.name?.isEmpty == false) ? scoped.name! : "?"
