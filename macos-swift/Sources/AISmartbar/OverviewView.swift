@@ -42,31 +42,47 @@ struct OverviewView: View {
         return "Most headroom: \(suggestion.email) — \(pct)% used"
     }
 
+    /// The strip only ever shows the ACTIVE Claude account's own 7-day
+    /// history — a switch changes which account "active" names, and the
+    /// strip follows it, the same as every other active-account fact on
+    /// this tab. Without one there is nothing to key the read on, so the
+    /// card is skipped the same way a fresh install with no records is.
+    private var sparklineHistory: [Double?]? {
+        guard let account = store.snapshot?.activeAccount else { return nil }
+        return UsageHistory.series(provider: account.provider,
+                                   email: account.email, key: "7d")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(leadLine)
-                .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            VStack(spacing: 5) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, account in
-                    OverviewRow(account: account)
+        VStack(spacing: 7) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(leadLine)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                VStack(spacing: 5) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, account in
+                        OverviewRow(account: account)
+                    }
                 }
             }
+            .padding(.vertical, 9)
+            .padding(.horizontal, 11)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.thinMaterial)
+            )
+            .overlay(
+                // Same quiet hairline every account card wears (CARD_BORDER
+                // in the shared theme) — this is one more card on the same
+                // panel, not a different kind of surface.
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+            )
+            if let history = sparklineHistory, SparklineCard.hasData(history) {
+                SparklineCard(history: history)
+            }
         }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 11)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.thinMaterial)
-        )
-        .overlay(
-            // Same quiet hairline every account card wears (CARD_BORDER in
-            // the shared theme) — this is one more card on the same panel,
-            // not a different kind of surface.
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
-        )
     }
 }
 

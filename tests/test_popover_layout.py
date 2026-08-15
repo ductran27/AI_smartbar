@@ -720,6 +720,76 @@ class TestOverviewTab(unittest.TestCase):
         self.assertIn("No account has spare headroom", labels(built))
 
 
+def strip_bars(built):
+    """The strip card's own boxes, picked by width — the one dimension
+    nothing else on the panel shares (see t.STRIP_BAR_W's own comment)."""
+    return [b for b in boxes(built) if abs(b.w - t.STRIP_BAR_W) < 0.01]
+
+
+class TestUsageHistoryStrip(unittest.TestCase):
+    """Stage 06: the 30-day usage-history card below the Overview tab's
+    account rows (popover_layout._strip_card). `history` is always passed
+    in explicitly here — build() takes it as plain data, the same as `now`,
+    and does no file I/O of its own (see build()'s own docstring)."""
+
+    def test_no_card_without_history(self):
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW)
+        self.assertEqual(strip_bars(built), [])
+        self.assertNotIn("Active account · 30 days", labels(built))
+
+    def test_no_card_when_every_day_is_none(self):
+        # A fresh install: the account exists but nothing has ever been
+        # recorded for it. Thirty Nones is "no history yet", not thirty
+        # stubs worth drawing.
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=[None] * 30)
+        self.assertEqual(strip_bars(built), [])
+
+    def test_thirty_bars_with_history_present(self):
+        history = [50.0] * 30
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        self.assertEqual(len(strip_bars(built)), 30)
+
+    def test_only_today_the_last_bar_is_drawn_in_chalk(self):
+        history = [10.0] * 29 + [95.0]
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        bars = strip_bars(built)
+        self.assertEqual(bars[-1].fill, t.TEXT)
+        self.assertTrue(all(b.fill != t.TEXT for b in bars[:-1]))
+
+    def test_a_none_day_draws_a_one_point_stub_in_bar_track(self):
+        history = [30.0] * 29 + [None]
+        # Put the None day somewhere other than "today" so this test can't
+        # be satisfied by accident by the today-is-chalk rule instead.
+        history[10] = None
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        bars = strip_bars(built)
+        self.assertEqual(bars[10].h, 1.0)
+        self.assertEqual(bars[10].fill, t.BAR_TRACK)
+
+    def test_header_names_the_window_and_the_span(self):
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=[20.0] * 30)
+        self.assertIn("Active account · 30 days", labels(built))
+        self.assertIn("7-day window, % used", labels(built))
+
+    def test_overview_height_grows_by_the_strip_when_present(self):
+        s = snap(account(active=True))
+        without = layout.overview_height(s)
+        with_strip = layout.overview_height(s, history=[40.0] * 30)
+        self.assertEqual(with_strip - without,
+                         t.CARD_GAP + layout.strip_height([40.0] * 30))
+
+    def test_overview_height_unchanged_when_history_is_all_none(self):
+        s = snap(account(active=True))
+        self.assertEqual(layout.overview_height(s),
+                         layout.overview_height(s, history=[None] * 30))
+
+
 class TestRemoveAffordance(unittest.TestCase):
     """The hover ✕ and the in-card confirm — the remove flow's geometry.
 
