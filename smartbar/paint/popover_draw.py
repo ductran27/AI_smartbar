@@ -166,42 +166,65 @@ def _draw_overview(ctx, glyph) -> None:
             ctx.fill()
 
 
+# Claude's mark is a starburst: rays of uneven length radiating from a
+# solid centre, deliberately drawn off-grid rather than plotted evenly.
+# CLAUDE_REACH is each ray's length as a fraction of the glyph radius and
+# CLAUDE_SKEW nudges it off its even share of the circle — fixed tables
+# rather than random numbers so the mark is identical every render and can
+# be transcribed into ProviderMark.swift unchanged.
+CLAUDE_REACH = (1.00, .86, .94, .82, .90, 1.00, .84, .92, .88, .97, .83)
+CLAUDE_SKEW = (.00, .04, -.03, .02, -.05, .01, .03, -.02, .05, -.01, .02)
+
+
 def _draw_claude(ctx, glyph) -> None:
-    """A simplified wordless "A": two strokes from an apex plus a
-    crossbar. Deliberately not a reproduction of Anthropic's mark — just a
-    short shape recognisable enough to tell the Claude tab apart at a
-    glance, the way the label beside it already does in words."""
-    half = glyph.size * 0.34
-    top = glyph.cy - glyph.size * 0.38
-    bottom = glyph.cy + glyph.size * 0.38
-    ctx.move_to(glyph.cx, top)
-    ctx.line_to(glyph.cx - half, bottom)
-    ctx.move_to(glyph.cx, top)
-    ctx.line_to(glyph.cx + half, bottom)
-    bar_y = glyph.cy + glyph.size * 0.12
-    bar_half = half * 0.55
-    ctx.move_to(glyph.cx - bar_half, bar_y)
-    ctx.line_to(glyph.cx + bar_half, bar_y)
-    ctx.stroke()
+    """A filled starburst — eleven tapered rays whose wide ends overlap
+    into a solid hub. At TAB_MARK's 11pt only the silhouette survives, so
+    the rays carry the mark and the hand-drawn wobble of the real one is
+    reduced to CLAUDE_SKEW."""
+    base = glyph.size * 0.075        # half-width where a ray meets the hub
+    for i, reach in enumerate(CLAUDE_REACH):
+        angle = TAU * i / len(CLAUDE_REACH) + TAU * CLAUDE_SKEW[i] - TAU / 4
+        # The ray's base is a chord across the hub, so it is drawn on the
+        # normal — the angle a quarter turn from the ray's own direction.
+        nx, ny = cos(angle + TAU / 4), sin(angle + TAU / 4)
+        tip = glyph.size * 0.5 * reach
+        ctx.move_to(glyph.cx + base * nx, glyph.cy + base * ny)
+        ctx.line_to(glyph.cx + tip * cos(angle), glyph.cy + tip * sin(angle))
+        ctx.line_to(glyph.cx - base * nx, glyph.cy - base * ny)
+        ctx.close_path()
+        ctx.fill()
+    ctx.arc(glyph.cx, glyph.cy, glyph.size * 0.14, 0, TAU)   # solid hub
+    ctx.fill()
 
 
 def _draw_openai(ctx, glyph) -> None:
-    """A hollow hexagon with two internal spokes, stroked — a short,
-    generic "knot" for the OpenAI tab, not a reproduction of their logo."""
-    r = glyph.size * 0.42
-    points = []
-    for i in range(6):
-        angle = TAU / 6 * i - TAU / 4
-        points.append((glyph.cx + r * cos(angle), glyph.cy + r * sin(angle)))
-    ctx.move_to(*points[0])
-    for x, y in points[1:]:
-        ctx.line_to(x, y)
+    """OpenAI's blossom reduced to what survives at 11pt: a six-lobed
+    rosette around a hexagonal core. The real mark's woven over-and-under
+    is invisible at this size, so it is dropped rather than approximated —
+    the lobe count, the roundness and the hexagon are what make it read."""
+    peak = glyph.size * 0.46         # lobe tip
+    valley = peak * 0.78             # the dip between two lobes
+    core = glyph.size * 0.23
+
+    def polar(r, angle):
+        return (glyph.cx + r * cos(angle), glyph.cy + r * sin(angle))
+
+    ctx.move_to(*polar(valley, 0.0))
+    for k in range(6):
+        here, nxt = TAU * k / 6, TAU * (k + 1) / 6
+        # Both control points sit out at `peak`, splayed a half-lobe apart,
+        # which rounds the lobe off instead of pulling it to a point.
+        ctx.curve_to(*polar(peak, here + TAU / 24),
+                     *polar(peak, nxt - TAU / 24), *polar(valley, nxt))
     ctx.close_path()
     ctx.stroke()
-    ctx.move_to(glyph.cx, glyph.cy)
-    ctx.line_to(*points[0])
-    ctx.move_to(glyph.cx, glyph.cy)
-    ctx.line_to(*points[3])
+    # The core is rotated a half-lobe against the rosette, so its corners
+    # point at the lobes rather than at the dips between them — aligned the
+    # other way it reads as a six-pointed star.
+    for k in range(6):
+        point = polar(core, TAU * k / 6 + TAU / 12)
+        ctx.line_to(*point) if k else ctx.move_to(*point)
+    ctx.close_path()
     ctx.stroke()
 
 
