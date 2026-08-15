@@ -57,8 +57,8 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
-from smartbar.core import (model, paths, popover_layout, portable, presence,
-                           usage_history)
+from smartbar.core import (model, paths, popover_layout, portable,
+                           presence)
 from smartbar.core import update as update_core
 from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
@@ -130,8 +130,7 @@ class Tray:
             error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
             action_error=c.action_error, refreshing=c.refreshing,
-            stale_reason=c.last_error,
-            history=usage_history.active_series(c.snapshot))
+            stale_reason=c.last_error)
 
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel."""
