@@ -218,8 +218,38 @@ def _metric(key, label, short, raw) -> Metric:
     return Metric(key=key, label=label, short=short,
                   pct=float(raw.get("pct", 0.0)),
                   resets_at=raw.get("resetsAt", ""),
-                  countdown=raw.get("countdown", ""),
-                  clock=raw.get("clock", ""))
+                  countdown=raw.get("countdown", ""))
+
+
+def snapshot_stamp(accounts) -> str:
+    """The one "Updated" time a popover shows, from per-account stamps.
+
+    The ACTIVE account's, because that is the account Claude Code's /usage
+    describes too — the same rule the Swift app's Snapshot.dataDate applies,
+    which is why the two UIs now stamp a payload identically. With no active
+    slot, the newest reading anything has is the closest honest answer.
+
+    Taking whichever account happened to come first is what this replaces:
+    cswap refreshes each slot on its own plan, so slot 1 can be three hours
+    older than the active one in the same payload, and the popover would
+    then claim data was measured long before it actually was.
+
+    max() on the raw strings is deliberate, and safe for a checkable reason
+    rather than a hopeful one: claude_swap/json_output.py builds the field as
+    `datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(timespec="seconds")
+    .replace("+00:00", "Z")`, so every value is UTC, second-precision and
+    fixed-width ("2026-07-20T01:45:03Z"). Lexical order IS chronological
+    order there, and no parsing or timezone guessing is needed. A future
+    schema that emitted a real offset would break that, which is what
+    schema_warning above exists to shout about.
+
+    Only the no-active-slot path uses max() at all; the normal path is the
+    exact-match loop, which cares about ordering not one bit.
+    """
+    for account in accounts:
+        if account.active and account.fetched_at:
+            return account.fetched_at
+    return max((a.fetched_at for a in accounts if a.fetched_at), default="")
 
 
 def parse_snapshot(text: str) -> Snapshot:
@@ -239,7 +269,8 @@ def parse_snapshot(text: str) -> Snapshot:
                        org=raw.get("organizationName", ""),
                        active=bool(raw.get("active", False)),
                        ok=status == "ok" and isinstance(usage, dict),
-                       status=status)
+                       status=status,
+                       fetched_at=raw.get("usageFetchedAt") or "")
         if acct.ok:
             if "fiveHour" in usage:
                 acct.metrics.append(_metric("5h", "5h", "5h", usage["fiveHour"]))
@@ -252,8 +283,7 @@ def parse_snapshot(text: str) -> Snapshot:
                 acct.metrics.append(_metric(f"scoped:{name}", name,
                                             name[:1].upper() or "?", scoped))
         snap.accounts.append(acct)
-        if not snap.fetched_at and raw.get("usageFetchedAt"):
-            snap.fetched_at = raw["usageFetchedAt"]
+    snap.fetched_at = snapshot_stamp(snap.accounts)
     return snap
 
 

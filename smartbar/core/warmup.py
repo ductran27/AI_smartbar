@@ -102,8 +102,16 @@ def should_warm(account, now, state, fetched_at):
     """(bool, reason). fetched_at: aware datetime of the snapshot, or None."""
     if in_quiet_hours(os.environ.get("SMARTBAR_WARMUP_QUIET", ""), now):
         return False, "quiet hours"
-    if fetched_at is None or now - fetched_at > timedelta(minutes=MAX_SNAPSHOT_AGE_MINUTES):
-        return False, "snapshot stale or unknown age"
+    # The account-state branches come BEFORE the staleness gate on purpose.
+    # An account with no 5h metric has no measurement whose age could mean
+    # anything, and cswap emits usageFetchedAt only alongside a non-null
+    # `usage` (claude_swap/json_output.py: "Emitted only alongside a non-null
+    # usage") — so every dead-credential slot arrives here with fetched_at
+    # None. Gating on staleness first therefore answered "snapshot stale or
+    # unknown age" for exactly the accounts whose real, actionable reason is
+    # "re-login required", making these branches unreachable in production
+    # and the warmup log actively misleading. Staleness protects a decision
+    # made ON data; with no data the state reason is both true and more use.
     if five_hour_metric(account) is None:
         status = getattr(account, "status", "") or ""
         if status == "relogin_required":
@@ -111,6 +119,8 @@ def should_warm(account, now, state, fetched_at):
         if status and status != "ok":
             return False, f"no usage data ({status})"
         return False, "no 5h usage data"
+    if fetched_at is None or now - fetched_at > timedelta(minutes=MAX_SNAPSHOT_AGE_MINUTES):
+        return False, "snapshot stale or unknown age"
     if not window_idle(account, now):
         return False, "window running"
     email = account.email

@@ -13,11 +13,11 @@ from smartbar.core.alerts import AlertManager
 def snap(active_pct, resets="r1", other_pct=None):
     accounts = [model.Account(number=1, email="a@x.com", active=True, metrics=[
         model.Metric(key="5h", label="5h", short="5h", pct=active_pct,
-                     resets_at=resets, countdown="1h 12m", clock="")])]
+                     resets_at=resets, countdown="1h 12m")])]
     if other_pct is not None:
         accounts.append(model.Account(number=2, email="b@x.com", active=False, metrics=[
             model.Metric(key="5h", label="5h", short="5h", pct=other_pct,
-                         resets_at="rx", countdown="", clock="")]))
+                         resets_at="rx", countdown="")]))
     return model.Snapshot(accounts=accounts)
 
 

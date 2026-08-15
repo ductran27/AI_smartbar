@@ -82,6 +82,60 @@ class TestParse(unittest.TestCase):
             cswap.parse_snapshot("not json {")
 
 
+OLD = "2026-07-20T01:00:00Z"
+MID = "2026-07-20T02:00:00Z"
+NEW = "2026-07-20T03:00:00Z"
+
+
+def _payload(*stamps):
+    """A snapshot whose accounts carry the given (usageFetchedAt, active)."""
+    return json.dumps({"schemaVersion": 1, "accounts": [
+        {"number": n, "email": "a%s@x.com" % n, "active": active,
+         "usageStatus": "ok", "usageFetchedAt": stamp,
+         "usage": {"fiveHour": {"pct": 10.0}}}
+        for n, (stamp, active) in enumerate(stamps, start=1)]})
+
+
+class TestPerAccountFetchTime(unittest.TestCase):
+    """cswap refreshes each slot on its own plan, so one payload carries
+    several different measurement times. Collapsing them to one value is what
+    broke warmup: every account was gated on whichever stamp happened to come
+    first (see tests/test_warmup_runner.py's TestRunOnceGatesPerAccount)."""
+
+    def test_each_account_keeps_its_own_stamp(self):
+        snap = cswap.parse_snapshot(_payload((OLD, False), (NEW, True)))
+        self.assertEqual([a.fetched_at for a in snap.accounts], [OLD, NEW])
+
+    def test_absent_stamp_is_empty_not_borrowed(self):
+        data = json.loads(_payload((OLD, False), (NEW, True)))
+        del data["accounts"][1]["usageFetchedAt"]
+        snap = cswap.parse_snapshot(json.dumps(data))
+        self.assertEqual([a.fetched_at for a in snap.accounts], [OLD, ""])
+
+
+class TestSnapshotStamp(unittest.TestCase):
+    """The popover's "Updated" line — the active account's measurement time,
+    matching the Swift app's Snapshot.dataDate."""
+
+    def test_prefers_the_active_account_over_an_earlier_slot(self):
+        snap = cswap.parse_snapshot(_payload((OLD, False), (NEW, True)))
+        self.assertEqual(snap.fetched_at, NEW)
+
+    def test_falls_back_to_the_newest_when_no_slot_is_active(self):
+        snap = cswap.parse_snapshot(_payload((OLD, False), (NEW, False),
+                                             (MID, False)))
+        self.assertEqual(snap.fetched_at, NEW)
+
+    def test_active_slot_without_a_stamp_falls_back(self):
+        data = json.loads(_payload((OLD, False), (NEW, True)))
+        del data["accounts"][1]["usageFetchedAt"]
+        snap = cswap.parse_snapshot(json.dumps(data))
+        self.assertEqual(snap.fetched_at, OLD)
+
+    def test_no_stamps_at_all_is_empty(self):
+        self.assertEqual(cswap.snapshot_stamp([]), "")
+
+
 def _snap(*accounts):
     from smartbar.core.model import Snapshot
     return Snapshot(accounts=list(accounts))

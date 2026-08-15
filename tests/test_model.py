@@ -12,8 +12,7 @@ from smartbar.core import model
 
 
 def metric(key="5h", pct=10.0, **kw):
-    defaults = dict(label=key, short=key, resets_at="r1", countdown="1h 2m",
-                    clock="Jul 20 00:39")
+    defaults = dict(label=key, short=key, resets_at="r1", countdown="1h 2m")
     defaults.update(kw)
     return model.Metric(key=key, pct=pct, **defaults)
 
