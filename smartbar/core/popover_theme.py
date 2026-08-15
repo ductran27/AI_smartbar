@@ -78,20 +78,29 @@ ICON_BUTTON_W = 22.0
 SIZE_TITLE = 13.0          # .headline
 SIZE_EMAIL = 12.0          # .callout.weight(.semibold)
 SIZE_CAPTION = 10.0        # .caption2
-SIZE_ROW_LABEL = 11.0
+# Label and value share one optical size on purpose: they are about to sit
+# on the SAME line (stage 02 moves the label off its own column), and a size
+# step between them would read as a hierarchy that isn't there — they are
+# one fact ("5h: 42% · 3h 12m"), not a heading over a body.
+SIZE_ROW_LABEL = 10.5
 SIZE_ROW_VALUE = 10.5      # monospaced
 SIZE_CHIP = 9.0
 SIZE_ICON = 12.5
 
 # --- colors (r, g, b, a in 0..1) -------------------------------------------
-WINDOW_BG = (0.11, 0.11, 0.12, 1.0)
-CARD_BG = (0.17, 0.17, 0.18, 1.0)
+# WINDOW_BG/CARD_BG are blue-shifted rather than macOS-neutral greys, so the
+# panel reads as an instrument sitting on the desktop rather than a sheet of
+# it. TEXT* stopped being white-with-alpha and became explicit cool greys at
+# full alpha ("chalk"/"mist"/"dim"/spent-value), so the tint survives
+# compositing instead of washing out over whatever sits behind the popover.
+WINDOW_BG = (0.059, 0.071, 0.086, 1.0)
+CARD_BG = (0.090, 0.110, 0.133, 1.0)
 CARD_BORDER = (1.0, 1.0, 1.0, 0.07)
 CARD_BORDER_ACTIVE = (1.0, 1.0, 1.0, 0.92)
-TEXT = (1.0, 1.0, 1.0, 0.92)
-TEXT_SECONDARY = (1.0, 1.0, 1.0, 0.60)
-TEXT_TERTIARY = (1.0, 1.0, 1.0, 0.42)
-TEXT_SPENT = (1.0, 1.0, 1.0, 0.68)      # MetricBarRow's 100% row
+TEXT = (0.914, 0.929, 0.949, 1.0)          # "chalk"
+TEXT_SECONDARY = (0.596, 0.639, 0.690, 1.0)  # "mist"
+TEXT_TERTIARY = (0.361, 0.400, 0.447, 1.0)   # "dim"
+TEXT_SPENT = (0.725, 0.757, 0.796, 1.0)    # MetricBarRow's 100% row
 BAR_TRACK = (1.0, 1.0, 1.0, 0.09)
 BUTTON_BG = (1.0, 1.0, 1.0, 0.12)
 BUTTON_BG_HOVER = (1.0, 1.0, 1.0, 0.20)

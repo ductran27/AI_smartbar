@@ -91,7 +91,7 @@ struct PopoverView: View {
         return Button { providerTab = id } label: {
             Text(title)
                 .font(.caption.weight(selected ? .semibold : .regular))
-                .foregroundStyle(Color.white.opacity(selected ? 0.92 : 0.45))
+                .foregroundStyle(selected ? Palette.chalk : Palette.dim)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(Capsule()
