@@ -10,24 +10,31 @@ Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills,
 
 The panel — identical on macOS, Linux and Windows:
 
- AI smartbar  Updated 9:56 PM        ⟳ ⏻
- [Claude]  OpenAI
- ┌──────────────────────────────────────┐
- │ ● ios8build@gmail.com   [Make Active]│
- │ 5h    ████──────────      45% · 2h43m│
- │ 7d    ██───────────       24% · 6d14h│
- │ Fable ███──────────       34% · 6d14h│
- └──────────────────────────────────────┘
- ╔═════════════════════════════[white]══╗
- ║ ● other@account              [ACTIVE]║
- ║ 5h    ██████████──        62% · 1h02m║
- ╚══════════════════════════════════════╝
-   v0.3.1                [Update to 0.4.0]
+ AI smartbar  Updated 9:56 PM              ⟳ ⏻
+ [✳ Claude]  ❁ OpenAI
+  ┌──────────────────────────────────────────┐
+  │ ● ios8build@gmail.com   20x [Make Active]│
+  │ 5h                           45% ◷ 2h 43m│
+  │ ██████████████████──────┊─────────────── │
+  │ 7d                           24% ◷ 6d 14h│
+  │ ██████████───────────────────────┊────── │
+  │ Fable                        34% ◷ 6d 14h│
+  │ ██████████████────────────────────────── │
+  └──────────────────────────────────────────┘
+ ▌┌──────────────────────────────────────────┐
+ ▌│ ● other@account          (2)    [ACTIVE] │
+ ▌│ 5h                           62% ◷ 1h 02m│
+ ▌│ █████████████████████████───────┊─────── │
+ ▌└──────────────────────────────────────────┘
+   v1.0.0                    [Update to 1.1.0]
 
- (numbers are % USED — the /usage scale; active card outlined white;
-  [Claude] OpenAI = provider tabs, selected pill bright and the other
-  faded, row only present when both providers have accounts;
-  dark-only UI)
+ (numbers are % USED — the /usage scale; every row is a label line over a
+  full-width bar; ▌ = the white rail marking the ACTIVE account; ┊ = the
+  pace caret, how far through that window you are; ◷ = time to reset;
+  one chip carries the plan and the device count; [✳ Claude] ❁ OpenAI =
+  provider tabs, each with its provider's mark, the selected pill bright
+  and the other faded, row only present when both providers have
+  accounts; dark-only UI)
 ```
 
 ## Features
@@ -41,14 +48,23 @@ The panel — identical on macOS, Linux and Windows:
 - **Every number is "% used"** — exactly what Claude Code's `/usage`
   shows, no mental arithmetic. Promo-boosted limits are already baked
   into the API's percentages, so both read the same scale.
-- **Native macOS popover** (SwiftUI, macOS 13+). One card per account:
-  filling bars for 5h / 7d / per-model with `% used · countdown`,
+- **Native macOS popover** (SwiftUI, macOS 13+). One card per account,
+  one row per window (5h / 7d / per-model): a label line
+  (`5h    45% ◷ 2h 43m`) over a bar that gets the card's full width,
   countdowns ticking live from the absolute reset time, the active card
-  outlined white with a green `ACTIVE` chip, and an "Updated" stamp that
-  shows when the usage was actually measured at the API — not when the
-  app last polled. It is the ACTIVE account's measurement time, the same
-  account `/usage` describes; cswap refreshes each slot on its own plan,
-  so the others in the same payload can be much older.
+  marked by a white leading rail and a green `ACTIVE` chip, and an
+  "Updated" stamp that shows when the usage was actually measured at the
+  API — not when the app last polled. It is the ACTIVE account's
+  measurement time, the same account `/usage` describes; cswap refreshes
+  each slot on its own plan, so the others in the same payload can be
+  much older.
+- **The pace caret.** A faint hairline sits in each bar at how far
+  through that window you currently are, so one bar answers two
+  questions: the fill is how much you have spent, the caret is whether
+  that is ahead of schedule. Fill behind the caret means you are under
+  budget for the window; fill past it means you are burning faster than
+  the clock. Rows that state no window length — a per-model bucket like
+  Fable — get no caret rather than a guessed one.
 - **One-click switching.** `Make Active` flips the account instantly
   (optimistic UI; failures surface in the popover and the next fetch
   corrects the display). New Claude Code sessions use the new account;
@@ -77,21 +93,24 @@ The panel — identical on macOS, Linux and Windows:
   v2), and identical snapshots skip all UI work. Tracks `/usage` within
   claude-swap's per-account poll plan without ever exceeding the usage
   API's per-token request budget (see [Data freshness](#data-freshness)).
-- **Device count per account.** `syu3cs@virginia.edu (2)` means two of your
-  devices have that account active right now — and are therefore spending
-  the same 5-hour and weekly budget. No badge means nobody else is on it.
-  See [Device presence](#device-presence-the-n-next-to-an-address).
-- **Plan badge per account.** `ios8build@gmail.com · 20x` — which
-  subscription each account is on (`20x` / `5x` / `Pro` / `Free`), read
-  from claude-swap's local per-slot config backups; no network, no
-  credential fields touched. Unknown plans show no badge. Disable with
-  `SMARTBAR_PLANS=off`.
+- **Device count per account.** A `(2)` chip beside the address means two
+  of your devices have that account active right now — and are therefore
+  spending the same 5-hour and weekly budget. No chip means nobody else is
+  on it. See [Device presence](#device-presence-the-n-next-to-an-address).
+- **Plan badge per account.** The same chip names which subscription the
+  account is on (`20x` / `5x` / `Pro` / `Free`), read from claude-swap's
+  local per-slot config backups; no network, no credential fields
+  touched. Plan and device count share one chip (`20x (2)`) so the
+  address line stays just the address. Unknown plans show no badge.
+  Disable with `SMARTBAR_PLANS=off`.
 - **OpenAI/ChatGPT tab.** Sign in to Codex CLI (or the ChatGPT desktop
   app) and within ~2 min an **OpenAI** tab appears next to Claude — one
-  card per ChatGPT account (`you@… · Pro`, same 5h / 7d / per-model
-  %-used bars), read entirely from Codex's own local files. The tab row
-  only exists when both providers have accounts, so a single-provider
-  machine looks exactly like before — see
+  card per ChatGPT account (`you@…` with a `Pro` chip, same 5h / 7d /
+  per-model %-used bars), read entirely from Codex's own local files.
+  Each pill carries its provider's mark to the left of its label, so the
+  row is readable both by shape and by name. The tab row only exists when
+  both providers have accounts, so a single-provider machine looks
+  exactly like before — see
   [The OpenAI tab](#the-openai-tab-chatgptcodex-accounts).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
@@ -182,12 +201,15 @@ On Windows the same flags are PowerShell-style: `-NoAutoUpdate` and
 > key with an `git@github.com:` remote. The installer probes this and
 > refuses loudly rather than letting updates fail silently forever.
 
-> **Status:** the native macOS app is live-verified (2026-07-25: v0.8.0
-> OpenAI tab with faded tab pills; 2026-07-22: v3 %-used UI, re-login
-> card + blocked switch, re-capture, warmup agent with fixed PATH). The
-> Linux tray is written to spec from the unit-tested core but has not
-> been re-run on a Linux box since v2. The Windows tray is further
-> behind than that: it has never been run on a Windows machine at all.
+> **Status:** the native macOS app is live-verified (2026-08-15: v1.0.0
+> builds, installs and runs — its redesigned card, provider tab marks and
+> pace caret were reviewed through `--preview-popover` rather than on the
+> native popover itself; 2026-07-25: v0.8.0 OpenAI tab with faded tab
+> pills; 2026-07-22: v3 %-used UI, re-login card + blocked switch,
+> re-capture, warmup agent with fixed PATH). The Linux tray is written to
+> spec from the unit-tested core but has not been re-run on a Linux box
+> since v2. The Windows tray is further behind than that: it has never
+> been run on a Windows machine at all.
 > Every line of `smartbar/windows/` was written to spec and unit-tested
 > with the GUI stubbed (pystray, tkinter and pycairo are faked in
 > tests) — real DPI scaling, focus-out dismissal, hover tracking and
@@ -219,9 +241,10 @@ from scratch, and applying an update *is* re-running them.
 | `SMARTBAR_CLAUDE` | – | Path override for the claude CLI (warmup) |
 | `SMARTBAR_WARMUP_DAILY_CAP` | `6` | Max warmup pings per account per day |
 | `SMARTBAR_WARMUP_QUIET` | – | Warmup quiet hours, e.g. `23-05` (wraps) |
+| `SMARTBAR_WARMUP_NOTIFY` | – | `off` silences the warmup failure notifications |
 | `SMARTBAR_UPDATE` | on | `off` disables self-updating entirely on this device |
 | `SMARTBAR_UPDATE_CHANNEL` | `release` | `release` tracks the newest `vX.Y.Z` tag; `main` follows `origin/main` fast-forward-only |
-| `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between scheduled update checks, floor 300. Resolved at **install** time — it becomes the LaunchAgent's `StartInterval`, the systemd timer's period, or the crontab spacing — so it takes effect when the installer next runs (immediately if you re-run it). Put it in `config.env` to keep it across updates |
+| `SMARTBAR_UPDATE_INTERVAL` | `21600` | Seconds between scheduled update checks, floor 300 — see [Changing the cadence](#updating-and-releases) |
 | `SMARTBAR_UPDATE_NOTIFY` | – | `off` silences the updated/failed notifications |
 | `SMARTBAR_PRESENCE` | on | `off` stops this device publishing or counting devices |
 | `SMARTBAR_PRESENCE_INTERVAL` | `300` | Seconds between presence heartbeats (floor 60) |
@@ -487,7 +510,10 @@ itself about a different window.
 [`config.env`](#settings-that-survive-an-update) checks hourly instead
 (floor 300 s). It becomes the LaunchAgent's `StartInterval`, the systemd timer's
 period, or — where cron is the fallback — the closest crontab spacing cron can
-express, since cron has minute resolution and no notion of an interval.
+express, since cron has minute resolution and no notion of an interval. It is
+resolved at **install** time rather than read per run, so a change takes effect
+when the installer next runs — immediately if you re-run it, otherwise at the
+next update.
 
 **How a device tells you.** A waiting release badges the bar icon with a
 small red dot — the icon gets slightly wider rather than the dot covering a
@@ -565,9 +591,9 @@ button.
 
 **Bootstrapping a device.** A device running code from before this feature
 has no updater, so its first update is manual — `git pull` then re-run its
-installer. After that it maintains itself. Registration, slot numbers,
-aliases, the active account and warmup state stay per machine (see below);
-only code is shared.
+installer. After that it maintains itself. Only code is shared between
+devices — everything else stays per machine, listed under
+[Credential lifecycle](#credential-lifecycle-re-capture--healing).
 
 ## Credential lifecycle (re-capture & healing)
 
@@ -731,10 +757,13 @@ cannot be tested by hand.
 
 Layout: `smartbar/core/` holds all logic, formatting and the popover
 geometry (`popover_theme.py` + `popover_layout.py`, unit-tested, Python
-3.9+); `smartbar/paint/` paints it with cairo (`popover_draw.py`,
-`tray_icon.py` — both GTK-free and therefore renderable anywhere, which is
-what lets one painter serve Linux, Windows and the preview CLI without
-drifting). `smartbar/linux/` hosts that painter in GTK
+3.9+). `tray_controller.py` is the toolkit-free state machine the Linux,
+Windows and rumps front-ends all drive — fetch, apply, alert, re-capture,
+check-update — so a fix to any of that lands once instead of in three
+copies that drift. `smartbar/paint/` paints the panel with cairo
+(`popover_draw.py`, `tray_icon.py` — both GTK-free and therefore
+renderable anywhere, which is what lets one painter serve Linux, Windows
+and the preview CLI without drifting). `smartbar/linux/` hosts it in GTK
 (`popover_window.py`, `tray.py`); `smartbar/windows/` hosts the same
 painter in tkinter and pystray (`popover_window.py`, `tray.py`,
 unverified on real hardware — see [Status](#install)); the Swift app
