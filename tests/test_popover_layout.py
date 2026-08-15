@@ -276,21 +276,20 @@ class TestCardContent(unittest.TestCase):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])), now=NOW)
-        # Two separate labels anchored to opposite edges of the readout
-        # line — see test_percent_position_is_stable_across_countdown_lengths
-        # for why keeping them apart matters. The percentage names its own
-        # scale now that the row has room for the word.
-        self.assertIn("79% used", labels(built))
-        # No " · " separator and no padded string: the clock glyph sits in
-        # the gap the leading space used to reserve.
-        self.assertIn("2h 5m", labels(built))
+        # Two separate labels, each right-anchored in its own reserved
+        # sub-column — see test_percent_position_is_stable_across_countdown_
+        # lengths for why keeping them apart matters.
+        self.assertIn("79%", labels(built))
+        # No " · " separator: the clock glyph sits in the gap that
+        # separator used to occupy, so the string keeps only its lead space.
+        self.assertIn(" 2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
-        self.assertIn("5% used", labels(built))
-        self.assertIn("3h 1m", labels(built))
+        self.assertIn("5%", labels(built))
+        self.assertIn(" 3h 1m", labels(built))
 
     def test_a_countdown_gets_a_clock_glyph_immediately_left_of_it(self):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
@@ -301,9 +300,9 @@ class TestCardContent(unittest.TestCase):
                  if isinstance(s, t.Glyph) and s.kind == "clock"]
         self.assertEqual(len(clocks), 1)
         countdown_label = next(s for s in built.shapes
-                               if isinstance(s, t.Label) and s.text == "2h 5m")
+                               if isinstance(s, t.Label) and s.text == " 2h 5m")
         text_edge = countdown_label.x - t.text_width(
-            countdown_label.text, t.SIZE_ROW_META, mono=True)
+            countdown_label.text, t.SIZE_ROW_VALUE, mono=True)
         self.assertLess(clocks[0].cx, text_edge)
 
     def test_a_row_with_no_countdown_draws_no_clock_glyph(self):
@@ -315,11 +314,10 @@ class TestCardContent(unittest.TestCase):
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
         # ONE string with the countdown, so it visibly slid sideways every
-        # time the countdown's length changed (e.g. "1h 0m" -> "59m"). It is
-        # anchored to the card's LEFT inner edge now while the countdown
-        # keeps the right, so its x cannot move however long the countdown
-        # runs — the fix stopped being a pair of reserved columns and became
-        # a property of the layout.
+        # time the countdown's length changed (e.g. "1h 0m" -> "59m"). The
+        # two are independently right-anchored in their own reserved
+        # sub-columns now, so the percentage's x cannot move however long
+        # the countdown runs.
         short = layout.build(
             snap(account(metrics=[metric(pct=79.0, countdown="9m")])),
             now=NOW)
@@ -327,19 +325,17 @@ class TestCardContent(unittest.TestCase):
             snap(account(metrics=[metric(pct=79.0, countdown="6d 23h")])),
             now=NOW)
         pct_short = next(s for s in short.shapes
-                         if isinstance(s, t.Label) and s.text == "79% used")
+                         if isinstance(s, t.Label) and s.text == "79%")
         pct_long = next(s for s in long_.shapes
-                        if isinstance(s, t.Label) and s.text == "79% used")
+                        if isinstance(s, t.Label) and s.text == "79%")
         self.assertEqual(pct_short.x, pct_long.x)
 
     def test_the_bar_spans_the_cards_full_inner_width(self):
-        # The end of FINDING 3's arithmetic. The bar used to share its row
-        # with a label column and two reserved value sub-columns (VALUE_W
-        # alone held 104pt for a value no realistic string needed); it then
-        # moved to its own line, and the value moved to a third line. No
-        # horizontal width is reserved for anything any more, so the bar
-        # runs edge to edge of the card's inner width — which is why the
-        # constants that used to be asserted here no longer exist.
+        # The end of FINDING 3's arithmetic. The bar used to share its line
+        # with the label column and two reserved value sub-columns (VALUE_W
+        # alone held 104pt for a value no realistic string needed); it has
+        # its own line now, so it runs edge to edge of the card's inner
+        # width while the label and value keep their columns above it.
         built = layout.build(snap(account()), now=NOW)
         track, _fill = bars(built)
         inner_l = t.PAD + t.CARD_PAD_H
@@ -692,10 +688,10 @@ class TestProviderTabs(unittest.TestCase):
         claude_label = next(s for s in built.shapes
                             if isinstance(s, t.Label) and s.text == "Claude")
         claude_mark = next(m for m in marks if m.kind == "claude")
-        # Stacked, so they share a centre line rather than sitting side by
-        # side; the label is centred on the pill too (anchor "center").
-        self.assertAlmostEqual(claude_mark.cx, claude_label.x)
-        self.assertLess(claude_mark.cy, claude_label.y)
+        # Side by side, so they share a baseline and the mark sits to the
+        # LEFT of its label — never on top of it, and never instead of it.
+        self.assertAlmostEqual(claude_mark.cy, claude_label.y)
+        self.assertLess(claude_mark.cx, claude_label.x)
 
     def test_a_single_provider_machine_gets_no_tab_marks_either(self):
         # No tab row at all here (see test_claude_only_layout_is_byte_
