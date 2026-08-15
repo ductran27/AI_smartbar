@@ -32,7 +32,6 @@ struct ProviderMark: View {
     /// "structure", the same job a stroke does in every cairo glyph.
     private func strokedPath(size: CGFloat) -> Path {
         switch kind {
-        case "claude": return claudePath(size: size)
         case "openai": return openAIPath(size: size)
         case "clock": return clockPath(size: size)
         case "warn": return warnOutlinePath(size: size)
@@ -45,6 +44,7 @@ struct ProviderMark: View {
     /// under an otherwise stroked triangle.
     private func filledPath(size: CGFloat) -> Path {
         switch kind {
+        case "claude": return claudePath(size: size)
         case "overview": return overviewPath(size: size)
         case "pause": return pausePath(size: size)
         case "warn": return warnDotPath(size: size)
@@ -52,49 +52,78 @@ struct ProviderMark: View {
         }
     }
 
-    // MARK: - claude — a simplified wordless "A": two strokes from an
-    // apex plus a crossbar. Not a reproduction of Anthropic's mark, just
-    // a short shape recognisable enough to tell the tab apart at a
-    // glance, the way the label beside it already does in words (mirror
-    // of popover_draw._draw_claude).
+    // MARK: - claude — a filled starburst: eleven tapered rays whose wide
+    // ends overlap into a solid hub. `reach` is each ray's length as a
+    // fraction of the glyph radius and `skew` nudges it off its even share
+    // of the circle, standing in for the hand-drawn wobble of the real
+    // mark — fixed tables rather than random numbers so the glyph is
+    // identical every render and matches popover_draw.CLAUDE_REACH /
+    // CLAUDE_SKEW number for number.
+
+    private static let claudeReach: [CGFloat] =
+        [1.00, 0.86, 0.94, 0.82, 0.90, 1.00, 0.84, 0.92, 0.88, 0.97, 0.83]
+    private static let claudeSkew: [CGFloat] =
+        [0.00, 0.04, -0.03, 0.02, -0.05, 0.01, 0.03, -0.02, 0.05, -0.01, 0.02]
 
     private func claudePath(size: CGFloat) -> Path {
         var path = Path()
         let cx = size / 2, cy = size / 2
-        let half = size * 0.34
-        let top = cy - size * 0.38
-        let bottom = cy + size * 0.38
-        path.move(to: CGPoint(x: cx, y: top))
-        path.addLine(to: CGPoint(x: cx - half, y: bottom))
-        path.move(to: CGPoint(x: cx, y: top))
-        path.addLine(to: CGPoint(x: cx + half, y: bottom))
-        let barY = cy + size * 0.12
-        let barHalf = half * 0.55
-        path.move(to: CGPoint(x: cx - barHalf, y: barY))
-        path.addLine(to: CGPoint(x: cx + barHalf, y: barY))
+        let tau = CGFloat.pi * 2
+        let base = size * 0.075     // half-width where a ray meets the hub
+        let rays = Self.claudeReach.count
+        for (i, reach) in Self.claudeReach.enumerated() {
+            let angle = tau * CGFloat(i) / CGFloat(rays)
+                + tau * Self.claudeSkew[i] - tau / 4
+            // The base is a chord across the hub, so it is drawn on the
+            // normal — the angle a quarter turn from the ray's own.
+            let nx = cos(angle + tau / 4), ny = sin(angle + tau / 4)
+            let tip = size * 0.5 * reach
+            path.move(to: CGPoint(x: cx + base * nx, y: cy + base * ny))
+            path.addLine(to: CGPoint(x: cx + tip * cos(angle),
+                                     y: cy + tip * sin(angle)))
+            path.addLine(to: CGPoint(x: cx - base * nx, y: cy - base * ny))
+            path.closeSubpath()
+        }
+        let hub = size * 0.14
+        path.addEllipse(in: CGRect(x: cx - hub, y: cy - hub,
+                                   width: hub * 2, height: hub * 2))
         return path
     }
 
-    // MARK: - openai — a hollow hexagon with two internal spokes. A
-    // short, generic "knot", not a reproduction of their logo (mirror of
-    // popover_draw._draw_openai).
+    // MARK: - openai — the blossom reduced to what survives at 11pt: a
+    // six-lobed rosette around a hexagonal core. The real mark's woven
+    // over-and-under is invisible at this size, so it is dropped rather
+    // than approximated — the lobe count, the roundness and the hexagon
+    // are what make it read (mirror of popover_draw._draw_openai).
 
     private func openAIPath(size: CGFloat) -> Path {
         var path = Path()
         let cx = size / 2, cy = size / 2
-        let r = size * 0.42
-        var points: [CGPoint] = []
-        for i in 0..<6 {
-            let angle = CGFloat(i) * .pi / 3 - .pi / 2
-            points.append(CGPoint(x: cx + r * cos(angle), y: cy + r * sin(angle)))
+        let tau = CGFloat.pi * 2
+        let peak = size * 0.46      // lobe tip
+        let valley = peak * 0.78    // the dip between two lobes
+        let core = size * 0.23
+        func polar(_ r: CGFloat, _ angle: CGFloat) -> CGPoint {
+            CGPoint(x: cx + r * cos(angle), y: cy + r * sin(angle))
         }
-        path.move(to: points[0])
-        for point in points.dropFirst() { path.addLine(to: point) }
+        path.move(to: polar(valley, 0))
+        for k in 0..<6 {
+            let here = tau * CGFloat(k) / 6, next = tau * CGFloat(k + 1) / 6
+            // Both control points sit out at `peak`, splayed a half-lobe
+            // apart, rounding the lobe off instead of pulling it to a point.
+            path.addCurve(to: polar(valley, next),
+                          control1: polar(peak, here + tau / 24),
+                          control2: polar(peak, next - tau / 24))
+        }
         path.closeSubpath()
-        path.move(to: CGPoint(x: cx, y: cy))
-        path.addLine(to: points[0])
-        path.move(to: CGPoint(x: cx, y: cy))
-        path.addLine(to: points[3])
+        // The core is rotated a half-lobe against the rosette so its
+        // corners point at the lobes rather than at the dips between them —
+        // aligned the other way it reads as a six-pointed star.
+        for k in 0..<6 {
+            let point = polar(core, tau * CGFloat(k) / 6 + tau / 12)
+            if k == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        path.closeSubpath()
         return path
     }
 
