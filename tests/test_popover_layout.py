@@ -46,6 +46,21 @@ def bars(built):
     return [b for b in boxes(built) if abs(b.h - t.BAR_H) < 0.01]
 
 
+def rails(built):
+    """Active-card leading-rail boxes, picked by fill color — the rail is
+    the only box painted RAIL, so this can't be confused with a card box,
+    a bar, or a button of the same width."""
+    return [b for b in boxes(built) if b.fill == t.RAIL]
+
+
+def chips(built):
+    """Plan/device micro-chip boxes, picked by fill+height so a disabled
+    Make Active button (also BUTTON_DISABLED-filled, but BUTTON_H tall)
+    can't be mistaken for one."""
+    return [b for b in boxes(built)
+            if b.fill == t.BUTTON_DISABLED and abs(b.h - t.CHIP_H) < 0.01]
+
+
 class TestPinOrigin(unittest.TestCase):
     """Where a pinned panel parks. Geometry only — no GTK involved."""
 
@@ -163,51 +178,94 @@ class TestStructure(unittest.TestCase):
 
 
 class TestCardContent(unittest.TestCase):
-    def test_active_card_gets_the_chip_and_the_white_outline(self):
-        built = layout.build(snap(account(active=True)), now=NOW)
-        self.assertIn("ACTIVE", labels(built))
-        card = boxes(built)[0]
-        self.assertEqual(card.stroke, t.CARD_BORDER_ACTIVE)
-        self.assertEqual(card.line_width, 1.5)
+    def test_every_card_gets_the_same_hairline_border(self):
+        # The 1.5pt pure-white outline that used to single out the active
+        # card is gone — active and inactive cards share one quiet hairline
+        # now; the rail (below) is what marks "active" instead.
+        active = layout.build(snap(account(active=True)), now=NOW)
+        inactive = layout.build(snap(account(number=4)), now=NOW)
+        self.assertIn("ACTIVE", labels(active))
+        self.assertEqual(boxes(active)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(active)[0].line_width, 1.0)
+        self.assertEqual(boxes(inactive)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(inactive)[0].line_width, 1.0)
 
-    def test_inactive_card_gets_a_switch_button_and_a_faint_outline(self):
+    def test_inactive_card_gets_a_switch_button(self):
         built = layout.build(snap(account(number=4)), now=NOW)
         self.assertIn("Make Active", labels(built))
-        self.assertEqual(boxes(built)[0].stroke, t.CARD_BORDER)
         self.assertTrue(any(h.name == "switch:4" for h in built.hits))
 
     def test_active_card_has_no_switch_target(self):
         built = layout.build(snap(account(number=4, active=True)), now=NOW)
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
 
-    def test_the_device_count_rides_on_the_address(self):
+    def test_active_card_gets_exactly_one_rail_at_its_left_edge(self):
+        built = layout.build(snap(account(active=True)), now=NOW)
+        card = boxes(built)[0]
+        rail_boxes = rails(built)
+        self.assertEqual(len(rail_boxes), 1)
+        self.assertAlmostEqual(rail_boxes[0].x, card.x)
+        self.assertAlmostEqual(rail_boxes[0].w, t.RAIL_W)
+        self.assertAlmostEqual(rail_boxes[0].h, card.h - t.RAIL_INSET * 2)
+
+    def test_non_active_card_gets_no_rail(self):
+        built = layout.build(snap(account(number=4)), now=NOW)
+        self.assertEqual(rails(built), [])
+
+    def test_only_the_active_card_among_several_gets_a_rail(self):
+        built = layout.build(
+            snap(account(number=2), account(number=3, active=True)), now=NOW)
+        self.assertEqual(len(rails(built)), 1)
+
+    def test_the_device_count_becomes_a_micro_chip(self):
         card = account(email="a@example.com")
         card.devices = 2
-        self.assertIn("a@example.com (2)",
-                      labels(layout.build(snap(card), now=NOW)))
+        built = layout.build(snap(card), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertIn("(2)", labels(built))
+        self.assertEqual(len(chips(built)), 1)
 
-    def test_the_plan_badge_rides_on_the_address(self):
+    def test_the_plan_and_device_badges_share_one_chip(self):
         card = account(email="a@example.com")
         card.plan = "20x"
         card.devices = 2
-        self.assertIn("a@example.com · 20x (2)",
-                      labels(layout.build(snap(card), now=NOW)))
+        built = layout.build(snap(card), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertIn("20x (2)", labels(built))
+        self.assertEqual(len(chips(built)), 1)
 
-    def test_no_badge_when_nobody_else_is_on_the_account(self):
-        self.assertIn("a@example.com", labels(layout.build(snap(account()),
-                                                           now=NOW)))
+    def test_no_chip_when_there_is_nothing_to_say(self):
+        # No plan and no devices: account_badge() is "", and the card must
+        # draw no chip at all rather than an empty pill.
+        built = layout.build(snap(account()), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertEqual(chips(built), [])
 
-    def test_the_count_cannot_run_into_the_active_chip(self):
-        # The address is given a max_width so the painter truncates it; that
-        # budget has to shrink to clear the chip, or a long address would be
-        # drawn straight through it.
+    def test_the_chip_shrinks_the_address_budget(self):
+        plain = layout.build(snap(account(number=2)), now=NOW)
+        badged = account(number=2)
+        badged.plan = "20x"
+        with_chip = layout.build(snap(badged), now=NOW)
+        plain_address = next(s for s in plain.shapes
+                             if isinstance(s, t.Label) and "@" in s.text)
+        chipped_address = next(s for s in with_chip.shapes
+                               if isinstance(s, t.Label) and "@" in s.text)
+        self.assertLess(chipped_address.max_width, plain_address.max_width)
+
+    def test_the_badge_chip_cannot_run_into_the_active_chip(self):
+        # The address's reserved width, and the badge chip's position, both
+        # have to clear the ACTIVE chip — or a long address / wide badge
+        # would be drawn straight through it.
         card = account(email="a" * 60 + "@example.com", active=True)
         card.devices = 3
         built = layout.build(snap(card), now=NOW)
         address = next(s for s in built.shapes
                        if isinstance(s, t.Label) and s.text.startswith("aaa"))
-        chip = next(s for s in boxes(built) if s.fill == t.status_rgba("green"))
-        self.assertLessEqual(address.x + address.max_width, chip.x)
+        badge = chips(built)[0]
+        active_chip = next(s for s in boxes(built)
+                           if s.fill == t.status_rgba("green"))
+        self.assertLessEqual(address.x + address.max_width, badge.x)
+        self.assertLessEqual(badge.x + badge.w, active_chip.x)
 
     def test_metric_rows_render_used_percent_and_countdown(self):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
@@ -489,13 +547,15 @@ class TestProviderTabs(unittest.TestCase):
         self.assertNotIn(layout.NO_ACCOUNTS, labels(built))
         self.assertTrue(any("Signed out" in text for text in labels(built)))
 
-    def test_openai_plan_badge_rides_on_the_address(self):
+    def test_openai_plan_badge_becomes_a_micro_chip(self):
         card = openai_account()
         card.plan = "Pro Lite"
         s = snap()
         s.openai = [card]
         built = layout.build(s, provider="openai", now=NOW)
-        self.assertIn("gpt@example.com · Pro Lite", labels(built))
+        self.assertIn("gpt@example.com", labels(built))
+        self.assertIn("Pro Lite", labels(built))
+        self.assertEqual(len(chips(built)), 1)
 
 
 class TestRemoveAffordance(unittest.TestCase):

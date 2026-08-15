@@ -211,8 +211,14 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     hits.append(t.Hit(f"card:{pid}", left, top, right - left, height))
     shapes.append(t.Box(
         left, top, right - left, height, radius=t.CARD_RADIUS, fill=t.CARD_BG,
-        stroke=t.CARD_BORDER_ACTIVE if account.active else t.CARD_BORDER,
-        line_width=1.5 if account.active else 1.0))
+        stroke=t.CARD_BORDER, line_width=1.0))
+    if account.active:
+        # Drawn AFTER the card so it sits on top, and deliberately inset
+        # into the card's own horizontal padding rather than shifting
+        # inner_l — becoming active must never reflow a row.
+        shapes.append(t.Box(left, top + t.RAIL_INSET, t.RAIL_W,
+                            height - t.RAIL_INSET * 2, radius=t.RAIL_W / 2,
+                            fill=t.RAIL))
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
 
@@ -275,6 +281,23 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
                             head_cy, "Make Active", hover=hover,
                             enabled=not blocked, tooltip=switch_tip)
 
+    # The plan/device badge used to ride inside account_label as plain text;
+    # now it gets its own quiet micro-chip so the address line stays just
+    # the address. Sitting right of the address and left of the ACTIVE
+    # chip / Make Active button, same neutral fill as a disabled control —
+    # it is a fact about the account, not something to press.
+    badge = model.account_badge(account)
+    if badge:
+        badge_w = t.text_width(badge, t.SIZE_CHIP) + 14
+        badge_x = control_l - 6 - badge_w
+        shapes.append(t.Box(badge_x, head_cy - t.CHIP_H / 2, badge_w,
+                            t.CHIP_H, radius=t.CHIP_H / 2,
+                            fill=t.BUTTON_DISABLED))
+        shapes.append(t.Label(badge_x + badge_w / 2, head_cy, badge,
+                              size=t.SIZE_CHIP, anchor="center",
+                              color=t.TEXT_SECONDARY))
+        control_l = badge_x
+
     # The ✕ exists only while the pointer is on this card (any of its hover
     # names) and never on the active card — the live login would just be
     # re-registered, so offering to remove it would be a lie. Its gutter is
@@ -299,7 +322,7 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
                           tooltip=f"Remove {account.email} from AI smartbar"))
 
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
-                          model.account_label(account),
+                          model.account_address(account),
                           size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
                           max_width=label_r - (inner_l + t.DOT_R * 2 + 7)))
 
