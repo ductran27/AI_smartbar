@@ -70,6 +70,13 @@ class _FakeRumpsApp:
 
 
 def _linux_host():
+    # The guard lives here rather than in each caller: linux is the one host
+    # that needs a REAL pycairo (install_gi leaves cairo unfaked, and
+    # smartbar/linux/tray.py imports smartbar.paint.tray_icon at module
+    # scope), and both tests below load their hosts through this same
+    # function. Raised inside `with self.subTest(host=...)`, the skip is
+    # recorded against the linux subtest alone and windows/macos still run.
+    stubs.skip_without_pycairo()
     stubs.install_gi()
     return stubs.reimport("smartbar.linux.tray").Tray
 
