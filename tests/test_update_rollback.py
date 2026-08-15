@@ -14,6 +14,8 @@ Nothing here touches a real bundle, launchctl or notifier.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -221,6 +223,120 @@ class TestNotifiersSurviveAHang(Env):
                 side_effect=subprocess.TimeoutExpired("notify-send", 10)) as run:
             warmup_runner.notify_failure("title", "body")
         run.assert_called_once()
+
+
+class TestTheChannelSurvivesTheProcessBoundary(Env):
+    """run_once() must resolve the channel from the state file when its own
+    environment carries none.
+
+    The channel is baked into the update AGENT — device_config.RESERVED keeps
+    it deliberately out of config.env — so only that agent's process inherits
+    it. Every other caller starts with nothing: the popover's
+    `--check-update`, a hand-run in a terminal. Each silently assumed
+    `release`, and then SAVED that plan into the state file the agent reads.
+    A main-channel device therefore answered "0.11.0 available" to its own
+    popover and "already up to date" to its own log, in the same minute, from
+    the same checkout — and the popover's answer was the one that persisted.
+    """
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("SMARTBAR_UPDATE_CHANNEL", None)
+
+    def drive(self, stored):
+        """One check-only run against a state file holding `stored`."""
+        repo = mock.Mock(head="a" * 40, branch="main", version="9.9.8",
+                         dirty=False, unpushed=0)
+        plan = update.UpdatePlan(action=update.CURRENT, target_ref="v9.9.8",
+                                 target_version="9.9.8", reason="test")
+        saved = {}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patches = [
+            mock.patch.object(update_runner, "CACHE_DIR", tmp.name),
+            mock.patch.object(update_runner.logging, "basicConfig"),
+            mock.patch.object(update_runner, "load_state",
+                              return_value=dict(stored)),
+            mock.patch.object(update_runner, "save_state",
+                              side_effect=saved.update),
+            mock.patch.object(update_runner.portable, "lock",
+                              return_value=mock.Mock()),
+            mock.patch.object(update_runner.update_git, "fetch"),
+            mock.patch.object(update_runner.update_git, "repo_state",
+                              return_value=repo),
+            mock.patch.object(update_runner, "_plan", return_value=plan),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # check_only prints its one-line verdict to stdout; this class is
+        # about the channel that produced it, not the line.
+        with contextlib.redirect_stdout(io.StringIO()):
+            update_runner.run_once(check_only=True)
+        return update_runner._plan, saved
+
+    def test_the_channel_the_last_run_recorded_is_the_one_planned_on(self):
+        planner, _ = self.drive({"channel": "main"})
+        self.assertEqual(planner.call_args.args[2], update.CHANNEL_MAIN)
+
+    def test_a_state_file_without_one_still_reaches_the_default(self):
+        planner, _ = self.drive({})
+        self.assertEqual(planner.call_args.args[2], update.CHANNEL_RELEASE)
+
+    def test_an_explicit_variable_still_beats_the_recorded_channel(self):
+        # How --channel and the agent's own plist keep overriding it.
+        os.environ["SMARTBAR_UPDATE_CHANNEL"] = "release"
+        planner, _ = self.drive({"channel": "main"})
+        self.assertEqual(planner.call_args.args[2], update.CHANNEL_RELEASE)
+
+    def test_the_resolved_channel_is_written_back_for_the_next_run(self):
+        """Without the write-back the inheritance never starts: a device
+        whose agent has the variable would never record it, so the callers
+        that lack it would go on guessing forever.
+
+        Driven from the ENVIRONMENT against an EMPTY state file on purpose.
+        Seeding the state with the channel would pass whether or not
+        ui_state wrote anything, because run_once mutates that same dict —
+        which is precisely how this test first failed to notice the fix
+        being reverted.
+        """
+        os.environ["SMARTBAR_UPDATE_CHANNEL"] = "main"
+        _, saved = self.drive({})
+        self.assertEqual(saved.get("channel"), update.CHANNEL_MAIN)
+
+
+class TestTheManualCheckNeverAnnouncesANoOp(Env):
+    """check_now() must tell check_outcome which version this checkout is.
+
+    Every front-end refuses to draw an upgrade to the version it is already
+    running. When the planner named that version anyway, the button was
+    silently suppressed while the footer and the notification still announced
+    the release — so the user was told to pick a control that had
+    deliberately not been drawn, and clicking the announcement did nothing
+    because it was never a control at all.
+    """
+
+    def drive(self, after):
+        # load_state is called twice: once for the checkedAt baseline that
+        # proves a check really ran, once for the result.
+        with mock.patch.object(update_runner, "run_once", return_value=0), \
+             mock.patch.object(update_runner, "load_state",
+                               side_effect=[{"checkedAt": "before"}, after]):
+            return update_runner.check_now()
+
+    def test_a_pending_version_equal_to_this_checkout_is_not_announced(self):
+        outcome = self.drive({"checkedAt": "after", "action": "update",
+                              "pendingVersion": "0.11.0",
+                              "currentVersion": "0.11.0"})
+        self.assertFalse(outcome.found)
+        self.assertNotIn("available", outcome.label)
+
+    def test_a_genuinely_newer_pending_version_is_still_announced(self):
+        outcome = self.drive({"checkedAt": "after", "action": "update",
+                              "pendingVersion": "0.12.0",
+                              "currentVersion": "0.11.0"})
+        self.assertTrue(outcome.found)
+        self.assertIn("0.12.0", outcome.label)
 
 
 if __name__ == "__main__":

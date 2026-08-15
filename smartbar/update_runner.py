@@ -481,7 +481,11 @@ def check_now():
                if state.get("action") == "blocked" else "")
     return update_core.check_outcome(
         pending=update_core.pending_version(state), blocked=blocked,
-        failed=failed, ran=str(state.get("checkedAt") or "") != before)
+        failed=failed, ran=str(state.get("checkedAt") or "") != before,
+        # What run_once just wrote as this checkout's version. A plan naming
+        # it is an upgrade to where we already are, which every UI refuses to
+        # draw a button for — so it must not be announced as available.
+        current=str(state.get("currentVersion") or ""))
 
 
 def run_once(*, reset: bool = False, force: bool = False,
@@ -501,8 +505,11 @@ def run_once(*, reset: bool = False, force: bool = False,
         log.info("another update run is in progress; skipping")
         return 0
 
-    channel = update.channel()
+    # State first: it carries the channel the last run resolved, which is the
+    # only way a process launched WITHOUT the setting (the popover's manual
+    # check, a hand-run in a terminal) can find the device's real channel.
     state = load_state()
+    channel = update.channel(fallback=str(state.get("channel") or ""))
     # The app bundle is a copy and does not know where the checkout lives;
     # this is how the popover's upgrade button finds the runner when a device
     # has opted out of the update agent.
@@ -515,7 +522,7 @@ def run_once(*, reset: bool = False, force: bool = False,
         return 1
 
     plan = _plan(repo, state, channel, force, reset)
-    state.update(update.ui_state(plan, repo.version))
+    state.update(update.ui_state(plan, repo.version, channel=channel))
     save_state(state)
     log.info("channel=%s head=%s v%s -> %s (%s)", channel, repo.head[:8],
              repo.version or "?", plan.action, plan.reason)
@@ -572,7 +579,8 @@ def run_once(*, reset: bool = False, force: bool = False,
             for key in targets:   # cheap for the non-Swift shapes
                 run_installer(key)
         streak = update.record_failure(state, plan.target_ref)
-        state.update(update.ui_state(plan, update_git.version_in_checkout()))
+        state.update(update.ui_state(plan, update_git.version_in_checkout(),
+                                     channel=channel))
         save_state(state)
         notify("AI smartbar update failed",
                f"{plan.target_ref}: {failure[:110]} — rolled back "
@@ -584,7 +592,8 @@ def run_once(*, reset: bool = False, force: bool = False,
     update.clear_failures(state, plan.target_ref)
     state.update(update.ui_state(_plan(update_git.repo_state(), state, channel,
                                        False, False),
-                                 new_version, applied=new_version))
+                                 new_version, applied=new_version,
+                                 channel=channel))
     save_state(state)
     log.info("updated to %s (version %s)", plan.target_ref, new_version)
     notify("AI smartbar updated",
