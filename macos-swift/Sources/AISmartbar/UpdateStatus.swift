@@ -84,10 +84,34 @@ final class UpdateStatus: ObservableObject {
         if let root = raw["repoRoot"] as? String, !root.isEmpty {
             repoRoot = root
         }
-        // A "pending" version equal to what we already run means the updater
-        // hasn't re-checked since the restart — never offer a no-op upgrade.
+        // What to offer, and the same no-op guard on both halves: a target
+        // equal to what we already run means the updater hasn't re-checked
+        // since the restart, and re-offering it would be an upgrade to here.
+        //
+        // Two halves because the channels target different things. On
+        // release the target is a tag and `pendingVersion` carries it. On
+        // main the target is a COMMIT: ui_state leaves pendingVersion empty
+        // and puts the sha in `pendingRef`, so reading only the version field
+        // showed "up to date" to a device whose own updater had already
+        // decided to rebuild it — the button and the icon badge could never
+        // appear on a main-channel device at all.
+        //
+        // The fallback is reached only when pendingVersion is ABSENT, never
+        // when the guard above emptied it: on release, pendingRef holds the
+        // tag, and falling through to it would re-offer the very no-op the
+        // version guard just suppressed.
         let pending = raw["pendingVersion"] as? String ?? ""
-        let next = (pending == AppVersion.current) ? "" : pending
+        let next: String
+        if !pending.isEmpty {
+            next = (pending == AppVersion.current) ? "" : pending
+        } else {
+            // Compared against the sha this bundle was BUILT from, not the
+            // checkout's HEAD: the checkout moves on a fetch, the bundle only
+            // on a rebuild, and it is the rebuild being offered.
+            let ref = raw["pendingRef"] as? String ?? ""
+            next = (ref.isEmpty || ref == AppBuild.sha)
+                ? "" : String(ref.prefix(AppBuild.abbrev))
+        }
         if next != pendingVersion { pendingVersion = next }
         let blocked = (raw["action"] as? String) == "blocked"
             ? (raw["reason"] as? String ?? "") : ""

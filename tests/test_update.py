@@ -11,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 from smartbar.core import model, update
 
 NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
+# A real-shaped sha: the short-ref rule only fires on 40 hex characters, so
+# the fixtures elsewhere in this file ("sha-remote") deliberately do not match.
+FULL_SHA = "da43ea0e53f58b3d4313d35a7255d2b14cd04fae"
 
 
 def state(**kwargs):
@@ -462,6 +465,41 @@ class TestPendingVersion(unittest.TestCase):
         self.assertEqual(
             update.pending_version(update.ui_state(current, "0.3.0")), "")
 
+    def test_the_main_channel_target_is_offered_as_a_short_sha(self):
+        """channel=main aims at a COMMIT, not a release: ui_state leaves
+        pendingVersion empty and fills pendingRef. Reading only the version
+        field is how every front-end came to tell a main-channel device it
+        was up to date while its own updater had already decided to rebuild
+        it — no button, no badge, on that channel at all."""
+        payload = update.ui_state(
+            update.plan_update(state(branch="main", remote_main=FULL_SHA),
+                               channel=update.CHANNEL_MAIN),
+            "1.0.1", NOW)
+        self.assertEqual(payload["action"], update.UPDATE)
+        self.assertEqual(payload["pendingVersion"], "")
+        self.assertEqual(payload["pendingRef"], FULL_SHA)
+        self.assertEqual(update.pending_version(payload), FULL_SHA[:7])
+
+    def test_the_version_still_wins_when_both_are_present(self):
+        self.assertEqual(
+            update.pending_version({"pendingVersion": "0.4.0",
+                                    "pendingRef": FULL_SHA}), "0.4.0")
+
+    def test_a_tag_is_offered_whole(self):
+        # pendingRef holds a TAG on channel=release. The fallback should not
+        # reach it there, but if it ever does, "v0.11.0" must not be served
+        # as "v0.11." — the one thing worse than not abbreviating.
+        self.assertEqual(update.short_ref("v0.11.0"), "v0.11.0")
+        self.assertEqual(update.pending_version({"pendingRef": "v0.11.0"}),
+                         "v0.11.0")
+
+    def test_nothing_pending_stays_empty(self):
+        # ui_state writes pendingRef only when there is something to apply,
+        # so "no update" must survive the new fallback untouched.
+        self.assertEqual(update.pending_version({"pendingRef": ""}), "")
+        self.assertEqual(update.pending_version({"pendingRef": None}), "")
+        self.assertEqual(update.pending_version({"pendingRef": 3}), "")
+
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SWIFT_UPDATE = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
@@ -470,6 +508,9 @@ SWIFT_OPTIONS = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
                              "AppOptionsMenu.swift")
 SWIFT_POPOVER = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
                              "PopoverView.swift")
+SWIFT_BUILD = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                           "BuildInfo.swift")
+INSTALLER = os.path.join(REPO, "install", "macos-swift.sh")
 TRAY = os.path.join(REPO, "smartbar", "linux", "tray.py")
 
 
@@ -513,6 +554,73 @@ class TestBothUIsShareOneAnswer(unittest.TestCase):
         # The specific mistake this design exists to prevent.
         swift = self.source(SWIFT_UPDATE)
         self.assertNotIn("terminationStatus", swift)
+
+
+class TestTheMacOffersMainChannelUpdatesToo(unittest.TestCase):
+    """The Mac's reader must consult pendingRef, exactly as pending_version
+    does above.
+
+    A "stayed fixed" guard rather than a value comparison. The two readers
+    are separate implementations of one rule, and the Swift half is the one
+    that shipped wrong: it read pendingVersion alone, which channel=main
+    never fills, so the upgrade button (PopoverView) and the badged menu-bar
+    icon (AISmartbarApp) were both unreachable on that channel. Every colour,
+    geometry and wording test passed throughout.
+    """
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_reader_falls_back_to_the_pending_ref(self):
+        self.assertIn('raw["pendingRef"]', self.source(SWIFT_UPDATE))
+
+    def test_the_fallback_is_guarded_against_offering_the_running_build(self):
+        # Against the sha the BUNDLE was built from, not the checkout's HEAD:
+        # the checkout moves on a fetch, the bundle only on a rebuild, and it
+        # is the rebuild being offered.
+        self.assertIn("AppBuild.sha", self.source(SWIFT_UPDATE))
+
+    def test_both_sides_abbreviate_to_the_same_width(self):
+        match = re.search(r"static let abbrev = (\d+)", self.source(SWIFT_BUILD))
+        self.assertIsNotNone(match, "AppBuild.abbrev is gone")
+        self.assertEqual(int(match.group(1)), update.REF_ABBREV,
+                         "the Mac would name a different commit prefix from "
+                         "every other front-end")
+
+
+class TestTheBundleNamesTheCommitItWasBuiltFrom(unittest.TestCase):
+    """About prints the release version, which moves only when release.sh
+    cuts a tag — so on channel=main it can sit many commits behind the code
+    actually running, and did. The build sha is what tells them apart, and it
+    has to survive the trip from the installer, through Info.plist, to the
+    label: a rename at any one of the three ends leaves About silently
+    printing the version alone again."""
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_installer_stamps_the_key_the_app_reads(self):
+        match = re.search(r'static let infoKey = "([^"]+)"',
+                          self.source(SWIFT_BUILD))
+        self.assertIsNotNone(match, "AppBuild.infoKey is gone")
+        script = self.source(INSTALLER)
+        self.assertIn("<key>%s</key><string>${BUILD_SHA}</string>"
+                      % match.group(1), script)
+        self.assertIn("rev-parse HEAD", script)
+
+    def test_about_names_the_build_beside_the_version(self):
+        self.assertIn("AppBuild.suffix", self.source(SWIFT_OPTIONS))
+
+    def test_an_unknown_sha_degrades_to_the_version_alone(self):
+        # Running unbundled (`swift run`) or from a checkout without git are
+        # both normal; an empty pair of brackets after the version is not.
+        self.assertIn("short.isEmpty", self.source(SWIFT_BUILD))
 
 
 class TestMacOptionsMenu(unittest.TestCase):
