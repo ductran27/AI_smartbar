@@ -4,6 +4,7 @@ These cover the decisions that can destroy work or brick a device, so they
 are deliberately exhaustive: nothing here touches a real git repository.
 """
 import os
+import re
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -706,6 +707,65 @@ class TestTheOfferNamesAControlThatExists(unittest.TestCase):
                                   "check_outcome tells the user to pick "
                                   "“Update to X” and this surface no longer "
                                   "renders anything by that name")
+
+
+class TestTheUpdateButtonCannotSilentlyDoNothing(unittest.TestCase):
+    """installUpdate() switches the spinner on BEFORE it launches anything.
+
+    It has two launch arms — kickstart the update agent, or run the updater
+    detached from a known repoRoot — and a device with neither fell through
+    both, having already committed to "Updating…". Nothing ran, nothing could
+    report that nothing ran, and the state only cleared at the 10-minute
+    grace. A button that starts nothing has to say so.
+    """
+
+    def source(self, path):
+        if not os.path.exists(path):
+            self.skipTest(f"{path} not in this checkout")
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_spawn_helper_reports_whether_it_launched(self):
+        # Scoped to spawn's own body on purpose: runCheck() also spells
+        # `try? process.run()`, and there it is correct — that one returns
+        # [:] on failure, so the outcome is not discarded.
+        swift = self.source(SWIFT_UPDATE)
+        body = re.search(r"static func spawn\(.*?\n    \}", swift, re.DOTALL)
+        self.assertIsNotNone(body, "spawn() has been renamed or reshaped")
+        self.assertIn("-> Bool", body.group(0),
+                      "spawn() no longer reports whether the process started")
+        self.assertNotIn("try? process.run()", body.group(0),
+                         "spawn() is swallowing whether the process started; "
+                         "installUpdate() cannot tell a launch from a no-op")
+
+    def test_the_launch_result_is_actually_branched_on(self):
+        self.assertIn("if Self.startUpdater(", self.source(SWIFT_UPDATE),
+                      "installUpdate() no longer checks whether anything "
+                      "started — a click that launches nothing will pin the "
+                      "spinner for the full grace period again")
+
+    def test_the_footer_draws_what_a_failed_launch_records(self):
+        # The other half: a flag nothing renders is the same silence with
+        # more code behind it. Scoped to the footer's own body — merely
+        # appearing somewhere in the file (in showsFooter, say) is not the
+        # same as being drawn.
+        popover = self.source(SWIFT_POPOVER)
+        body = re.search(r"private var footer: some View \{(.*?)\n    \}",
+                         popover, re.DOTALL)
+        self.assertIsNotNone(body, "the footer has been renamed or reshaped")
+        self.assertIn("updates.launchError", body.group(1),
+                      "UpdateStatus records a failed launch that the popover "
+                      "never shows, so the click looks like a no-op again")
+
+    def test_a_failed_launch_is_not_hidden_behind_the_footer_gate(self):
+        popover = self.source(SWIFT_POPOVER)
+        gate = re.search(r"private var showsFooter: Bool \{(.*?)\n    \}",
+                         popover, re.DOTALL)
+        self.assertIsNotNone(gate, "showsFooter has been renamed or reshaped")
+        self.assertIn("launchError", gate.group(1),
+                      "the footer can record a launch failure and then "
+                      "decline to draw itself, which is how the message "
+                      "would never be seen")
 
 
 if __name__ == "__main__":

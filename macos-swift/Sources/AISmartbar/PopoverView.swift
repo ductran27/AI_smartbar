@@ -122,7 +122,15 @@ struct PopoverView: View {
     private var footer: some View {
         if showsFooter {
             HStack(spacing: 8) {
-                if !updates.blockedReason.isEmpty {
+                // A failed launch outranks a policy hold: it is the one the
+                // user just caused, and the only one they can retry from here.
+                if !updates.launchError.isEmpty {
+                    Label(updates.launchError,
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                } else if !updates.blockedReason.isEmpty {
                     Label("Update held", systemImage: "pause.circle")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -165,6 +173,7 @@ struct PopoverView: View {
             || !updates.pendingVersion.isEmpty
             || updates.isChecking
             || !updates.checkResult.isEmpty
+            || !updates.launchError.isEmpty
     }
 
     @ViewBuilder
