@@ -152,20 +152,6 @@ def _draw_power(ctx, glyph) -> None:  # ring open at the top, plus the stem
     ctx.stroke()
 
 
-def _draw_overview(ctx, glyph) -> None:
-    """Four rounded squares in a 2x2 grid, filled — an "everything at once"
-    mark, solid rather than stroked so it still reads at TAB_MARK's size."""
-    cell = glyph.size * 0.38
-    gap = glyph.size * 0.12
-    corner = cell * 0.3
-    for dx in (-1, 1):
-        for dy in (-1, 1):
-            x = glyph.cx + dx * (cell + gap) / 2 - cell / 2
-            y = glyph.cy + dy * (cell + gap) / 2 - cell / 2
-            rounded_rect(ctx, x, y, cell, cell, corner)
-            ctx.fill()
-
-
 # Claude's mark is a starburst: rays of uneven length radiating from a
 # solid centre, deliberately drawn off-grid rather than plotted evenly.
 # CLAUDE_REACH is each ray's length as a fraction of the glyph radius and
@@ -281,7 +267,6 @@ _GLYPH_DRAWERS = {
     "power": _draw_power,
     "quit": _draw_power,   # the header's Quit button; same shape as
                            # "power" under its own name (see t.Glyph).
-    "overview": _draw_overview,
     "claude": _draw_claude,
     "openai": _draw_openai,
     "clock": _draw_clock,
