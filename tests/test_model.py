@@ -7,6 +7,7 @@ there is no measurement at all.
 """
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from smartbar.core import model
 
@@ -289,6 +290,76 @@ class TestGeneralScopedRows(Env):
     def test_icon_rows_no_data(self):
         self.assertEqual(model.icon_rows(account(metrics=[])), [("?", "gray")])
         self.assertEqual(model.icon_rows(None), [("?", "gray")])
+
+
+class TestWindowSeconds(Env):
+    """The pace caret only ever applies to a window whose LENGTH is known —
+    a reset TIME alone (every metric has one) isn't enough."""
+
+    def test_claudes_two_buckets(self):
+        self.assertEqual(model.window_seconds("5h"), 18000.0)
+        self.assertEqual(model.window_seconds("7d"), 604800.0)
+
+    def test_a_codex_window_of_a_length_neither_provider_hardcodes(self):
+        # core/codex.py._window_key emits this exact "<n>h"/"<n>d" shape for
+        # any window_minutes it is handed, not just 5h/7d — window_seconds
+        # has to understand the general shape, not two literals.
+        self.assertEqual(model.window_seconds("3d"), 259200.0)
+        self.assertEqual(model.window_seconds("2h"), 7200.0)
+
+    def test_spend_and_scoped_have_no_stated_length(self):
+        # cswap gives a reset TIME for these but no window-size number —
+        # there is no "the Fable bucket is N days wide" anywhere in the
+        # payload, so a caret here would have to guess.
+        self.assertIsNone(model.window_seconds("spend"))
+        self.assertIsNone(model.window_seconds("scoped:Fable"))
+
+    def test_garbage_keys_are_also_none(self):
+        self.assertIsNone(model.window_seconds(""))
+        self.assertIsNone(model.window_seconds("weekly"))
+
+
+class TestPaceFraction(Env):
+    NOW = datetime(2026, 7, 24, 18, 0, tzinfo=timezone.utc)
+
+    def test_mid_window(self):
+        # A 5h (18000s) bucket resetting in 1h: 4h of the 5h have elapsed.
+        m = metric("5h", resets_at=(self.NOW + timedelta(hours=1)).isoformat())
+        self.assertAlmostEqual(model.pace_fraction(m, self.NOW), 4 / 5)
+
+    def test_just_after_the_window_opened(self):
+        m = metric("7d", resets_at=(self.NOW + timedelta(days=7, seconds=-1))
+                   .isoformat())
+        pace = model.pace_fraction(m, self.NOW)
+        self.assertGreaterEqual(pace, 0.0)
+        self.assertLess(pace, 0.001)
+
+    def test_just_before_reset(self):
+        m = metric("5h", resets_at=(self.NOW + timedelta(seconds=1)).isoformat())
+        self.assertGreater(model.pace_fraction(m, self.NOW), 0.999)
+
+    def test_past_reset_is_none_not_clamped_to_one(self):
+        # A window that has already ended has nothing left to pace against
+        # — the fill/countdown recompute from the live clock, but a caret
+        # frozen at "1.0" would be stale in a way those aren't.
+        m = metric("5h", resets_at=(self.NOW - timedelta(minutes=1)).isoformat())
+        self.assertIsNone(model.pace_fraction(m, self.NOW))
+
+    def test_missing_or_unparseable_resets_at_is_none(self):
+        self.assertIsNone(model.pace_fraction(metric("5h", resets_at=""), self.NOW))
+        self.assertIsNone(
+            model.pace_fraction(metric("5h", resets_at="junk"), self.NOW))
+
+    def test_no_window_length_is_none_even_with_a_good_resets_at(self):
+        m = metric("spend", resets_at=(self.NOW + timedelta(hours=1)).isoformat())
+        self.assertIsNone(model.pace_fraction(m, self.NOW))
+        m = metric("scoped:Fable",
+                  resets_at=(self.NOW + timedelta(hours=1)).isoformat())
+        self.assertIsNone(model.pace_fraction(m, self.NOW))
+
+    def test_defaults_to_the_real_clock_when_now_is_omitted(self):
+        soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        self.assertIsNotNone(model.pace_fraction(metric("5h", resets_at=soon)))
 
 
 class TestPaletteParity(unittest.TestCase):

@@ -131,6 +131,38 @@ struct Metric: Identifiable, Equatable {
     func liveCountdown(now: Date = Date()) -> String {
         TimeRemaining.countdown(to: resetsAt, now: now) ?? countdown
     }
+
+    /// How far through its reset window this metric is, 0...1, or nil —
+    /// mirror of model.pace_fraction. nil when metricWindowSeconds(key)
+    /// says the window has no stated length, when resetsAt is empty or
+    /// unparseable, or when the reset has already passed (nothing left to
+    /// pace against). Otherwise `1 - (time left) / (window length)`,
+    /// clamped to 0...1: 0 right after a reset, 1 right before the next
+    /// one — "how far through this window are we", independent of how
+    /// much of the budget is actually spent (that's `fraction`).
+    func paceFraction(now: Date = Date()) -> Double? {
+        guard let window = metricWindowSeconds(forKey: key) else { return nil }
+        guard let resets = TimeRemaining.parseISO(resetsAt) else { return nil }
+        let remaining = resets.timeIntervalSince(now)
+        guard remaining > 0 else { return nil }
+        return min(max(1 - remaining / window, 0), 1)
+    }
+}
+
+/// Mirror of model.window_seconds: the length of the reset window a metric
+/// KEY names, in seconds, or nil when the window has no stated length.
+/// Only "<n>h"/"<n>d" keys (Claude Code's "5h"/"7d", and whatever shape
+/// core/codex.py._window_key emits for a Codex rate-limit window — it
+/// follows this exact pattern) have one. "spend" and every "scoped:<Name>"
+/// per-model bucket carry a reset TIME (resetsAt) but no window LENGTH
+/// cswap tells us, so they get nil here rather than a guessed length
+/// paceFraction() could silently be wrong about.
+private func metricWindowSeconds(forKey key: String) -> Double? {
+    guard let range = key.range(of: #"^(\d+)[hd]$"#, options: .regularExpression)
+    else { return nil }
+    let digits = key[range.lowerBound..<key.index(before: range.upperBound)]
+    guard let amount = Double(digits) else { return nil }
+    return amount * (key.hasSuffix("d") ? 86400 : 3600)
 }
 
 struct Account: Identifiable, Equatable {

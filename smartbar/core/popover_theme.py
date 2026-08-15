@@ -28,7 +28,14 @@ CARD_PAD_V = 9.0
 CARD_PAD_H = 11.0
 CARD_HEADER_H = 20.0
 CARD_INNER_GAP = 7.0
-ROW_H = 14.0
+# A row is two stacked lines now, not one: the label/pct/countdown line,
+# then a bar that gets the card's FULL inner width instead of splitting it
+# with a label column (see popover_layout._card_body). ROW_H is their sum
+# (12 + 2 + 6 = 20), so card_height's row-counting arithmetic needs no
+# change of its own beyond this constant moving.
+ROW_LABEL_H = 12.0        # the label/pct/countdown line
+ROW_LABEL_GAP = 2.0       # gap between that line and the bar under it
+ROW_H = 20.0
 ROW_GAP = 7.0
 STATE_ROW_H = 16.0         # "Re-login required…" line on a data-less card
 STATE_LINE_H = 13.0        # extra height per wrapped line (.lineLimit(2))
@@ -40,17 +47,32 @@ CONFIRM_MAX_LINES = 2
 CONFIRM_LINE_H = 15.0
 DOT_R = 3.5                # 7pt circle
 DOT_STROKE = 1.5
+# MetricBarRow's label/pct/countdown line still has a label column and two
+# value sub-columns — only the BAR moved out from between them onto its own
+# line below (see popover_layout._card_body). LABEL_W still caps the
+# label's truncation width; VALUE_PCT_W/VALUE_COUNTDOWN_W still split the
+# value into two independently right-anchored sub-columns — percentage,
+# then countdown — instead of one right-anchored string (a single string
+# jitters sideways every time the countdown's length changes, FINDING 3).
+# Sized from real cairo metrics for the widest realistic value ("100%" /
+# " · 23h 59m"), each with a few points of margin for other platforms'
+# default mono fonts.
 LABEL_W = 40.0             # MetricBarRow label column
-# MetricBarRow value column, split into two independently right-anchored
-# sub-columns — percentage, then countdown — instead of one right-anchored
-# string (see popover_layout._card_body: a single string jitters sideways
-# every time the countdown's length changes). Sized from real cairo
-# metrics for the widest realistic value ("100%" / " · 23h 59m"), each
-# with a few points of margin for other platforms' default mono fonts.
 VALUE_PCT_W = 28.0
 VALUE_COUNTDOWN_W = 66.0
 BAR_H = 6.0
-BAR_GAP = 9.0              # HStack(spacing: 9)
+# Gap between the label and the value area on the label line — the bar on
+# the line below it has no such gap; it spans the card's full inner width.
+BAR_GAP = 9.0              # Spacer(minLength: 9) in MetricBarRow's label line
+# The pace caret marks "how far through this window are we" independently
+# of the fill, which marks "how much is spent" — two different questions a
+# single bar cannot answer. It stays a neutral hairline rather than joining
+# the status ramp so it never competes with the fill for the user's first
+# glance: the fill says "how worried should I be", the caret says "am I
+# roughly on schedule for that", and conflating their colors would blur
+# both answers into a bar even a burn-rate expert can't parse at a glance.
+PACE_W = 1.5
+PACE = (1.0, 1.0, 1.0, 0.38)
 BUTTON_H = 18.0
 TAB_H = 20.0               # provider tab row (Claude | OpenAI), when shown
 TAB_GAP = 6.0              # gap between the two tab pills

@@ -323,22 +323,14 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
                               max_width=inner_r - inner_l, max_lines=lines))
         return
 
-    bar_l = inner_l + t.LABEL_W + t.BAR_GAP
-    value_w = t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W
-    bar_w = inner_r - value_w - t.BAR_GAP - bar_l
+    bar_l, bar_w = inner_l, inner_r - inner_l
     pct_r = inner_r - t.VALUE_COUNTDOWN_W
     for index, metric in enumerate(account.metrics):
-        cy = body_top + index * (t.ROW_H + t.ROW_GAP) + t.ROW_H / 2
-        shapes.append(t.Label(inner_l, cy, metric.label, size=t.SIZE_ROW_LABEL,
-                              bold=True, color=t.TEXT, max_width=t.LABEL_W))
-        shapes.append(t.Box(bar_l, cy - t.BAR_H / 2, bar_w, t.BAR_H,
-                            radius=t.BAR_H / 2, fill=t.BAR_TRACK))
-        fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
-        if fraction > 0:
-            shapes.append(t.Box(bar_l, cy - t.BAR_H / 2,
-                                max(6.0, bar_w * fraction), t.BAR_H,
-                                radius=t.BAR_H / 2,
-                                fill=t.status_rgba(model.color(metric.pct))))
+        row_top = body_top + index * (t.ROW_H + t.ROW_GAP)
+        label_cy = row_top + t.ROW_LABEL_H / 2
+        shapes.append(t.Label(inner_l, label_cy, metric.label,
+                              size=t.SIZE_ROW_LABEL, bold=True, color=t.TEXT,
+                              max_width=t.LABEL_W))
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
@@ -348,13 +340,37 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
         # a single string makes the percentage slide sideways every time
         # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
         # exactly what FINDING 3 measured (a 19pt swing on the "·").
-        shapes.append(t.Label(pct_r, cy, f"{round(metric.pct)}%",
+        shapes.append(t.Label(pct_r, label_cy, f"{round(metric.pct)}%",
                               size=t.SIZE_ROW_VALUE, mono=True,
                               anchor="right", color=color))
         if countdown:
-            shapes.append(t.Label(inner_r, cy, f" · {countdown}",
+            # The leading " · " is gone: the countdown is about to gain a
+            # clock glyph of its own (stage 04) in the space that space
+            # reserves, and "· 🕐 2h 5m" would double up the separator.
+            shapes.append(t.Label(inner_r, label_cy, f" {countdown}",
                                   size=t.SIZE_ROW_VALUE, mono=True,
                                   anchor="right", color=color))
+
+        bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
+        shapes.append(t.Box(bar_l, bar_top, bar_w, t.BAR_H,
+                            radius=t.BAR_H / 2, fill=t.BAR_TRACK))
+        fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
+        if fraction > 0:
+            shapes.append(t.Box(bar_l, bar_top, max(6.0, bar_w * fraction),
+                                t.BAR_H, radius=t.BAR_H / 2,
+                                fill=t.status_rgba(model.color(metric.pct))))
+        # The caret marks how far through the reset window "now" sits,
+        # independent of how much is spent — see PACE's own comment for why
+        # that has to be a second mark rather than a second color on the
+        # fill. None (no stated window length, unparseable/expired
+        # resets_at) means no caret at all rather than a guessed one.
+        pace = model.pace_fraction(metric, now)
+        if pace is not None:
+            half = t.PACE_W / 2
+            center = min(max(bar_l + bar_w * pace, bar_l + half),
+                        bar_l + bar_w - half)
+            shapes.append(t.Box(center - half, bar_top, t.PACE_W, t.BAR_H,
+                                radius=0.0, fill=t.PACE))
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",

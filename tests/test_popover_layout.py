@@ -217,14 +217,16 @@ class TestCardContent(unittest.TestCase):
         # see test_percent_position_is_stable_across_countdown_lengths for
         # why keeping them apart matters.
         self.assertIn("79%", labels(built))
-        self.assertIn(" · 2h 5m", labels(built))
+        # No " · " separator any more (stage 02): the space is reserved for
+        # stage 04's clock glyph instead.
+        self.assertIn(" 2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
         self.assertIn("5%", labels(built))
-        self.assertIn(" · 3h 1m", labels(built))
+        self.assertIn(" 3h 1m", labels(built))
 
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
@@ -249,6 +251,38 @@ class TestCardContent(unittest.TestCase):
         # string needs; the two-column layout reserves less, in total, so
         # the bar itself gets wider.
         self.assertLess(t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W, 104.0)
+
+    def test_the_bar_spans_the_cards_full_inner_width(self):
+        # Stage 02: the bar moved to its own line and no longer shares the
+        # row with a label column or the value sub-columns — it now runs
+        # edge to edge of the card's inner width, not inner_l + LABEL_W +
+        # BAR_GAP .. inner_r - VALUE_PCT_W - VALUE_COUNTDOWN_W - BAR_GAP.
+        built = layout.build(snap(account()), now=NOW)
+        track, _fill = bars(built)
+        inner_l = t.PAD + t.CARD_PAD_H
+        inner_r = t.WIDTH - t.PAD - t.CARD_PAD_H
+        self.assertAlmostEqual(track.x, inner_l)
+        self.assertAlmostEqual(track.w, inner_r - inner_l)
+
+    def test_a_caret_marks_pace_for_a_metric_with_a_known_window(self):
+        resets = (NOW + timedelta(hours=1)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(key="7d", resets_at=resets)])),
+            now=NOW)
+        carets = [b for b in boxes(built) if b.fill == t.PACE]
+        self.assertEqual(len(carets), 1)
+        self.assertAlmostEqual(carets[0].w, t.PACE_W)
+        self.assertAlmostEqual(carets[0].h, t.BAR_H)
+
+    def test_no_caret_for_a_window_with_no_stated_length(self):
+        # "spend" carries a reset TIME (same as 5h/7d) but no window-size
+        # number, so it must draw no caret at all rather than a guessed one
+        # — see model.window_seconds's docstring.
+        resets = (NOW + timedelta(hours=1)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(key="spend", resets_at=resets)])),
+            now=NOW)
+        self.assertFalse(any(b.fill == t.PACE for b in boxes(built)))
 
     def test_bar_fill_is_proportional_and_clamped(self):
         for pct, expect_full in ((50.0, False), (100.0, True), (140.0, True)):

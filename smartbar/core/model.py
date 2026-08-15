@@ -13,7 +13,11 @@ exhausted at 100%. Gray is NOT part of that ramp: it means no measurement.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from smartbar.core.reset_countdown_format import parse_iso
 
 DEFAULT_YELLOW_USED = 50.0
 DEFAULT_LOW_USED = 75.0
@@ -170,6 +174,56 @@ def color(pct: float) -> str:
     if used >= yellow_threshold():
         return "yellow"
     return "green"
+
+
+# "<n>h" / "<n>d" — cswap's own 5h/7d buckets and every window key
+# core/codex.py._window_key can emit (it derives the very same shape from
+# window_minutes, not just the two literals Claude Code happens to use), so
+# one regex covers both providers instead of a table that would drift the
+# moment Codex reports a window neither of us hardcoded.
+_WINDOW_KEY = re.compile(r"(\d+)([hd])")
+
+
+def window_seconds(key: str) -> float | None:
+    """Length of the reset window a metric KEY names, in seconds, or None.
+
+    Only "<n>h"/"<n>d" keys (Claude Code's "5h"/"7d", and whatever shape
+    core/codex.py._window_key emits for a Codex rate-limit window — it
+    follows this exact pattern) have a stated length. "spend" and every
+    "scoped:<Name>" per-model bucket carry a reset TIME (resets_at) but no
+    window LENGTH cswap tells us — there is no "the Fable bucket is N days
+    wide" number anywhere in the payload — so they get None here rather
+    than a guessed length pace_fraction() could silently be wrong about.
+    """
+    match = _WINDOW_KEY.fullmatch(key)
+    if not match:
+        return None
+    amount, unit = match.groups()
+    return float(amount) * (86400.0 if unit == "d" else 3600.0)
+
+
+def pace_fraction(metric, now=None) -> float | None:
+    """How far through its reset window `metric` is, 0..1, or None.
+
+    None when window_seconds(metric.key) says the window has no stated
+    length, when metric.resets_at is empty or unparseable, or when the
+    reset has already passed (a window that's already over has nothing left
+    to pace against). Otherwise `1 - (time left) / (window length)`, clamped
+    to 0..1 — 0 right after a reset, 1 right before the next one, so the
+    caret reads as "how far through this window are we", independent of how
+    much of the budget is actually spent (that's the fill).
+    """
+    window = window_seconds(metric.key)
+    if window is None:
+        return None
+    resets = parse_iso(metric.resets_at)
+    if resets is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    remaining = (resets - now).total_seconds()
+    if remaining <= 0:
+        return None
+    return min(max(1.0 - remaining / window, 0.0), 1.0)
 
 
 def general_worst(account):
