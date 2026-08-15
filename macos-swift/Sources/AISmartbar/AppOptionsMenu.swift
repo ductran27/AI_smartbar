@@ -21,7 +21,11 @@ struct AppOptionsMenu: View {
             Button {
                 showAboutPanel()
             } label: {
-                Label("About AI smartbar · v\(updates.currentVersion)",
+                // Version AND build: on channel=main the version names the
+                // last release, which can be many commits behind the code
+                // actually running. See BuildInfo.swift.
+                Label("About AI smartbar · v\(updates.currentVersion)"
+                      + AppBuild.suffix,
                       systemImage: "info.circle")
             }
 

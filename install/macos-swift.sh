@@ -14,6 +14,13 @@ PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.plist"
 VERSION="$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' "$REPO/smartbar/__init__.py")"
 VERSION="${VERSION:-0.0.0}"
 
+# The commit this bundle is being built FROM. The version above only moves on
+# a release, so on a channel=main device it cannot say which code is inside —
+# see macos-swift/Sources/AISmartbar/BuildInfo.swift. Empty is a supported
+# answer (no git, or a checkout exported without one); the app then names the
+# version alone.
+BUILD_SHA="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+
 AUTO_UPDATE=1
 CHANNEL_ARG=()
 while [[ $# -gt 0 ]]; do
@@ -63,6 +70,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key><string>AISmartbar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+  <key>SMARTBARBuildSHA</key><string>${BUILD_SHA}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
 </dict>
