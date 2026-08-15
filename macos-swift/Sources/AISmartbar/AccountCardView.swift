@@ -1,7 +1,8 @@
 // One card per Claude account: status dot, email, ACTIVE chip or switch
 // button, and one horizontal filling bar per metric (5h / 7d / per-model).
-// The active card wears a white outline (dark-only design). Accounts whose
-// stored credential is dead say so and cannot be switched to.
+// Every card wears the same quiet hairline; the active one is told apart by
+// a leading rail instead of a loud outline (dark-only design). Accounts
+// whose stored credential is dead say so and cannot be switched to.
 import SwiftUI
 
 struct AccountCardView: View {
@@ -31,39 +32,33 @@ struct AccountCardView: View {
             : (presence.counts[account.email] ?? 0)
     }
 
-    /// "a@b.com · 20x (2)" — one string, three segments; the plan segment
-    /// is dimmed. MUST stay in step with model.account_label (pinned by
-    /// TestPlanParity in tests/test_plan.py). An OpenAI card's badge comes
-    /// with its account payload; the Claude badge from the plans helper.
-    private var headerText: Text {
-        var text = Text(account.email)
-        let plan = accountPlan
-        if !plan.isEmpty {
-            text = text + Text(" \u{00B7} \(plan)").foregroundColor(.secondary)
-        }
-        if devices > 0 {
-            text = text + Text(" (\(devices))")
-        }
-        return text
-    }
-
     private var accountPlan: String {
         account.provider == "openai"
             ? account.plan
             : (planStatus.plans[account.email] ?? "")
     }
 
-    /// Plain-string twin of headerText — model.account_label(account) as a
-    /// single String rather than a colored Text, for spots (the remove
-    /// confirmation) where the shared layout draws it as one plain label
-    /// instead of three styled segments. MUST stay in step with
-    /// model.account_label the same way headerText does.
-    private var accountLabel: String {
-        var label = account.email
+    /// "20x (2)", "Pro", "(2)", or "" — the plan/device suffix alone, drawn
+    /// as its own micro-chip (planBadge) rather than riding inside the
+    /// header string. Composed the same way model.account_badge is, so
+    /// Swift's chip and Python's chip can never disagree (pinned by
+    /// tests/test_account_card_parity.py).
+    private var accountBadge: String {
         let plan = accountPlan
-        if !plan.isEmpty { label += " \u{00B7} \(plan)" }
-        if devices > 0 { label += " (\(devices))" }
-        return label
+        guard devices > 0 else { return plan }
+        return plan.isEmpty ? "(\(devices))" : "\(plan) (\(devices))"
+    }
+
+    /// "a@b.com · 20x (2)" — model.account_label(account) as a plain
+    /// String, for the one spot (the remove confirmation) that still wants
+    /// the full identity as one un-chipped line. Composed from
+    /// accountBadge, the same way model.account_label composes from
+    /// account_address/account_badge, so the two can never drift apart.
+    private var accountLabel: String {
+        let badge = accountBadge
+        guard !badge.isEmpty else { return account.email }
+        let separator = badge.hasPrefix("(") ? " " : " \u{00B7} "
+        return "\(account.email)\(separator)\(badge)"
     }
 
     /// OpenAI cards say when their numbers were measured (they move only
@@ -118,23 +113,36 @@ struct AccountCardView: View {
                 .fill(.thinMaterial)
         )
         .overlay(
+            // Every card gets the same quiet hairline now — the active one
+            // used to wear a 1.5pt pure-white outline instead, the loudest
+            // mark on the panel for information the ACTIVE chip already
+            // carries. CARD_BORDER in the shared theme.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(account.active
-                              ? Color.white.opacity(0.92)
-                              : Color.white.opacity(0.07),
-                              lineWidth: account.active ? 1.5 : 1)
+                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
         )
+        .overlay(alignment: .leading) {
+            if account.active {
+                // The rail replaces the outline as the active mark: a
+                // quiet ink line rather than a colour, because colour on
+                // this panel is reserved for how much budget is left —
+                // see RAIL's comment in the shared theme. RAIL_W/
+                // RAIL_INSET/RAIL there.
+                RoundedRectangle(cornerRadius: 1.25, style: .continuous)
+                    .fill(Palette.chalk)
+                    .frame(width: 2.5)
+                    .padding(.vertical, 3)
+            }
+        }
         .onHover { hovering = $0 }
     }
 
     private var cardHeader: some View {
         HStack(spacing: 7) {
             statusDot
-            // "a@b.com · 20x (2)" — the plan badge and how many devices
-            // are on this account right now, so a quota burning twice as
-            // fast has a visible cause. Middle truncation keeps the
-            // badges even on a long address.
-            headerText
+            // Just the address now — the plan/device badge moved into its
+            // own micro-chip (planBadge, below) so this line never has to
+            // make room for it.
+            Text(account.email)
                 .font(.callout.weight(.semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -146,7 +154,7 @@ struct AccountCardView: View {
             // login would just be re-registered, so it never offers
             // removal. Its 18pt WIDTH, though, is reserved unconditionally
             // whenever the card is removable, not only while hovering:
-            // reserving it only on hover let headerText expand into that
+            // reserving it only on hover let the header expand into that
             // space when idle, then re-truncate the instant the pointer
             // arrived (the shared layout's FINDING 4, popover_layout._card).
             if !account.active {
@@ -162,6 +170,9 @@ struct AccountCardView: View {
                 .disabled(!hovering)
                 .help("Remove \(account.email) from AI smartbar")
                 .accessibilityLabel("Remove \(account.email)")
+            }
+            if !accountBadge.isEmpty {
+                planBadge
             }
             if account.active {
                 Text("ACTIVE")
@@ -228,6 +239,19 @@ struct AccountCardView: View {
         } else {
             store.removeAccount(account.number)
         }
+    }
+
+    /// Sits immediately left of the ACTIVE chip / Make Active button — a
+    /// fact about the account, not something to press, so it gets the same
+    /// neutral fill as a disabled control (BUTTON_DISABLED/CHIP_H/
+    /// SIZE_CHIP in the shared theme) rather than an accent.
+    private var planBadge: some View {
+        Text(accountBadge)
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.white.opacity(0.05)))
     }
 
     /// Solid = a real reading (purple when a limit is spent). Hollow gray =

@@ -348,27 +348,52 @@ def metrics_text(account) -> str:
     return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
 
 
+def account_address(account) -> str:
+    """The bare email, with no plan badge or device count riding on it."""
+    return account.email
+
+
+def account_badge(account) -> str:
+    """The plan/device suffix alone: "20x (2)", "Pro", "(2)", or "" when
+    there is nothing to say.
+
+    A count of 0 contributes nothing: an absent badge reads as "nobody is
+    on it", whereas "(0)" on four idle cards is noise that also lies
+    whenever the other devices simply could not be reached — see
+    core/presence.py. An empty plan likewise contributes nothing (unknown
+    tier, managed API-key account, or SMARTBAR_PLANS=off — see
+    core/plan.py). account_label composes this with account_address, so
+    the two representations can never drift apart.
+    """
+    badge = getattr(account, "plan", "") or ""
+    count = getattr(account, "devices", 0) or 0
+    if count > 0:
+        badge = f"{badge} ({count})" if badge else f"({count})"
+    return badge
+
+
 def account_label(account) -> str:
     """The address, plan badge, and device count: "a@b.com · 20x (2)".
 
     Every UI names an account through here so the badges appear in all of
     them at once (mirrored by the Swift card header — pinned by
-    TestPlanParity). A count of 0 prints nothing: an absent badge reads as
-    "nobody is on it", whereas "(0)" on four idle cards is noise that also
-    lies whenever the other devices simply could not be reached — see
-    core/presence.py. An empty plan likewise prints nothing (unknown tier,
-    managed API-key account, or SMARTBAR_PLANS=off — see core/plan.py).
+    TestPlanParity). Composed from account_address()/account_badge() rather
+    than repeating their logic, so the three can never say different things
+    about the same account.
 
     Appending rather than prefixing is deliberate: both the cairo painter
     and SwiftUI truncate a long address in the MIDDLE, so the badges
-    survive even on a card too narrow to show the address itself.
+    survive even on a card too narrow to show the address itself. A badge
+    that is only a device count ("(2)") sits directly after the address —
+    no " · ", because there is no plan word for the dot to separate it
+    from; a badge that starts with a plan word gets the " · ".
     """
-    label = account.email
-    badge = getattr(account, "plan", "") or ""
-    if badge:
-        label = f"{label} · {badge}"
-    count = getattr(account, "devices", 0) or 0
-    return f"{label} ({count})" if count > 0 else label
+    address = account_address(account)
+    badge = account_badge(account)
+    if not badge:
+        return address
+    separator = " " if badge.startswith("(") else " · "
+    return f"{address}{separator}{badge}"
 
 
 def title_line(account) -> str:

@@ -393,6 +393,71 @@ class TestPaletteParity(unittest.TestCase):
             self.assertNotEqual(model.DOT["full"], model.DOT[other], other)
 
 
+def _badge_account(email="a@x.com", plan="", devices=0):
+    acct = account(email=email)
+    acct.plan = plan
+    acct.devices = devices
+    return acct
+
+
+class TestAccountAddress(Env):
+    def test_returns_the_bare_email_regardless_of_plan_or_devices(self):
+        acct = _badge_account(plan="20x", devices=2)
+        self.assertEqual(model.account_address(acct), "a@x.com")
+
+
+class TestAccountBadge(Env):
+    def test_neither_plan_nor_devices_is_empty(self):
+        self.assertEqual(model.account_badge(_badge_account()), "")
+
+    def test_plan_only(self):
+        self.assertEqual(model.account_badge(_badge_account(plan="Pro")),
+                         "Pro")
+
+    def test_devices_only(self):
+        self.assertEqual(model.account_badge(_badge_account(devices=2)),
+                         "(2)")
+
+    def test_plan_and_devices(self):
+        self.assertEqual(
+            model.account_badge(_badge_account(plan="20x", devices=2)),
+            "20x (2)")
+
+    def test_a_zero_device_count_contributes_nothing(self):
+        # 0 means "nobody is on it", not "(0)" — same convention as the
+        # old account_label (see core/presence.py).
+        self.assertEqual(
+            model.account_badge(_badge_account(plan="Pro", devices=0)),
+            "Pro")
+
+
+class TestAccountLabelComposition(Env):
+    """account_label must equal account_address()+account_badge() composed
+    the documented way, for every combination — pinned separately from
+    TestAccountBadge so a refactor that lets the two drift apart is caught
+    even if each helper is individually correct."""
+
+    def _check(self, acct):
+        address = model.account_address(acct)
+        badge = model.account_badge(acct)
+        composed = address if not badge else (
+            f"{address} {badge}" if badge.startswith("(")
+            else f"{address} · {badge}")
+        self.assertEqual(model.account_label(acct), composed)
+
+    def test_plan_only(self):
+        self._check(_badge_account(plan="20x"))
+
+    def test_devices_only(self):
+        self._check(_badge_account(devices=3))
+
+    def test_plan_and_devices(self):
+        self._check(_badge_account(plan="20x", devices=2))
+
+    def test_neither(self):
+        self._check(_badge_account())
+
+
 class TestProviderModel(unittest.TestCase):
     def test_provider_defaults_keep_every_existing_constructor_working(self):
         self.assertEqual(account().provider, "claude")

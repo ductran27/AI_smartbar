@@ -28,6 +28,9 @@ CARD_PAD_V = 9.0
 CARD_PAD_H = 11.0
 CARD_HEADER_H = 20.0
 CARD_INNER_GAP = 7.0
+RAIL_W = 2.5                # active-card leading rail width
+RAIL_INSET = 3.0            # vertical inset so the rail reads as a mark,
+                            # not a second border
 # A row is two stacked lines now, not one: the label/pct/countdown line,
 # then a bar that gets the card's FULL inner width instead of splitting it
 # with a label column (see popover_layout._card_body). ROW_H is their sum
@@ -117,12 +120,18 @@ SIZE_ICON = 12.5
 # compositing instead of washing out over whatever sits behind the popover.
 WINDOW_BG = (0.059, 0.071, 0.086, 1.0)
 CARD_BG = (0.090, 0.110, 0.133, 1.0)
-CARD_BORDER = (1.0, 1.0, 1.0, 0.07)
-CARD_BORDER_ACTIVE = (1.0, 1.0, 1.0, 0.92)
+CARD_BORDER = (1.0, 1.0, 1.0, 0.06)        # hairline, same on every card now
 TEXT = (0.914, 0.929, 0.949, 1.0)          # "chalk"
 TEXT_SECONDARY = (0.596, 0.639, 0.690, 1.0)  # "mist"
 TEXT_TERTIARY = (0.361, 0.400, 0.447, 1.0)   # "dim"
 TEXT_SPENT = (0.725, 0.757, 0.796, 1.0)    # MetricBarRow's 100% row
+# The active card used to be told apart by a 1.5pt pure-white border — the
+# loudest mark on the panel, spent on information the ACTIVE chip already
+# carries. A leading rail replaces it, and the rail borrows TEXT rather than
+# joining the status ramp: colour on this panel is reserved for how much
+# budget is left, and tinting "this is the active account" would make it
+# compete with that signal instead of just marking presence.
+RAIL = TEXT
 BAR_TRACK = (1.0, 1.0, 1.0, 0.09)
 BUTTON_BG = (1.0, 1.0, 1.0, 0.12)
 BUTTON_BG_HOVER = (1.0, 1.0, 1.0, 0.20)
