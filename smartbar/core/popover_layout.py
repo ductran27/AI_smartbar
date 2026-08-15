@@ -195,6 +195,129 @@ def _button(shapes, hits, name, right, cy, text, *, enabled=True,
     return x
 
 
+def _bar(shapes, x, y, w, metric, now):
+    """Track + proportional fill + pace caret for one metric, at a given
+    x/y/width — factored out of _card_body so a second, narrower use (the
+    Overview tab's compact per-account row, see _overview_card) draws the
+    exact same caret maths rather than a second near-copy of it. Output is
+    unchanged from before this was split out: same boxes, same order."""
+    shapes.append(t.Box(x, y, w, t.BAR_H, radius=t.BAR_H / 2,
+                        fill=t.BAR_TRACK))
+    fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
+    if fraction > 0:
+        shapes.append(t.Box(x, y, max(6.0, w * fraction), t.BAR_H,
+                            radius=t.BAR_H / 2,
+                            fill=t.status_rgba(model.color(metric.pct))))
+    # See PACE's own comment (popover_theme.py) for why "how far through the
+    # window" has to be a second mark rather than a second color on the fill.
+    pace = model.pace_fraction(metric, now)
+    if pace is not None:
+        half = t.PACE_W / 2
+        center = min(max(x + w * pace, x + half), x + w - half)
+        shapes.append(t.Box(center - half, y, t.PACE_W, t.BAR_H,
+                            radius=0.0, fill=t.PACE))
+
+
+def _overview_row_key(account):
+    """Sort key for _overview_card's rows: most headroom first, then
+    accounts with no usable data last (see model.worst's None-without-data
+    contract) — (0, pct) always sorts before (1, 0.0)."""
+    metric = model.worst(account)
+    return (0, metric.pct) if metric is not None else (1, 0.0)
+
+
+def overview_height(snapshot) -> float:
+    """Height of the Overview tab's single card: the lead line plus one
+    compact row per account across BOTH providers. Kept alongside
+    card_height() so the panel height stays computable without building —
+    see build()'s `selected == "overview"` branch, which renders exactly
+    this many rows via _overview_card().
+    """
+    accounts = list(snapshot.accounts) if snapshot is not None else []
+    openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
+    count = len(accounts) + len(openai)
+    body = (count * t.OVERVIEW_ROW_H + max(count - 1, 0) * t.OVERVIEW_ROW_GAP
+            if count else 0.0)
+    return t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + body
+
+
+def _overview_card(shapes, snapshot, top, now):
+    """The Overview tab's one card: a lead line naming the account with the
+    most headroom (model.best_switch — Claude-only, since a switch can only
+    ever target a Claude slot), then one row per account, both providers
+    merged into a single list ranked by how much headroom each has left.
+
+    Rows are read-only in this stage — no switch/remove hits, on purpose
+    (the stage-05 brief). A row's bar+caret is drawn by the SAME `_bar`
+    helper _card_body's metric rows use, just narrower, so the pace maths
+    can't drift between the two call sites.
+    """
+    accounts = list(snapshot.accounts)
+    openai = list(getattr(snapshot, "openai", []) or [])
+    rows = sorted(accounts + openai, key=_overview_row_key)
+
+    height = overview_height(snapshot)
+    left, right = t.PAD, t.WIDTH - t.PAD
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=t.CARD_BG, stroke=t.CARD_BORDER, line_width=1.0))
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+
+    lead_cy = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H / 2
+    suggestion = model.best_switch(snapshot)
+    if suggestion is not None:
+        w = model.worst(suggestion)
+        lead = (f"Most headroom: {model.account_address(suggestion)} — "
+                f"{round(w.pct)}% used")
+    else:
+        # True whether there are simply no other Claude accounts to offer,
+        # or every one of them is blocked/data-less/active — best_switch
+        # collapses those cases on purpose (see its own docstring), and
+        # "no spare headroom" is honest about all of them without claiming
+        # to know which.
+        lead = "No account has spare headroom"
+    shapes.append(t.Label(inner_l, lead_cy, lead, size=t.SIZE_EMAIL, bold=True,
+                          color=t.TEXT, max_width=inner_r - inner_l))
+
+    body_top = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP
+    pct_r = inner_r
+    bar_r = inner_r - t.OVERVIEW_PCT_W - t.OVERVIEW_GAP
+    bar_l = bar_r - t.OVERVIEW_BAR_W
+    for index, account in enumerate(rows):
+        row_top = body_top + index * (t.OVERVIEW_ROW_H + t.OVERVIEW_ROW_GAP)
+        row_cy = row_top + t.OVERVIEW_ROW_H / 2
+        provider = getattr(account, "provider", "claude") or "claude"
+        mark_cx = inner_l + t.OVERVIEW_MARK_W / 2
+        shapes.append(t.Glyph(provider, mark_cx, row_cy, t.OVERVIEW_MARK_W,
+                              t.TEXT_TERTIARY))
+        dot_cx = inner_l + t.OVERVIEW_MARK_W + t.OVERVIEW_GAP + t.DOT_R
+        shapes.append(t.Dot(dot_cx, row_cy, t.DOT_R,
+                            t.status_rgba(model.dot_color(account)),
+                            hollow=model.dot_style(account) == "hollow"))
+        address_x = dot_cx + t.DOT_R + t.OVERVIEW_GAP
+        shapes.append(t.Label(address_x, row_cy, model.account_address(account),
+                              size=t.SIZE_CAPTION, color=t.TEXT,
+                              max_width=bar_l - t.OVERVIEW_GAP - address_x))
+        metric = model.worst(account)
+        if metric is None:
+            blocked = model.switch_blocked(account)
+            color = t.WARNING if blocked else t.TEXT_SECONDARY
+            shapes.append(t.Label(bar_l, row_cy,
+                                  model.state_text(account) or "No usage data",
+                                  size=t.SIZE_CAPTION, color=color,
+                                  max_width=bar_r - bar_l))
+            shapes.append(t.Label(pct_r, row_cy, "—", size=t.SIZE_ROW_VALUE,
+                                  mono=True, anchor="right",
+                                  color=t.TEXT_TERTIARY))
+        else:
+            _bar(shapes, bar_l, row_cy - t.BAR_H / 2, t.OVERVIEW_BAR_W,
+                metric, now)
+            color = t.TEXT_SPENT if metric.pct >= 100 else (1, 1, 1, 0.8)
+            shapes.append(t.Label(pct_r, row_cy, f"{round(metric.pct)}%",
+                                  size=t.SIZE_ROW_VALUE, mono=True,
+                                  anchor="right", color=color))
+    return height
+
+
 def _card(shapes, hits, account, top, now, hover, confirm=""):
     """One account card: dot, email, ACTIVE chip or Make Active, metric rows.
 
@@ -407,25 +530,7 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
                                   t.COUNTDOWN_ICON, color))
 
         bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
-        shapes.append(t.Box(bar_l, bar_top, bar_w, t.BAR_H,
-                            radius=t.BAR_H / 2, fill=t.BAR_TRACK))
-        fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
-        if fraction > 0:
-            shapes.append(t.Box(bar_l, bar_top, max(6.0, bar_w * fraction),
-                                t.BAR_H, radius=t.BAR_H / 2,
-                                fill=t.status_rgba(model.color(metric.pct))))
-        # The caret marks how far through the reset window "now" sits,
-        # independent of how much is spent — see PACE's own comment for why
-        # that has to be a second mark rather than a second color on the
-        # fill. None (no stated window length, unparseable/expired
-        # resets_at) means no caret at all rather than a guessed one.
-        pace = model.pace_fraction(metric, now)
-        if pace is not None:
-            half = t.PACE_W / 2
-            center = min(max(bar_l + bar_w * pace, bar_l + half),
-                        bar_l + bar_w - half)
-            shapes.append(t.Box(center - half, bar_top, t.PACE_W, t.BAR_H,
-                                radius=0.0, fill=t.PACE))
+        _bar(shapes, bar_l, bar_top, bar_w, metric, now)
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
@@ -434,10 +539,20 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
           stale_reason="") -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
-    `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
-    to Claude when it has accounts, else OpenAI. The tab row itself exists
-    only when BOTH providers have accounts — a single-provider machine gets
-    exactly the layout it always had.
+    `provider` selects the visible tab ("claude"/"openai"/"overview"); ""
+    auto-resolves to Claude when it has accounts, else OpenAI — exactly the
+    resolution this always did, UNCHANGED by Overview's arrival. Overview is
+    opt-in only, reachable by an explicit "overview", never the auto-resolved
+    default: a returning user must not find their panel rearranged out from
+    under them by an update they didn't ask for.
+
+    The tab row itself now appears whenever there is MORE THAN ONE account in
+    total, across both providers — not, as before, only when both providers
+    have at least one — with `tab:overview` always first, followed by
+    whichever of Claude/OpenAI actually has accounts. A single-provider
+    machine with several accounts therefore now gets a two-tab row (Overview
+    + its one provider) where it previously got no tab row at all; a machine
+    with exactly one account total still gets none, same as before.
 
     `confirm` names the card whose removal awaits confirmation
     ("<provider>:<id>", the suffix of its "remove:" hit); that card's
@@ -510,14 +625,23 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     accounts = list(snapshot.accounts) if snapshot is not None else []
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
     selected = provider or ("openai" if openai and not accounts else "claude")
-    if accounts and openai:
+    if len(accounts) + len(openai) > 1:
         # The tab row is part of the header block, not a section of its
         # own, so it sits TAB_TOP_GAP under the title instead of a full
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
-        for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
+        # Overview is always offered once there is more than one account to
+        # summarise; a provider only gets its own pill when it actually has
+        # accounts to show under it — an empty provider tab would be a
+        # button to a blank list.
+        tabs = [("overview", "Overview")]
+        if accounts:
+            tabs.append(("claude", "Claude"))
+        if openai:
+            tabs.append(("openai", "OpenAI"))
+        for name, text in tabs:
             current = name == selected
             label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
             width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
@@ -568,7 +692,11 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                           err_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
                           t.REMOVE_HIT, tooltip="Dismiss"))
         cursor += block_h + t.CARD_GAP
-    cards = accounts if selected == "claude" else openai
+    # No account cards on the Overview tab (it draws its own single
+    # summary card below); `cards` empty there makes the ordinary per-card
+    # loop that follows a no-op without a separate guard on it.
+    cards = [] if selected == "overview" else (
+        accounts if selected == "claude" else openai)
     if snapshot is None:
         text_ = error or "Loading usage…"
         lines = _lines_for_width(text_, right - t.PAD)
@@ -591,6 +719,8 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                               size=t.SIZE_CAPTION, color=t.TEXT_SECONDARY,
                               max_width=right - t.PAD, max_lines=lines))
         cursor += block_h + t.CARD_GAP
+    elif selected == "overview":
+        cursor += _overview_card(shapes, snapshot, cursor, now)
     for account in cards:
         cursor += _card(shapes, hits, account, cursor, now, hover,
                         confirm) + t.CARD_GAP

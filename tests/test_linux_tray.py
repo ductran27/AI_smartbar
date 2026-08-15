@@ -247,6 +247,35 @@ class TestDismissErrorHit(GuiStubbedTestCase):
         tray.popover.refresh_layout.assert_called_once()
 
 
+class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
+    """A "tab:..." hit must update self.provider, and the very next popover
+    layout must be built with that provider -- mirroring linux/tray.py's
+    _popover_layout's `provider=self.provider` passthrough (see
+    tests/test_windows_tray.py's twin of this class). Proven by mutation: a
+    dispatcher that recognises "tab:" but forgets to write self.provider
+    would pass every hit-name-recognition test above while leaving the panel
+    permanently stuck on whichever provider auto-resolves first.
+    """
+
+    def test_overview_tab_hit_sets_provider_and_next_layout_uses_it(self):
+        # Stage 05's new first tab: "tab:overview" is just another `name.
+        # startswith("tab:")` hit as far as this dispatcher is concerned --
+        # nothing here special-cases it to exactly "claude"/"openai", and
+        # this pins that a third value keeps flowing through untouched.
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+
+        mod.Tray._on_popover_action(tray, "tab:overview")
+        self.assertEqual(tray.provider, "overview")
+
+        # The next layout build must carry the provider just set above --
+        # this is what actually makes the click switch panel tabs.
+        with mock.patch.object(mod.popover_layout, "build") as fake_build:
+            mod.Tray._popover_layout(tray, hover="quit")
+        _args, kwargs = fake_build.call_args
+        self.assertEqual(kwargs.get("provider"), "overview")
+
+
 class TestOptimisticFlip(GuiStubbedTestCase):
     """UsageStore.switchTo's optimistic-flip block: the ACTIVE account (and
     therefore the icon/menu/panel) must move the instant the user clicks,

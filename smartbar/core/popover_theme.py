@@ -83,8 +83,10 @@ COUNTDOWN_ICON_GAP = 3.0
 PACE_W = 1.5
 PACE = (1.0, 1.0, 1.0, 0.38)
 BUTTON_H = 18.0
-TAB_H = 20.0               # provider tab row (Claude | OpenAI), when shown
-TAB_GAP = 6.0              # gap between the two tab pills
+TAB_H = 20.0               # provider tab row (Overview | Claude | OpenAI
+                           # -- only the providers that actually have
+                           # accounts get a pill), when shown
+TAB_GAP = 6.0              # gap between adjacent tab pills
 TAB_TOP_GAP = 3.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
 # Each tab pill now carries its provider's mark to the LEFT of its label,
@@ -101,6 +103,34 @@ REMOVE_ICON = 10.0         # drawn size of the ✕ glyph inside that target
 # popover_layout derives both offsets from this plus text_width() instead
 # of hardcoding an x position (see build()).
 HEADER_LABEL_GAP = 6.0
+
+# The Overview tab's single card: a lead line above one compact row per
+# account, both providers merged into one list (see popover_layout._card and
+# ._overview_card, which share the same CARD_PAD_V/CARD_PAD_H/CARD_RADIUS/
+# CARD_BG/CARD_BORDER the account cards use, so the card chrome itself needs
+# no new tokens). Everything below is specific to the row's own inner layout.
+OVERVIEW_LEAD_H = 16.0      # "Most headroom: ... — N% used" line
+# A row is ONE line, not two like a metric row's label-line-over-bar-line:
+# there is only one number per account here (its worst metric), so there is
+# nothing a second line would separate out.
+OVERVIEW_ROW_H = 16.0
+OVERVIEW_ROW_GAP = 5.0
+OVERVIEW_MARK_W = 10.0      # provider Glyph (claude/openai) sized for a row
+                            # this compact, a touch smaller than a tab
+                            # pill's TAB_MARK
+# The bar is deliberately SHORT, not the account card's full inner width:
+# a list of every account needs its shape to be "a row", with the address
+# staying the thing that grows, not "a card" where the bar is the point.
+OVERVIEW_BAR_W = 56.0
+OVERVIEW_PCT_W = 28.0       # same "100%" budget as VALUE_PCT_W, its own
+                            # constant because an overview row and a metric
+                            # row are not the same layout and must not be
+                            # forced to share a width just because the
+                            # numbers happen to agree today
+# One shared gap between a row's own elements (mark -> dot -> address ->
+# bar/state-text -> pct), rather than a differently-named constant for each
+# junction that would all just be spelled "6.0" anyway.
+OVERVIEW_GAP = 6.0
 
 # Tab pills read as faded / not-faded rather than colored: the selected
 # provider is full strength, the other recedes (user-picked over an accent
