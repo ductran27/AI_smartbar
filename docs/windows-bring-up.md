@@ -177,7 +177,6 @@ so you can see what it says.
   `python(w).exe` whose command line *ends* with the launcher path. That regex
   has never been tested against a real `Win32_Process.CommandLine`, and the
   quoting Windows applies there is the part most likely to be wrong.
-
 - **The install probe reads a path under `System32\Tasks`**
   (`smartbar/update_runner.py:_win_task_file`). `present_installers()` decides
   this device is installed by stat-ing `%SystemRoot%\System32\Tasks\AI smartbar
@@ -194,21 +193,21 @@ so you can see what it says.
 
 Run these in order, on top of the panel checklist above.
 
-11. **Fresh install on a machine with no prior task.** Pass: completes and
+13. **Fresh install on a machine with no prior task.** Pass: completes and
     prints `ai-smartbar is running.` Fail: any abort before the shortcut is
     written — the fresh-install path is where `install/linux.sh:48-53` shipped
     a real bug, and this script's equivalent guard has never run.
-12. **Second run is idempotent.** Re-run with no arguments. Pass: still exactly
+14. **Second run is idempotent.** Re-run with no arguments. Pass: still exactly
     one tray, task still registered once, no error. Fail: a duplicate tray, or
     `Register-ScheduledTask` throwing because the task exists.
-13. **Channel read-back survives a re-run.** `.\install\windows.ps1 -Channel main`,
+15. **Channel read-back survives a re-run.** `.\install\windows.ps1 -Channel main`,
     then re-run with **no** `-Channel`. Pass: `Update task registered
     (channel=main, …)`. Fail: it says `release` — that is the silent
     channel-flip this read-back exists to prevent, and it would quietly move a
     development box onto the release line.
-14. **A path with a space.** Clone to `C:\Program Files\...` or any path with a
+16. **A path with a space.** Clone to `C:\Program Files\...` or any path with a
     space and install from there. Pass: everything works. Fail: anything at
     all — this is the single likeliest defect class in the whole script.
-15. **`-Uninstall` is complete.** Pass: tray stopped, task gone from Task
+17. **`-Uninstall` is complete.** Pass: tray stopped, task gone from Task
     Scheduler, shortcut gone from `shell:startup`, `%LOCALAPPDATA%\ai-smartbar`
     gone, checkout untouched.
