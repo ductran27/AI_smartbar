@@ -111,9 +111,18 @@ def _lines_for_width(text, width, *, size=t.SIZE_CAPTION, bold=False,
 
 def state_lines(account) -> int:
     """How many lines an account's explanatory caption needs inside a card
-    (SwiftUI wraps at 2 via .lineLimit(2))."""
+    (SwiftUI wraps at 2 via .lineLimit(2)).
+
+    A blocked account's line makes room for a warn glyph in front of it
+    (see _card_body), narrower by the same COUNTDOWN_ICON/
+    COUNTDOWN_ICON_GAP the glyph and its gap reserve there — otherwise this
+    could estimate one line for text that, indented past the glyph, wraps
+    to two, silently overflowing the card height reserved for it.
+    """
     text = model.state_text(account) or "No usage data"
     room = t.WIDTH - 2 * t.PAD - 2 * t.CARD_PAD_H
+    if model.switch_blocked(account):
+        room -= t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
     return _lines_for_width(text, room)
 
 
@@ -186,6 +195,207 @@ def _button(shapes, hits, name, right, cy, text, *, enabled=True,
     return x
 
 
+def _bar(shapes, x, y, w, metric, now):
+    """Track + proportional fill + pace caret for one metric, at a given
+    x/y/width — factored out of _card_body so a second, narrower use (the
+    Overview tab's compact per-account row, see _overview_card) draws the
+    exact same caret maths rather than a second near-copy of it. Output is
+    unchanged from before this was split out: same boxes, same order."""
+    shapes.append(t.Box(x, y, w, t.BAR_H, radius=t.BAR_H / 2,
+                        fill=t.BAR_TRACK))
+    fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
+    if fraction > 0:
+        shapes.append(t.Box(x, y, max(6.0, w * fraction), t.BAR_H,
+                            radius=t.BAR_H / 2,
+                            fill=t.status_rgba(model.color(metric.pct))))
+    # See PACE's own comment (popover_theme.py) for why "how far through the
+    # window" has to be a second mark rather than a second color on the fill.
+    pace = model.pace_fraction(metric, now)
+    if pace is not None:
+        half = t.PACE_W / 2
+        center = min(max(x + w * pace, x + half), x + w - half)
+        shapes.append(t.Box(center - half, y, t.PACE_W, t.BAR_H,
+                            radius=0.0, fill=t.PACE))
+
+
+def _history_present(history) -> bool:
+    """True once `history` holds at least one real reading.
+
+    A fresh install (or an account never seen before) has no recorded day
+    at all — every entry None — and that is the ONE case the strip card
+    omits itself entirely for, rather than drawing thirty empty stubs (see
+    _strip_card's own docstring for why a single None day, inside an
+    otherwise-populated history, draws a stub instead of nothing).
+    """
+    return bool(history) and any(v is not None for v in history)
+
+
+def strip_height(history) -> float:
+    """Height of the 30-day usage-history strip card, or 0.0 when there is
+    no history yet — folded into overview_height() so the panel's total
+    height stays computable without building, the same relationship
+    card_height() already has with _card()."""
+    if not _history_present(history):
+        return 0.0
+    return t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + t.STRIP_H
+
+
+def _strip_card(shapes, history, top) -> float:
+    """The Overview tab's second card: one bar per day of the ACTIVE
+    account's 7-day window, over the last 30 days (see
+    core/usage_history.series, which `history` is the direct output of).
+
+    A day with no recorded value draws a 1pt stub in BAR_TRACK rather than
+    a bar of height 0 — "0% used" and "never measured" are different facts,
+    and only the stub tells the truth about the second one. TODAY (the
+    last entry) is drawn in TEXT chalk rather than the status ramp: it is
+    still moving, so coloring it as though the day were over would claim a
+    verdict on a reading that hasn't finished happening yet.
+    """
+    height = strip_height(history)
+    left, right = t.PAD, t.WIDTH - t.PAD
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=t.CARD_BG, stroke=t.CARD_BORDER, line_width=1.0))
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+
+    head_cy = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H / 2
+    shapes.append(t.Label(inner_l, head_cy, "Active account · 30 days",
+                          size=t.SIZE_EMAIL, bold=True, color=t.TEXT))
+    shapes.append(t.Label(inner_r, head_cy, "7-day window, % used",
+                          size=t.SIZE_CAPTION, color=t.TEXT_TERTIARY,
+                          anchor="right"))
+
+    bars_top = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP
+    baseline = bars_top + t.STRIP_H
+    last = len(history) - 1
+    for index, value in enumerate(history):
+        x = inner_l + index * (t.STRIP_BAR_W + t.STRIP_GAP)
+        if value is None:
+            shapes.append(t.Box(x, baseline - 1.0, t.STRIP_BAR_W, 1.0,
+                                radius=t.STRIP_BAR_W / 2, fill=t.BAR_TRACK))
+            continue
+        fraction = min(max(value, 0.0), 100.0) / 100.0
+        bar_h = max(1.0, t.STRIP_H * fraction)
+        color = t.TEXT if index == last else t.status_rgba(model.color(value))
+        shapes.append(t.Box(x, baseline - bar_h, t.STRIP_BAR_W, bar_h,
+                            radius=t.STRIP_BAR_W / 2, fill=color))
+    return height
+
+
+def _overview_row_key(account):
+    """Sort key for _overview_card's rows: most headroom first, then
+    accounts with no usable data last (see model.worst's None-without-data
+    contract) — (0, pct) always sorts before (1, 0.0)."""
+    metric = model.worst(account)
+    return (0, metric.pct) if metric is not None else (1, 0.0)
+
+
+def overview_height(snapshot, history=None) -> float:
+    """Height of the Overview tab's whole body: the account-summary card,
+    plus (stage 06) the 30-day usage-history strip card below it when
+    `history` has anything to show. Kept alongside card_height() so the
+    panel height stays computable without building — see build()'s
+    `selected == "overview"` branch, which renders exactly this via
+    _overview_card() and, conditionally, _strip_card().
+    """
+    accounts = list(snapshot.accounts) if snapshot is not None else []
+    openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
+    count = len(accounts) + len(openai)
+    body = (count * t.OVERVIEW_ROW_H + max(count - 1, 0) * t.OVERVIEW_ROW_GAP
+            if count else 0.0)
+    height = t.CARD_PAD_V * 2 + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP + body
+    if _history_present(history):
+        height += t.CARD_GAP + strip_height(history)
+    return height
+
+
+def _overview_card(shapes, snapshot, top, now):
+    """The Overview tab's one card: a lead line naming the account with the
+    most headroom (model.best_switch — Claude-only, since a switch can only
+    ever target a Claude slot), then one row per account, both providers
+    merged into a single list ranked by how much headroom each has left.
+
+    Rows are read-only in this stage — no switch/remove hits, on purpose
+    (the stage-05 brief). A row's bar+caret is drawn by the SAME `_bar`
+    helper _card_body's metric rows use, just narrower, so the pace maths
+    can't drift between the two call sites.
+    """
+    accounts = list(snapshot.accounts)
+    openai = list(getattr(snapshot, "openai", []) or [])
+    rows = sorted(accounts + openai, key=_overview_row_key)
+
+    height = overview_height(snapshot)
+    left, right = t.PAD, t.WIDTH - t.PAD
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=t.CARD_BG, stroke=t.CARD_BORDER, line_width=1.0))
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+
+    lead_cy = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H / 2
+    suggestion = model.best_switch(snapshot)
+    if suggestion is not None:
+        w = model.worst(suggestion)
+        # "Best switch", NOT "most headroom": best_switch only ever
+        # considers non-active CLAUDE slots, because switching is the one
+        # thing this app does and it can only ever target a Claude slot.
+        # The rows below are ranked across BOTH providers and include the
+        # active account, so the two genuinely disagree — an OpenAI login
+        # or the account you are already on can sit above this one. Naming
+        # the lead line after what it actually computes is what keeps that
+        # from reading as a sorting bug.
+        lead = (f"Best switch: {model.account_address(suggestion)} — "
+                f"{round(w.pct)}% used")
+    else:
+        # True whether there are simply no other Claude accounts to offer,
+        # or every one of them is blocked/data-less — best_switch collapses
+        # those cases on purpose (see its own docstring), and this is
+        # honest about all of them without claiming to know which.
+        lead = "No account to switch to"
+    shapes.append(t.Label(inner_l, lead_cy, lead, size=t.SIZE_EMAIL, bold=True,
+                          color=t.TEXT, max_width=inner_r - inner_l))
+
+    body_top = top + t.CARD_PAD_V + t.OVERVIEW_LEAD_H + t.CARD_INNER_GAP
+    pct_r = inner_r
+    bar_r = inner_r - t.OVERVIEW_PCT_W - t.OVERVIEW_GAP
+    bar_l = bar_r - t.OVERVIEW_BAR_W
+    for index, account in enumerate(rows):
+        row_top = body_top + index * (t.OVERVIEW_ROW_H + t.OVERVIEW_ROW_GAP)
+        row_cy = row_top + t.OVERVIEW_ROW_H / 2
+        provider = getattr(account, "provider", "claude") or "claude"
+        mark_cx = inner_l + t.OVERVIEW_MARK_W / 2
+        shapes.append(t.Glyph(provider, mark_cx, row_cy, t.OVERVIEW_MARK_W,
+                              t.TEXT_TERTIARY))
+        dot_cx = inner_l + t.OVERVIEW_MARK_W + t.OVERVIEW_GAP + t.DOT_R
+        shapes.append(t.Dot(dot_cx, row_cy, t.DOT_R,
+                            t.status_rgba(model.dot_color(account)),
+                            hollow=model.dot_style(account) == "hollow"))
+        address_x = dot_cx + t.DOT_R + t.OVERVIEW_GAP
+        shapes.append(t.Label(address_x, row_cy, model.account_address(account),
+                              size=t.SIZE_CAPTION, color=t.TEXT,
+                              max_width=bar_l - t.OVERVIEW_GAP - address_x))
+        metric = model.worst(account)
+        if metric is None:
+            blocked = model.switch_blocked(account)
+            color = t.WARNING if blocked else t.TEXT_SECONDARY
+            # The short state name, right-anchored across BOTH the bar and
+            # percentage columns rather than squeezed into the bar's own
+            # 56pt: there is no bar and no percentage to collide with, and
+            # the full sentence truncated inside 56pt rendered as
+            # "Re-lo…once" — see model.state_summary.
+            shapes.append(t.Label(pct_r, row_cy,
+                                  model.state_summary(account)
+                                  or "No usage data",
+                                  size=t.SIZE_CAPTION, color=color,
+                                  anchor="right", max_width=pct_r - bar_l))
+        else:
+            _bar(shapes, bar_l, row_cy - t.BAR_H / 2, t.OVERVIEW_BAR_W,
+                metric, now)
+            color = t.TEXT_SPENT if metric.pct >= 100 else (1, 1, 1, 0.8)
+            shapes.append(t.Label(pct_r, row_cy, f"{round(metric.pct)}%",
+                                  size=t.SIZE_ROW_VALUE, mono=True,
+                                  anchor="right", color=color))
+    return height
+
+
 def _card(shapes, hits, account, top, now, hover, confirm=""):
     """One account card: dot, email, ACTIVE chip or Make Active, metric rows.
 
@@ -211,8 +421,14 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
     hits.append(t.Hit(f"card:{pid}", left, top, right - left, height))
     shapes.append(t.Box(
         left, top, right - left, height, radius=t.CARD_RADIUS, fill=t.CARD_BG,
-        stroke=t.CARD_BORDER_ACTIVE if account.active else t.CARD_BORDER,
-        line_width=1.5 if account.active else 1.0))
+        stroke=t.CARD_BORDER, line_width=1.0))
+    if account.active:
+        # Drawn AFTER the card so it sits on top, and deliberately inset
+        # into the card's own horizontal padding rather than shifting
+        # inner_l — becoming active must never reflow a row.
+        shapes.append(t.Box(left, top + t.RAIL_INSET, t.RAIL_W,
+                            height - t.RAIL_INSET * 2, radius=t.RAIL_W / 2,
+                            fill=t.RAIL))
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
 
@@ -275,6 +491,23 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
                             head_cy, "Make Active", hover=hover,
                             enabled=not blocked, tooltip=switch_tip)
 
+    # The plan/device badge used to ride inside account_label as plain text;
+    # now it gets its own quiet micro-chip so the address line stays just
+    # the address. Sitting right of the address and left of the ACTIVE
+    # chip / Make Active button, same neutral fill as a disabled control —
+    # it is a fact about the account, not something to press.
+    badge = model.account_badge(account)
+    if badge:
+        badge_w = t.text_width(badge, t.SIZE_CHIP) + 14
+        badge_x = control_l - 6 - badge_w
+        shapes.append(t.Box(badge_x, head_cy - t.CHIP_H / 2, badge_w,
+                            t.CHIP_H, radius=t.CHIP_H / 2,
+                            fill=t.BUTTON_DISABLED))
+        shapes.append(t.Label(badge_x + badge_w / 2, head_cy, badge,
+                              size=t.SIZE_CHIP, anchor="center",
+                              color=t.TEXT_SECONDARY))
+        control_l = badge_x
+
     # The ✕ exists only while the pointer is on this card (any of its hover
     # names) and never on the active card — the live login would just be
     # re-registered, so offering to remove it would be a lie. Its gutter is
@@ -299,7 +532,7 @@ def _card(shapes, hits, account, top, now, hover, confirm=""):
                           tooltip=f"Remove {account.email} from AI smartbar"))
 
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
-                          model.account_label(account),
+                          model.account_address(account),
                           size=t.SIZE_EMAIL, bold=True, color=t.TEXT,
                           max_width=label_r - (inner_l + t.DOT_R * 2 + 7)))
 
@@ -316,29 +549,32 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
         blocked = model.switch_blocked(account)
         lines = state_lines(account)
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
-        shapes.append(t.Label(inner_l, body_top + block_h / 2,
+        color = t.WARNING if blocked else t.TEXT_SECONDARY
+        text_l = inner_l
+        if blocked:
+            # A dead credential is the one data-less state that needs a
+            # glyph as well as a color — WARNING alone reads as just this
+            # account's usual shade, not "you need to act". Same
+            # icon/gap the countdown's clock uses, reused rather than
+            # giving this its own pair of constants for the same job.
+            shapes.append(t.Glyph("warn", inner_l + t.COUNTDOWN_ICON / 2,
+                                  body_top + block_h / 2, t.COUNTDOWN_ICON,
+                                  color))
+            text_l = inner_l + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+        shapes.append(t.Label(text_l, body_top + block_h / 2,
                               model.state_text(account) or "No usage data",
-                              size=t.SIZE_CAPTION,
-                              color=t.WARNING if blocked else t.TEXT_SECONDARY,
-                              max_width=inner_r - inner_l, max_lines=lines))
+                              size=t.SIZE_CAPTION, color=color,
+                              max_width=inner_r - text_l, max_lines=lines))
         return
 
-    bar_l = inner_l + t.LABEL_W + t.BAR_GAP
-    value_w = t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W
-    bar_w = inner_r - value_w - t.BAR_GAP - bar_l
+    bar_l, bar_w = inner_l, inner_r - inner_l
     pct_r = inner_r - t.VALUE_COUNTDOWN_W
     for index, metric in enumerate(account.metrics):
-        cy = body_top + index * (t.ROW_H + t.ROW_GAP) + t.ROW_H / 2
-        shapes.append(t.Label(inner_l, cy, metric.label, size=t.SIZE_ROW_LABEL,
-                              bold=True, color=t.TEXT, max_width=t.LABEL_W))
-        shapes.append(t.Box(bar_l, cy - t.BAR_H / 2, bar_w, t.BAR_H,
-                            radius=t.BAR_H / 2, fill=t.BAR_TRACK))
-        fraction = min(max(metric.pct, 0.0), 100.0) / 100.0
-        if fraction > 0:
-            shapes.append(t.Box(bar_l, cy - t.BAR_H / 2,
-                                max(6.0, bar_w * fraction), t.BAR_H,
-                                radius=t.BAR_H / 2,
-                                fill=t.status_rgba(model.color(metric.pct))))
+        row_top = body_top + index * (t.ROW_H + t.ROW_GAP)
+        label_cy = row_top + t.ROW_LABEL_H / 2
+        shapes.append(t.Label(inner_l, label_cy, metric.label,
+                              size=t.SIZE_ROW_LABEL, bold=True, color=t.TEXT,
+                              max_width=t.LABEL_W))
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
@@ -348,25 +584,53 @@ def _card_body(shapes, account, top, now, inner_l, inner_r,
         # a single string makes the percentage slide sideways every time
         # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
         # exactly what FINDING 3 measured (a 19pt swing on the "·").
-        shapes.append(t.Label(pct_r, cy, f"{round(metric.pct)}%",
+        shapes.append(t.Label(pct_r, label_cy, f"{round(metric.pct)}%",
                               size=t.SIZE_ROW_VALUE, mono=True,
                               anchor="right", color=color))
         if countdown:
-            shapes.append(t.Label(inner_r, cy, f" · {countdown}",
+            # The leading " · " is gone: a clock glyph fills the space
+            # that space used to reserve, so "· 🕐 2h 5m" never doubles up
+            # the separator.
+            countdown_text = f" {countdown}"
+            shapes.append(t.Label(inner_r, label_cy, countdown_text,
                                   size=t.SIZE_ROW_VALUE, mono=True,
                                   anchor="right", color=color))
+            # The clock sits immediately left of wherever the countdown
+            # text actually STARTS, not the reserved column's nominal edge
+            # (inner_r - VALUE_COUNTDOWN_W) — that column is sized for the
+            # widest realistic countdown ("23h 59m"), so anchoring there
+            # would leave a visible gap before a short one like "9m". The
+            # layout has no font engine, so t.text_width is the same
+            # estimate the countdown label itself is measured by.
+            text_w = t.text_width(countdown_text, t.SIZE_ROW_VALUE, mono=True)
+            clock_cx = inner_r - text_w - t.COUNTDOWN_ICON_GAP - t.COUNTDOWN_ICON / 2
+            shapes.append(t.Glyph("clock", clock_cx, label_cy,
+                                  t.COUNTDOWN_ICON, color))
+
+        bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
+        _bar(shapes, bar_l, bar_top, bar_w, metric, now)
 
 
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
           provider="", confirm="", action_error="", refreshing=False,
-          stale_reason="") -> t.Layout:
+          stale_reason="", history=None) -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
-    `provider` selects the visible tab ("claude"/"openai"); "" auto-resolves
-    to Claude when it has accounts, else OpenAI. The tab row itself exists
-    only when BOTH providers have accounts — a single-provider machine gets
-    exactly the layout it always had.
+    `provider` selects the visible tab ("claude"/"openai"/"overview"); ""
+    auto-resolves to Claude when it has accounts, else OpenAI — exactly the
+    resolution this always did, UNCHANGED by Overview's arrival. Overview is
+    opt-in only, reachable by an explicit "overview", never the auto-resolved
+    default: a returning user must not find their panel rearranged out from
+    under them by an update they didn't ask for.
+
+    The tab row itself now appears whenever there is MORE THAN ONE account in
+    total, across both providers — not, as before, only when both providers
+    have at least one — with `tab:overview` always first, followed by
+    whichever of Claude/OpenAI actually has accounts. A single-provider
+    machine with several accounts therefore now gets a two-tab row (Overview
+    + its one provider) where it previously got no tab row at all; a machine
+    with exactly one account total still gets none, same as before.
 
     `confirm` names the card whose removal awaits confirmation
     ("<provider>:<id>", the suffix of its "remove:" hit); that card's
@@ -385,6 +649,15 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     likewise surfaced on hover of the footer's "update held" label
     (mirrors `.help("Update held back: …")`). Both were previously
     computed and then thrown away (FINDING 7).
+
+    `history` (stage 06) is the active Claude account's own
+    `usage_history.series(..., "7d")` result — 30 floats-or-None, oldest
+    first, ending today — already computed by the caller. build() stays
+    pure and does no file I/O of its own (see this module's own docstring),
+    the same reason `now` is injected rather than read off the wall clock;
+    the difference is `history` has no meaningful "read it yourself"
+    default, so callers that never pass it simply render the Overview tab
+    without its strip card, same as a fresh install with nothing recorded.
     """
     now = now or datetime.now(timezone.utc)
     shapes, hits = [], []
@@ -439,17 +712,26 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     accounts = list(snapshot.accounts) if snapshot is not None else []
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
     selected = provider or ("openai" if openai and not accounts else "claude")
-    if accounts and openai:
+    if len(accounts) + len(openai) > 1:
         # The tab row is part of the header block, not a section of its
         # own, so it sits TAB_TOP_GAP under the title instead of a full
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
-        for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
+        # Overview is always offered once there is more than one account to
+        # summarise; a provider only gets its own pill when it actually has
+        # accounts to show under it — an empty provider tab would be a
+        # button to a blank list.
+        tabs = [("overview", "Overview")]
+        if accounts:
+            tabs.append(("claude", "Claude"))
+        if openai:
+            tabs.append(("openai", "OpenAI"))
+        for name, text in tabs:
             current = name == selected
-            width = (t.text_width(text, t.SIZE_CAPTION, bold=current)
-                     + t.BUTTON_PAD_H * 2)
+            label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
+            width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
             hit_name = f"tab:{name}"
             # Faded / not-faded, not colored: the selected provider is full
             # strength and the other recedes (mirrored by tabButton in
@@ -462,9 +744,17 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                 fill, color = t.TAB_BG, t.TEXT_TERTIARY
             shapes.append(t.Box(x, cy - t.BUTTON_H / 2, width, t.BUTTON_H,
                                 radius=t.BUTTON_H / 2, fill=fill))
-            shapes.append(t.Label(x + width / 2, cy, text,
-                                  size=t.SIZE_CAPTION, bold=current,
-                                  anchor="center", color=color))
+            # The mark sits BESIDE the label, never instead of it — a tab
+            # has to stay readable to anyone who doesn't recognise the
+            # provider's mark on sight, so it never becomes an icon-only
+            # button. It takes the label's own color, so a faded tab reads
+            # as faded mark-and-all rather than the mark competing with the
+            # fade as a second signal.
+            mark_cx = x + t.BUTTON_PAD_H + t.TAB_MARK / 2
+            shapes.append(t.Glyph(name, mark_cx, cy, t.TAB_MARK, color))
+            label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
+            shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
+                                  bold=current, anchor="left", color=color))
             hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
                               t.BUTTON_H, tooltip=f"Show {text} accounts"))
             x += width + t.TAB_GAP
@@ -489,7 +779,11 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                           err_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
                           t.REMOVE_HIT, tooltip="Dismiss"))
         cursor += block_h + t.CARD_GAP
-    cards = accounts if selected == "claude" else openai
+    # No account cards on the Overview tab (it draws its own single
+    # summary card below); `cards` empty there makes the ordinary per-card
+    # loop that follows a no-op without a separate guard on it.
+    cards = [] if selected == "overview" else (
+        accounts if selected == "claude" else openai)
     if snapshot is None:
         text_ = error or "Loading usage…"
         lines = _lines_for_width(text_, right - t.PAD)
@@ -512,6 +806,11 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                               size=t.SIZE_CAPTION, color=t.TEXT_SECONDARY,
                               max_width=right - t.PAD, max_lines=lines))
         cursor += block_h + t.CARD_GAP
+    elif selected == "overview":
+        cursor += _overview_card(shapes, snapshot, cursor, now)
+        if _history_present(history):
+            cursor += t.CARD_GAP
+            cursor += _strip_card(shapes, history, cursor)
     for account in cards:
         cursor += _card(shapes, hits, account, cursor, now, hover,
                         confirm) + t.CARD_GAP
@@ -524,15 +823,26 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     if blocked_reason:
         label = (label + " · update held").strip(" ·")
     if label:
-        shapes.append(t.Label(t.PAD, foot_cy, label, size=t.SIZE_CAPTION,
+        label_x = t.PAD
+        if blocked_reason:
+            # Mirrors PopoverView.footer's "pause.circle" SF Symbol in
+            # front of "Update held" — same icon/gap the countdown's clock
+            # and a blocked card's warn triangle use, reused rather than
+            # a fourth pair of constants for the same "glyph beside a line
+            # of text" job.
+            shapes.append(t.Glyph("pause", t.PAD + t.COUNTDOWN_ICON / 2,
+                                  foot_cy, t.COUNTDOWN_ICON, t.TEXT_TERTIARY))
+            label_x = t.PAD + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+        shapes.append(t.Label(label_x, foot_cy, label, size=t.SIZE_CAPTION,
                               color=t.TEXT_TERTIARY))
         if blocked_reason:
             # Non-action hit: PopoverView.footer's "Update held" label's
             # .help() shows the actual reason on hover rather than a bare
-            # "update held" label.
+            # "update held" label. Starts at t.PAD, not label_x, so the
+            # glyph is inside the hoverable area too.
             label_w = t.text_width(label, t.SIZE_CAPTION)
             hits.append(t.Hit("update-held", t.PAD, foot_cy - t.FOOTER_H / 2,
-                              label_w, t.FOOTER_H,
+                              label_x - t.PAD + label_w, t.FOOTER_H,
                               tooltip=f"Update held back: {blocked_reason}"))
     if pending_version:
         _button(shapes, hits, "update", right, foot_cy,

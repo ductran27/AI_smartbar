@@ -1,0 +1,125 @@
+"""AccountCardView's card chrome and badge chip exist twice, in two
+languages. Pin them together.
+
+Stage 03 replaced the active card's 1.5pt pure-white outline with a hairline
+border shared by every card plus a leading rail on the active one, and moved
+the plan/device badge off the header string into its own micro-chip — three
+new numbers/behaviours duplicated as SwiftUI literals in
+AccountCardView.swift: the hairline's opacity (CARD_BORDER), the rail's
+width/inset (RAIL_W/RAIL_INSET), and the badge composition (account_badge).
+Same approach as test_popover_theme_parity.py and
+test_metric_bar_row_parity.py: read the Swift as SOURCE TEXT, so a value or
+formula drifting on one side fails the ordinary unit suite with no Swift
+toolchain and no Xcode required.
+"""
+from __future__ import annotations
+
+import os
+import re
+import unittest
+
+import smartbar
+from smartbar.core import model
+from smartbar.core import popover_theme as theme
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(smartbar.__file__)))
+SWIFT_DIR = os.path.join(REPO, "macos-swift", "Sources", "AISmartbar")
+CARD_SOURCE = os.path.join(SWIFT_DIR, "AccountCardView.swift")
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+class SwiftPresent(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(CARD_SOURCE):
+            raise unittest.SkipTest("macos-swift/ is not in this checkout")
+
+
+class TestHairlineBorderParity(SwiftPresent):
+    """Every card — active or not — shares one hairline now (CARD_BORDER);
+    the old account.active ? 0.92 : 0.07 branch is gone."""
+
+    def test_every_card_strokes_the_shared_hairline_alpha(self):
+        match = re.search(
+            r"strokeBorder\(Color\.white\.opacity\(([\d.]+)\), "
+            r"lineWidth: ([\d.]+)\)", _read(CARD_SOURCE))
+        self.assertIsNotNone(match, "could not find the card's strokeBorder")
+        alpha, width = match.groups()
+        self.assertEqual(float(alpha), theme.CARD_BORDER[3])
+        self.assertEqual(float(width), 1.0)
+
+
+class TestRailParity(SwiftPresent):
+    """The active-card leading rail: RAIL_W/RAIL_INSET as SwiftUI frame/
+    padding literals, filled from Palette.chalk (== theme.RAIL == theme.TEXT,
+    pinned separately by test_popover_theme_parity.py)."""
+
+    def test_rail_geometry_matches_rail_w_and_rail_inset(self):
+        text = _read(CARD_SOURCE)
+        match = re.search(
+            r"RoundedRectangle\(cornerRadius: ([\d.]+), style: \.continuous\)\s+"
+            r"\.fill\(Palette\.chalk\)\s+"
+            r"\.frame\(width: ([\d.]+)\)\s+"
+            r"\.padding\(\.vertical, ([\d.]+)\)", text)
+        self.assertIsNotNone(match, "could not find the rail RoundedRectangle")
+        corner_radius, width, inset = (float(v) for v in match.groups())
+        self.assertEqual(width, theme.RAIL_W)
+        self.assertEqual(corner_radius, theme.RAIL_W / 2)
+        self.assertEqual(inset, theme.RAIL_INSET)
+
+    def test_the_rail_is_gated_on_account_active(self):
+        text = _read(CARD_SOURCE)
+        overlay = text[text.index(".overlay(alignment: .leading)"):]
+        self.assertIn("if account.active {", overlay[:120])
+
+
+class TestBadgeChipParity(SwiftPresent):
+    """accountBadge's composition, read as source text and cross-checked
+    against model.account_badge for the same matrix of (plan, devices)
+    TestAccountBadge/TestAccountLabelComposition already cover in
+    tests/test_model.py — not just a value that happens to agree today."""
+
+    def test_the_guard_and_ternary_are_present_verbatim(self):
+        text = _read(CARD_SOURCE)
+        self.assertIn("guard devices > 0 else { return plan }", text)
+        self.assertIn(
+            'return plan.isEmpty ? "(\\(devices))" : "\\(plan) (\\(devices))"',
+            text)
+
+    def _swift_badge(self, plan: str, devices: int) -> str:
+        """Executes the exact algorithm pinned above, in Python, so a value
+        drifting between the two languages fails here rather than only at
+        runtime on a Mac neither CI nor this sandbox can build."""
+        if devices <= 0:
+            return plan
+        return f"({devices})" if not plan else f"{plan} ({devices})"
+
+    def test_swift_badge_matches_model_account_badge(self):
+        for plan, devices in (("", 0), ("Pro", 0), ("", 2), ("20x", 2)):
+            with self.subTest(plan=plan, devices=devices):
+                acct = model.Account(number=1, email="a@x.com")
+                acct.plan, acct.devices = plan, devices
+                self.assertEqual(self._swift_badge(plan, devices),
+                                 model.account_badge(acct))
+
+    def test_the_chip_sits_before_the_active_chip_and_make_active_button(self):
+        text = _read(CARD_SOURCE)
+        header = text[text.index("private var cardHeader"):
+                      text.index("private var confirmHeader")]
+        # planBadge must appear after the remove (x) button's `if` block and
+        # before both the ACTIVE chip and the Make Active button — "sits
+        # immediately left of" either one. rindex, not index: an earlier
+        # comment on this same header also mentions "planBadge" by name.
+        badge_at = header.rindex("planBadge")
+        active_at = header.index('Text("ACTIVE")')
+        make_active_at = header.index('Button("Make Active")')
+        self.assertLess(badge_at, active_at)
+        self.assertLess(badge_at, make_active_at)
+
+
+if __name__ == "__main__":
+    unittest.main()

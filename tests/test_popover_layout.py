@@ -46,6 +46,21 @@ def bars(built):
     return [b for b in boxes(built) if abs(b.h - t.BAR_H) < 0.01]
 
 
+def rails(built):
+    """Active-card leading-rail boxes, picked by fill color — the rail is
+    the only box painted RAIL, so this can't be confused with a card box,
+    a bar, or a button of the same width."""
+    return [b for b in boxes(built) if b.fill == t.RAIL]
+
+
+def chips(built):
+    """Plan/device micro-chip boxes, picked by fill+height so a disabled
+    Make Active button (also BUTTON_DISABLED-filled, but BUTTON_H tall)
+    can't be mistaken for one."""
+    return [b for b in boxes(built)
+            if b.fill == t.BUTTON_DISABLED and abs(b.h - t.CHIP_H) < 0.01]
+
+
 class TestPinOrigin(unittest.TestCase):
     """Where a pinned panel parks. Geometry only — no GTK involved."""
 
@@ -136,9 +151,14 @@ class TestStructure(unittest.TestCase):
         self.assertEqual(built.width, t.WIDTH)   # same 330 as the macOS popover
 
     def test_height_grows_by_exactly_one_card_per_account(self):
-        one = layout.build(snap(account()), now=NOW)
+        # Two accounts vs three, not one vs two: both sides of THIS
+        # comparison sit above the tab row's own >1-account threshold (see
+        # TestProviderTabs), so the delta measured here is purely the
+        # per-card growth, not partly the tab row switching on.
         two = layout.build(snap(account(), account(number=2)), now=NOW)
-        self.assertAlmostEqual(two.height - one.height,
+        three = layout.build(
+            snap(account(), account(number=2), account(number=3)), now=NOW)
+        self.assertAlmostEqual(three.height - two.height,
                                layout.card_height(account()) + t.CARD_GAP)
 
     def test_card_height_follows_the_row_count(self):
@@ -163,51 +183,94 @@ class TestStructure(unittest.TestCase):
 
 
 class TestCardContent(unittest.TestCase):
-    def test_active_card_gets_the_chip_and_the_white_outline(self):
-        built = layout.build(snap(account(active=True)), now=NOW)
-        self.assertIn("ACTIVE", labels(built))
-        card = boxes(built)[0]
-        self.assertEqual(card.stroke, t.CARD_BORDER_ACTIVE)
-        self.assertEqual(card.line_width, 1.5)
+    def test_every_card_gets_the_same_hairline_border(self):
+        # The 1.5pt pure-white outline that used to single out the active
+        # card is gone — active and inactive cards share one quiet hairline
+        # now; the rail (below) is what marks "active" instead.
+        active = layout.build(snap(account(active=True)), now=NOW)
+        inactive = layout.build(snap(account(number=4)), now=NOW)
+        self.assertIn("ACTIVE", labels(active))
+        self.assertEqual(boxes(active)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(active)[0].line_width, 1.0)
+        self.assertEqual(boxes(inactive)[0].stroke, t.CARD_BORDER)
+        self.assertEqual(boxes(inactive)[0].line_width, 1.0)
 
-    def test_inactive_card_gets_a_switch_button_and_a_faint_outline(self):
+    def test_inactive_card_gets_a_switch_button(self):
         built = layout.build(snap(account(number=4)), now=NOW)
         self.assertIn("Make Active", labels(built))
-        self.assertEqual(boxes(built)[0].stroke, t.CARD_BORDER)
         self.assertTrue(any(h.name == "switch:4" for h in built.hits))
 
     def test_active_card_has_no_switch_target(self):
         built = layout.build(snap(account(number=4, active=True)), now=NOW)
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
 
-    def test_the_device_count_rides_on_the_address(self):
+    def test_active_card_gets_exactly_one_rail_at_its_left_edge(self):
+        built = layout.build(snap(account(active=True)), now=NOW)
+        card = boxes(built)[0]
+        rail_boxes = rails(built)
+        self.assertEqual(len(rail_boxes), 1)
+        self.assertAlmostEqual(rail_boxes[0].x, card.x)
+        self.assertAlmostEqual(rail_boxes[0].w, t.RAIL_W)
+        self.assertAlmostEqual(rail_boxes[0].h, card.h - t.RAIL_INSET * 2)
+
+    def test_non_active_card_gets_no_rail(self):
+        built = layout.build(snap(account(number=4)), now=NOW)
+        self.assertEqual(rails(built), [])
+
+    def test_only_the_active_card_among_several_gets_a_rail(self):
+        built = layout.build(
+            snap(account(number=2), account(number=3, active=True)), now=NOW)
+        self.assertEqual(len(rails(built)), 1)
+
+    def test_the_device_count_becomes_a_micro_chip(self):
         card = account(email="a@example.com")
         card.devices = 2
-        self.assertIn("a@example.com (2)",
-                      labels(layout.build(snap(card), now=NOW)))
+        built = layout.build(snap(card), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertIn("(2)", labels(built))
+        self.assertEqual(len(chips(built)), 1)
 
-    def test_the_plan_badge_rides_on_the_address(self):
+    def test_the_plan_and_device_badges_share_one_chip(self):
         card = account(email="a@example.com")
         card.plan = "20x"
         card.devices = 2
-        self.assertIn("a@example.com · 20x (2)",
-                      labels(layout.build(snap(card), now=NOW)))
+        built = layout.build(snap(card), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertIn("20x (2)", labels(built))
+        self.assertEqual(len(chips(built)), 1)
 
-    def test_no_badge_when_nobody_else_is_on_the_account(self):
-        self.assertIn("a@example.com", labels(layout.build(snap(account()),
-                                                           now=NOW)))
+    def test_no_chip_when_there_is_nothing_to_say(self):
+        # No plan and no devices: account_badge() is "", and the card must
+        # draw no chip at all rather than an empty pill.
+        built = layout.build(snap(account()), now=NOW)
+        self.assertIn("a@example.com", labels(built))
+        self.assertEqual(chips(built), [])
 
-    def test_the_count_cannot_run_into_the_active_chip(self):
-        # The address is given a max_width so the painter truncates it; that
-        # budget has to shrink to clear the chip, or a long address would be
-        # drawn straight through it.
+    def test_the_chip_shrinks_the_address_budget(self):
+        plain = layout.build(snap(account(number=2)), now=NOW)
+        badged = account(number=2)
+        badged.plan = "20x"
+        with_chip = layout.build(snap(badged), now=NOW)
+        plain_address = next(s for s in plain.shapes
+                             if isinstance(s, t.Label) and "@" in s.text)
+        chipped_address = next(s for s in with_chip.shapes
+                               if isinstance(s, t.Label) and "@" in s.text)
+        self.assertLess(chipped_address.max_width, plain_address.max_width)
+
+    def test_the_badge_chip_cannot_run_into_the_active_chip(self):
+        # The address's reserved width, and the badge chip's position, both
+        # have to clear the ACTIVE chip — or a long address / wide badge
+        # would be drawn straight through it.
         card = account(email="a" * 60 + "@example.com", active=True)
         card.devices = 3
         built = layout.build(snap(card), now=NOW)
         address = next(s for s in built.shapes
                        if isinstance(s, t.Label) and s.text.startswith("aaa"))
-        chip = next(s for s in boxes(built) if s.fill == t.status_rgba("green"))
-        self.assertLessEqual(address.x + address.max_width, chip.x)
+        badge = chips(built)[0]
+        active_chip = next(s for s in boxes(built)
+                           if s.fill == t.status_rgba("green"))
+        self.assertLessEqual(address.x + address.max_width, badge.x)
+        self.assertLessEqual(badge.x + badge.w, active_chip.x)
 
     def test_metric_rows_render_used_percent_and_countdown(self):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
@@ -217,14 +280,36 @@ class TestCardContent(unittest.TestCase):
         # see test_percent_position_is_stable_across_countdown_lengths for
         # why keeping them apart matters.
         self.assertIn("79%", labels(built))
-        self.assertIn(" · 2h 5m", labels(built))
+        # No " · " separator any more (stage 02): the space is reserved for
+        # stage 04's clock glyph instead.
+        self.assertIn(" 2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
         self.assertIn("5%", labels(built))
-        self.assertIn(" · 3h 1m", labels(built))
+        self.assertIn(" 3h 1m", labels(built))
+
+    def test_a_countdown_gets_a_clock_glyph_immediately_left_of_it(self):
+        resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(pct=79.0, resets_at=resets)])),
+            now=NOW)
+        clocks = [s for s in built.shapes
+                 if isinstance(s, t.Glyph) and s.kind == "clock"]
+        self.assertEqual(len(clocks), 1)
+        countdown_label = next(s for s in built.shapes
+                               if isinstance(s, t.Label) and s.text == " 2h 5m")
+        text_edge = countdown_label.x - t.text_width(
+            countdown_label.text, t.SIZE_ROW_VALUE, mono=True)
+        self.assertLess(clocks[0].cx, text_edge)
+
+    def test_a_row_with_no_countdown_draws_no_clock_glyph(self):
+        built = layout.build(snap(account(metrics=[metric(pct=50.0)])),
+                             now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "clock"
+                             for s in built.shapes))
 
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
@@ -249,6 +334,38 @@ class TestCardContent(unittest.TestCase):
         # string needs; the two-column layout reserves less, in total, so
         # the bar itself gets wider.
         self.assertLess(t.VALUE_PCT_W + t.VALUE_COUNTDOWN_W, 104.0)
+
+    def test_the_bar_spans_the_cards_full_inner_width(self):
+        # Stage 02: the bar moved to its own line and no longer shares the
+        # row with a label column or the value sub-columns — it now runs
+        # edge to edge of the card's inner width, not inner_l + LABEL_W +
+        # BAR_GAP .. inner_r - VALUE_PCT_W - VALUE_COUNTDOWN_W - BAR_GAP.
+        built = layout.build(snap(account()), now=NOW)
+        track, _fill = bars(built)
+        inner_l = t.PAD + t.CARD_PAD_H
+        inner_r = t.WIDTH - t.PAD - t.CARD_PAD_H
+        self.assertAlmostEqual(track.x, inner_l)
+        self.assertAlmostEqual(track.w, inner_r - inner_l)
+
+    def test_a_caret_marks_pace_for_a_metric_with_a_known_window(self):
+        resets = (NOW + timedelta(hours=1)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(key="7d", resets_at=resets)])),
+            now=NOW)
+        carets = [b for b in boxes(built) if b.fill == t.PACE]
+        self.assertEqual(len(carets), 1)
+        self.assertAlmostEqual(carets[0].w, t.PACE_W)
+        self.assertAlmostEqual(carets[0].h, t.BAR_H)
+
+    def test_no_caret_for_a_window_with_no_stated_length(self):
+        # "spend" carries a reset TIME (same as 5h/7d) but no window-size
+        # number, so it must draw no caret at all rather than a guessed one
+        # — see model.window_seconds's docstring.
+        resets = (NOW + timedelta(hours=1)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(key="spend", resets_at=resets)])),
+            now=NOW)
+        self.assertFalse(any(b.fill == t.PACE for b in boxes(built)))
 
     def test_bar_fill_is_proportional_and_clamped(self):
         for pct, expect_full in ((50.0, False), (100.0, True), (140.0, True)):
@@ -282,6 +399,22 @@ class TestDataless(unittest.TestCase):
         # the card's non-action hover region instead of any control.
         self.assertEqual(built.hit(blocked[0].x + 2, blocked[0].y + 2).name,
                          "card:claude:1")
+
+    def test_a_blocked_account_gets_a_warn_glyph_and_the_text_indents_past_it(self):
+        built = layout.build(
+            snap(account(metrics=[], ok=False, status="relogin_required")),
+            now=NOW)
+        warn = next(s for s in built.shapes
+                   if isinstance(s, t.Glyph) and s.kind == "warn")
+        state = next(s for s in built.shapes if isinstance(s, t.Label)
+                    and "Re-login required" in s.text)
+        self.assertLess(warn.cx, state.x)
+        self.assertEqual(warn.color, state.color)
+
+    def test_an_unblocked_dataless_account_gets_no_warn_glyph(self):
+        built = layout.build(snap(account(metrics=[])), now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "warn"
+                             for s in built.shapes))
 
     def test_dataless_dot_is_hollow(self):
         built = layout.build(snap(account(metrics=[])), now=NOW)
@@ -358,8 +491,13 @@ class TestHitTesting(unittest.TestCase):
         names = {h.name for h in self.built().hits}
         # card:* regions are hover trackers (they make the remove ✕ appear
         # in the painted UIs), not buttons — clicks on them do nothing.
+        # Two accounts total (both Claude) now clears the >1 threshold for
+        # the tab row (see TestProviderTabs), so Overview + Claude tabs are
+        # part of the target set here too — no OpenAI tab, since this
+        # machine has no OpenAI accounts to show under one.
         self.assertEqual(names, {"refresh", "quit", "switch:2",
-                                 "card:claude:2", "card:claude:3"})
+                                 "card:claude:2", "card:claude:3",
+                                 "tab:overview", "tab:claude"})
 
     def test_update_target_appears_only_when_one_is_pending(self):
         self.assertNotIn("update", {h.name for h in self.built().hits})
@@ -444,24 +582,245 @@ class TestProviderTabs(unittest.TestCase):
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
         self.assertIn("ACTIVE", labels(built))   # the live login's chip
 
-    def test_openai_only_machine_needs_no_tabs_and_no_claude_banner(self):
+    def test_openai_only_machine_gets_overview_plus_openai_tabs_and_no_claude_banner(self):
+        # Two OpenAI accounts, zero Claude ones: total > 1 now clears the
+        # tab-row threshold (previously this needed BOTH providers to have
+        # accounts, so a single-provider machine like this one got no tab
+        # row at all). Only Overview + OpenAI show — there is no Claude tab
+        # to offer since there are no Claude accounts to show under it.
         s = snap()   # no Claude accounts at all
         s.openai = [openai_account(),
                     openai_account(number=2, email="old@example.com",
                                    active=False, ok=False,
                                    status="signed_out", metrics=[])]
         built = layout.build(s, now=NOW)   # auto-resolves to the OpenAI tab
-        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        tab_names = {h.name for h in built.hits if h.name.startswith("tab:")}
+        self.assertEqual(tab_names, {"tab:overview", "tab:openai"})
         self.assertNotIn(layout.NO_ACCOUNTS, labels(built))
         self.assertTrue(any("Signed out" in text for text in labels(built)))
 
-    def test_openai_plan_badge_rides_on_the_address(self):
+    def test_openai_plan_badge_becomes_a_micro_chip(self):
         card = openai_account()
         card.plan = "Pro Lite"
         s = snap()
         s.openai = [card]
         built = layout.build(s, provider="openai", now=NOW)
-        self.assertIn("gpt@example.com · Pro Lite", labels(built))
+        self.assertIn("gpt@example.com", labels(built))
+        self.assertIn("Pro Lite", labels(built))
+        self.assertEqual(len(chips(built)), 1)
+
+    def test_each_tab_carries_exactly_one_provider_mark(self):
+        # The mark sits BESIDE the label, not instead of it: this pins
+        # "exactly one", not "at least one", so a stray extra glyph (or a
+        # kind mismatch that duplicates one tab's mark on the other) would
+        # fail here too.
+        built = layout.build(self.snap_both(), now=NOW)
+        marks = [s for s in built.shapes
+                if isinstance(s, t.Glyph) and s.kind in ("claude", "openai")]
+        self.assertEqual({m.kind for m in marks}, {"claude", "openai"})
+        self.assertEqual(len(marks), 2)
+        claude_label = next(s for s in built.shapes
+                            if isinstance(s, t.Label) and s.text == "Claude")
+        claude_mark = next(m for m in marks if m.kind == "claude")
+        self.assertLess(claude_mark.cx, claude_label.x)
+
+    def test_a_single_provider_machine_gets_no_tab_marks_either(self):
+        # No tab row at all here (see test_claude_only_layout_is_byte_
+        # identical_to_before) — so there is nothing to carry a mark.
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph)
+                             and s.kind in ("claude", "openai")
+                             for s in built.shapes))
+
+
+class TestOverviewTab(unittest.TestCase):
+    """Stage 05: the "where do I go next" tab. Its tab row is driven by the
+    TOTAL account count across both providers now, not "both providers have
+    accounts"; its body is one summary card, not a list of account cards."""
+
+    def test_tab_row_appears_with_two_accounts_of_one_provider(self):
+        # Previously this needed BOTH providers to have accounts; a single
+        # provider with two accounts got no tab row at all.
+        built = layout.build(snap(account(), account(number=2)), now=NOW)
+        self.assertTrue(any(h.name.startswith("tab:") for h in built.hits))
+
+    def test_tab_row_does_not_appear_with_one_account_total(self):
+        built = layout.build(snap(account()), now=NOW)
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+
+    def test_overview_tab_is_present_and_first(self):
+        built = layout.build(snap(account(), account(number=2)), now=NOW)
+        tab_hits = [h for h in built.hits if h.name.startswith("tab:")]
+        self.assertEqual(tab_hits[0].name, "tab:overview")
+        # "first" means leftmost on screen, not merely first appended.
+        self.assertTrue(all(tab_hits[0].x <= h.x for h in tab_hits[1:]))
+
+    def test_provider_overview_renders_no_account_cards_and_one_row_each(self):
+        s = snap(account(active=True, email="a@example.com"),
+                 account(number=2, email="b@example.com"))
+        s.openai = [openai_account(email="gpt@example.com")]
+        built = layout.build(s, provider="overview", now=NOW)
+        # No account cards: none of their hover/switch/remove hits exist.
+        self.assertFalse(any(h.name.startswith("card:") for h in built.hits))
+        self.assertFalse(any(h.name.startswith("switch:") for h in built.hits))
+        self.assertFalse(any(h.name.startswith("remove:") for h in built.hits))
+        for email in ("a@example.com", "b@example.com", "gpt@example.com"):
+            self.assertIn(email, labels(built))
+
+    def test_overview_rows_are_not_clickable(self):
+        # Section 2 of the stage brief: no switch hits on Overview rows in
+        # this stage, full stop -- only the tab row itself is clickable.
+        s = snap(account(active=True, email="a@example.com"),
+                 account(number=2, email="b@example.com"))
+        built = layout.build(s, provider="overview", now=NOW)
+        names = {h.name for h in built.hits}
+        self.assertEqual(names, {"refresh", "quit",
+                                 "tab:overview", "tab:claude"})
+
+    def test_ordering_puts_most_headroom_first_and_dataless_last(self):
+        s = snap(
+            account(number=1, email="worst@example.com",
+                   metrics=[metric(pct=95.0)]),
+            account(number=2, email="best@example.com",
+                   metrics=[metric(pct=5.0)]),
+            account(number=3, email="nodata@example.com", metrics=[]))
+        built = layout.build(s, provider="overview", now=NOW)
+        wanted = {"best@example.com", "worst@example.com", "nodata@example.com"}
+        order = [lbl.text for lbl in built.shapes
+                if isinstance(lbl, t.Label) and lbl.text in wanted]
+        self.assertEqual(order,
+                         ["best@example.com", "worst@example.com",
+                          "nodata@example.com"])
+
+    def test_dataless_row_shows_the_short_state_name_and_no_bar(self):
+        """The SHORT state name, not the full sentence.
+
+        The row's free span fits about sixteen characters, and the whole
+        "Re-login required — sign in as this account in Claude Code once"
+        middle-truncated inside it rendered as "Re-lo…once", which names
+        nothing. The account's own card still carries the sentence.
+        """
+        s = snap(
+            account(number=1, email="a@example.com", metrics=[metric()]),
+            account(number=2, email="dead@example.com", metrics=[], ok=False,
+                   status="relogin_required"))
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertIn("Re-login required", labels(built))
+        # The full sentence must NOT be what the row was handed to draw:
+        # a Label carrying it would truncate to nonsense again.
+        self.assertFalse(any(" — sign in as this account" in lbl
+                             for lbl in labels(built)))
+        # No percentage column entry either — there is no reading to show,
+        # and the state name now spans that column too.
+        self.assertNotIn("—", labels(built))
+
+    def test_lead_line_names_best_switchs_account(self):
+        s = snap(
+            account(active=True, email="a@example.com", metrics=[metric(pct=50.0)]),
+            account(number=2, email="best@example.com", metrics=[metric(pct=12.0)]))
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertEqual(model.best_switch(s).email, "best@example.com")
+        self.assertIn("Best switch: best@example.com — 12% used", labels(built))
+
+    def test_the_lead_line_is_a_switch_target_not_the_top_row(self):
+        """best_switch is Claude-only and skips the active account, while
+        the rows rank BOTH providers including the active one — so the
+        lead line legitimately names an account that is not row one. The
+        wording has to say "best switch" rather than "most headroom" or
+        that disagreement reads as a sorting bug."""
+        s = snap(
+            account(active=True, email="active@example.com",
+                    metrics=[metric(pct=50.0)]),
+            account(number=2, email="other@example.com",
+                    metrics=[metric(pct=90.0)]))
+        # An OpenAI account with more headroom than any Claude slot: it
+        # sorts first, and it can never be the switch target.
+        s.openai = [openai_account(email="gpt@example.com",
+                                   metrics=[metric(pct=5.0)])]
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertEqual(model.best_switch(s).email, "other@example.com")
+        self.assertIn("Best switch: other@example.com — 90% used",
+                      labels(built))
+
+    def test_lead_line_says_there_is_nothing_to_switch_to(self):
+        # A single Claude account (the active one, so it is not its own
+        # candidate) plus an OpenAI account to clear the >1 total threshold
+        # for the tab row -- best_switch has nothing to offer either way.
+        s = snap(account(active=True, email="a@example.com"))
+        s.openai = [openai_account(email="gpt@example.com")]
+        built = layout.build(s, provider="overview", now=NOW)
+        self.assertIsNone(model.best_switch(s))
+        self.assertIn("No account to switch to", labels(built))
+
+
+def strip_bars(built):
+    """The strip card's own boxes, picked by width — the one dimension
+    nothing else on the panel shares (see t.STRIP_BAR_W's own comment)."""
+    return [b for b in boxes(built) if abs(b.w - t.STRIP_BAR_W) < 0.01]
+
+
+class TestUsageHistoryStrip(unittest.TestCase):
+    """Stage 06: the 30-day usage-history card below the Overview tab's
+    account rows (popover_layout._strip_card). `history` is always passed
+    in explicitly here — build() takes it as plain data, the same as `now`,
+    and does no file I/O of its own (see build()'s own docstring)."""
+
+    def test_no_card_without_history(self):
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW)
+        self.assertEqual(strip_bars(built), [])
+        self.assertNotIn("Active account · 30 days", labels(built))
+
+    def test_no_card_when_every_day_is_none(self):
+        # A fresh install: the account exists but nothing has ever been
+        # recorded for it. Thirty Nones is "no history yet", not thirty
+        # stubs worth drawing.
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=[None] * 30)
+        self.assertEqual(strip_bars(built), [])
+
+    def test_thirty_bars_with_history_present(self):
+        history = [50.0] * 30
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        self.assertEqual(len(strip_bars(built)), 30)
+
+    def test_only_today_the_last_bar_is_drawn_in_chalk(self):
+        history = [10.0] * 29 + [95.0]
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        bars = strip_bars(built)
+        self.assertEqual(bars[-1].fill, t.TEXT)
+        self.assertTrue(all(b.fill != t.TEXT for b in bars[:-1]))
+
+    def test_a_none_day_draws_a_one_point_stub_in_bar_track(self):
+        history = [30.0] * 29 + [None]
+        # Put the None day somewhere other than "today" so this test can't
+        # be satisfied by accident by the today-is-chalk rule instead.
+        history[10] = None
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=history)
+        bars = strip_bars(built)
+        self.assertEqual(bars[10].h, 1.0)
+        self.assertEqual(bars[10].fill, t.BAR_TRACK)
+
+    def test_header_names_the_window_and_the_span(self):
+        built = layout.build(snap(account(active=True)), provider="overview",
+                             now=NOW, history=[20.0] * 30)
+        self.assertIn("Active account · 30 days", labels(built))
+        self.assertIn("7-day window, % used", labels(built))
+
+    def test_overview_height_grows_by_the_strip_when_present(self):
+        s = snap(account(active=True))
+        without = layout.overview_height(s)
+        with_strip = layout.overview_height(s, history=[40.0] * 30)
+        self.assertEqual(with_strip - without,
+                         t.CARD_GAP + layout.strip_height([40.0] * 30))
+
+    def test_overview_height_unchanged_when_history_is_all_none(self):
+        s = snap(account(active=True))
+        self.assertEqual(layout.overview_height(s),
+                         layout.overview_height(s, history=[None] * 30))
 
 
 class TestRemoveAffordance(unittest.TestCase):
@@ -660,6 +1019,20 @@ class TestHeaderAndFooter(unittest.TestCase):
         built = layout.build(snap(account()), version="1.0.0",
                              blocked_reason="2 unpushed commit(s)", now=NOW)
         self.assertIn("v1.0.0 · update held", labels(built))
+
+    def test_a_blocked_update_prefixes_the_footer_with_a_pause_glyph(self):
+        built = layout.build(snap(account()), version="1.0.0",
+                             blocked_reason="2 unpushed commit(s)", now=NOW)
+        pause = next(s for s in built.shapes
+                    if isinstance(s, t.Glyph) and s.kind == "pause")
+        label = next(s for s in built.shapes if isinstance(s, t.Label)
+                    and s.text == "v1.0.0 · update held")
+        self.assertLess(pause.cx, label.x)
+
+    def test_no_blocked_update_means_no_pause_glyph(self):
+        built = layout.build(snap(account()), version="1.0.0", now=NOW)
+        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "pause"
+                             for s in built.shapes))
 
 
 class TestClockConvention(unittest.TestCase):

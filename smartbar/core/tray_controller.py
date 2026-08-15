@@ -50,6 +50,7 @@ import time
 from smartbar import presence_client
 from smartbar.core import codex, cswap, model, plan, portable, presence
 from smartbar.core import update as update_core
+from smartbar.core import usage_history
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
 
@@ -293,12 +294,16 @@ class TrayController:
 
         Ordering pinned verbatim from the design's shared_methods entry:
         generation guard -> counters reset -> snapshot swap -> presence/
-        plan/codex decoration -> first-snapshot presence beat -> schema-
-        warning log -> update_pending -> set_icon -> set_title ->
-        rebuild_menu -> panel refresh (if any) -> alerts -> recapture.
-        Every platform's own _apply_snapshot did this in this order before
-        extraction; reordering here would silently change what all three
-        eventually show.
+        plan/codex decoration -> usage-history recording -> first-snapshot
+        presence beat -> schema-warning log -> update_pending -> set_icon ->
+        set_title -> rebuild_menu -> panel refresh (if any) -> alerts ->
+        recapture. Every platform's own _apply_snapshot did this in this
+        order before extraction; reordering here would silently change what
+        all three eventually show. Recording is the one step added since
+        that pinning (stage 06) — it slots in right after decoration so it
+        sees both providers' accounts, same as everything after it, and
+        before anything that actually paints, matching how the other local-
+        file reads/writes above it are already synchronous on this thread.
         """
         if generation != self.generation:
             return  # superseded (e.g. a pre-switch fetch landing late)
@@ -314,6 +319,11 @@ class TrayController:
         # ChatGPT accounts ride the snapshot's separate list (cheap local
         # reads, mtime-cached); a panel's OpenAI tab renders them.
         snap.openai = codex.accounts()
+        # Best-effort by the callee's own contract (see usage_history.record's
+        # docstring) — a history-write failure must never be able to cost a
+        # device its live usage display, so nothing here wraps this call a
+        # second time.
+        usage_history.record(snap)
         if not self.presence_started:
             # First real snapshot: announce this device now rather than
             # after a whole interval, and do it with accounts already in

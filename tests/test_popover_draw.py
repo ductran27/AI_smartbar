@@ -17,6 +17,7 @@ except ImportError:                                  # pragma: no cover
     cairo = None
 
 from smartbar.core import popover_layout as layout
+from smartbar.core import popover_theme as t
 
 
 def _demo():
@@ -103,6 +104,55 @@ class TestPopoverPainter(unittest.TestCase):
                                  fetched_at="2026-07-24T18:00:00Z",
                                  stale_reason="cswap timed out",
                                  blocked_reason="2 unpushed commit(s)"))
+
+
+@unittest.skipIf(cairo is None, "pycairo not installed")
+class TestGlyphDispatchCoversLayout(unittest.TestCase):
+    """The test that matters most in stage 04: every Glyph.kind the layout
+    can actually emit has to be a kind popover_draw._draw_glyph handles by
+    name. Without this, a forgotten or typo'd kind doesn't fail loudly —
+    _draw_glyph's fallback silently paints it as the power icon instead
+    (see its own docstring), and nobody notices until a screenshot from
+    someone else's Linux box looks wrong.
+    """
+
+    def _emitted_kinds(self):
+        demo = _demo()
+        builds = [
+            # The header, both tabs, a hovered card's ✕, a blocked card's
+            # warn line, every metric row's clock, and the footer's pause
+            # — one build for the states that coexist without contradicting
+            # each other (a hover and a hovered card share one build; the
+            # dismissible error banner needs its own, since nothing else
+            # renders it).
+            layout.build(demo, version="1.2.3", pending_version="1.3.0",
+                        blocked_reason="2 unpushed commit(s)",
+                        hover="card:claude:1"),
+            layout.build(demo, action_error="Switch failed: in use",
+                        hover="dismiss-error"),
+        ]
+        kinds = set()
+        for built in builds:
+            kinds |= {s.kind for s in built.shapes if isinstance(s, t.Glyph)}
+        return kinds
+
+    def test_every_emitted_kind_has_a_drawer(self):
+        from smartbar.paint import popover_draw
+        emitted = self._emitted_kinds()
+        self.assertTrue(emitted, "the demo build emitted no glyphs at all — "
+                        "this test would pass vacuously")
+        missing = emitted - set(popover_draw._GLYPH_DRAWERS)
+        self.assertEqual(missing, set(),
+                         f"{missing} would silently fall through to the "
+                         "power icon instead of failing loudly")
+
+    def test_the_demo_still_exercises_every_stage_04_kind(self):
+        # Guards the test above against going quiet for the wrong reason:
+        # if the demo snapshot ever stopped covering one of stage 04's new
+        # kinds, "nothing is missing" would stop meaning "nothing broke".
+        self.assertEqual(
+            {"claude", "openai", "clock", "warn", "pause"}
+            - self._emitted_kinds(), set())
 
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
