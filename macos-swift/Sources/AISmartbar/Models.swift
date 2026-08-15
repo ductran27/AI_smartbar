@@ -192,17 +192,6 @@ struct Account: Identifiable, Equatable {
         return AccountState.text(forStatus: status)
     }
 
-    /// stateText's opening clause — the NAME of the state, without its
-    /// instruction ("Re-login required", "Signed out"). The Overview row
-    /// has room for a word, not a sentence; the account's own card still
-    /// carries the whole thing. Split on the same " — " separator every
-    /// AccountState.text entry is written with, rather than kept as a
-    /// second table beside them, so the two can never drift (mirror of
-    /// model.state_summary, pinned by TestStateSummaryParity).
-    var stateSummary: String {
-        stateText.components(separatedBy: " — ").first ?? stateText
-    }
-
     /// Activating this slot would restore a dead stored credential.
     var switchBlocked: Bool { AccountState.switchBlocked(status: status) }
 
@@ -213,13 +202,6 @@ struct Account: Identifiable, Equatable {
     var scopedWorst: Metric? {
         metrics.filter { $0.isScoped }.max(by: { $0.pct < $1.pct })
     }
-
-    /// The metric closest to its limit, or nil without data (mirror of
-    /// model.worst). worstPct/worstStatus below answer "how bad" without
-    /// the metric itself; OverviewView needs the metric ITSELF (its key,
-    /// for the bar's pace caret), which is why this exists as its own
-    /// property rather than just being folded into worstPct's expression.
-    var worstMetric: Metric? { metrics.max(by: { $0.pct < $1.pct }) }
 
     var worstPct: Double { metrics.map { $0.pct }.max() ?? 0 }
     var worstUsedPct: Int { Int(max(0, worstPct).rounded()) }

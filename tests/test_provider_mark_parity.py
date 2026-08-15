@@ -1,8 +1,8 @@
 """Stage 04's icon language exists twice, in two languages. Pin them
 together.
 
-ProviderMark.swift is the Swift twin of popover_draw.py's six new drawing
-functions (overview/claude/openai/clock/pause/warn), and three call sites —
+ProviderMark.swift is the Swift twin of popover_draw.py's five new drawing
+functions (claude/openai/clock/pause/warn), and three call sites —
 PopoverView.tabButton, MetricBarRow's countdown, AccountCardView's blocked
 state line — each duplicate a "glyph beside a line of text" size as a
 SwiftUI frame/spacing literal: TAB_MARK/TAB_MARK_GAP for the tab marks,
@@ -28,11 +28,11 @@ POPOVER_SOURCE = os.path.join(SWIFT_DIR, "PopoverView.swift")
 ROW_SOURCE = os.path.join(SWIFT_DIR, "MetricBarRow.swift")
 CARD_SOURCE = os.path.join(SWIFT_DIR, "AccountCardView.swift")
 
-# The six kinds stage 04 added on the Python side (see
+# The five kinds stage 04 added on the Python side (see
 # popover_draw._GLYPH_DRAWERS) that have no SF Symbol equivalent and so get
 # a drawn Swift twin. "refresh"/"close"/"power"/"quit" stay SF-Symbol-driven
 # on macOS — they are not part of this parity claim.
-NEW_KINDS = {"overview", "claude", "openai", "clock", "pause", "warn"}
+NEW_KINDS = {"claude", "openai", "clock", "pause", "warn"}
 
 
 def _read(path: str) -> str:

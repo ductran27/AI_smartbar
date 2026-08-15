@@ -339,7 +339,6 @@ class TestTheRealApplyPathRunsAgainstThisHost(MenubarTestCase):
              mock.patch("smartbar.presence_client.counts", return_value={}), \
              mock.patch("smartbar.core.plan.plans_by_email", return_value={}), \
              mock.patch("smartbar.core.codex.accounts", return_value=[]), \
-             mock.patch("smartbar.core.usage_history.record"), \
              mock.patch("smartbar.update_runner.pending_for_ui",
                         return_value=("", "")):
             c._apply_snapshot(snapshot(), c.generation)
