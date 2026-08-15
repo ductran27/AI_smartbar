@@ -26,9 +26,9 @@ DEFAULT_RED_USED = 90.0
 # be able to run (tests/test_model.py asserts parity).
 DOT = {"green": "🟢", "yellow": "🟡", "low": "🟠", "critical": "🔴",
        "full": "🟣", "gray": "⚪"}
-RGB = {"green": (0.18, 0.65, 0.32), "yellow": (0.85, 0.65, 0.13),
-       "low": (0.894, 0.376, 0.294), "critical": (0.80, 0.184, 0.184),
-       "full": (0.545, 0.361, 0.965), "gray": (0.45, 0.45, 0.45)}
+RGB = {"green": (0.239, 0.745, 0.545), "yellow": (0.847, 0.651, 0.290),
+       "low": (0.867, 0.478, 0.271), "critical": (0.851, 0.325, 0.310),
+       "full": (0.486, 0.420, 0.910), "gray": (0.361, 0.400, 0.447)}
 
 # cswap usageStatus values other than "ok", mapped to the short explanation
 # UIs put on the account's card/row (instead of a bare "No usage data").

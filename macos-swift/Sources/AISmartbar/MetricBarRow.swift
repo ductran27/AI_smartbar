@@ -40,7 +40,7 @@ struct MetricBarRow: View {
 
     private func valueText(now: Date) -> some View {
         let countdown = metric.liveCountdown(now: now)
-        let color = metric.pct >= 100 ? Color.white.opacity(0.68)
+        let color = metric.pct >= 100 ? Palette.spent
                                        : Color.white.opacity(0.8)
         // Percentage and countdown are two INDEPENDENTLY right-anchored
         // labels, each in its own fixed-width trailing frame, not one
