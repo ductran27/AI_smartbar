@@ -54,9 +54,32 @@ def enabled() -> bool:
     return os.environ.get("SMARTBAR_UPDATE", "").strip().lower() != "off"
 
 
-def channel(default: str = CHANNEL_RELEASE) -> str:
+def channel(default: str = CHANNEL_RELEASE, fallback: str = "") -> str:
+    """This device's channel: environment first, then `fallback`, then default.
+
+    Same resolution order as check_interval, for a sharper reason: the two
+    channels disagree about what "up to date" MEANS, so guessing wrong does
+    not degrade an answer, it inverts it.
+
+    The channel is deliberately not a config.env key (device_config.RESERVED)
+    — it is baked into the agent the installers write. So a process launched
+    BY that agent has it, and any other process has nothing: a manual
+    `--check-update` from the popover, or a hand-run in a terminal, silently
+    fell back to `release`. That is how a main-channel device answered
+    "0.11.0 available" to its popover and "already up to date" to its own
+    agent, in the same minute, from the same checkout — and then wrote the
+    losing answer into the state file both of them read.
+
+    `fallback` closes it: run_once passes the channel the previous run
+    recorded, so an unconfigured caller inherits the device's real channel
+    instead of assuming one. An explicit environment value still wins, so
+    `--channel` and the agent's own plist keep overriding it.
+    """
     raw = os.environ.get("SMARTBAR_UPDATE_CHANNEL", "").strip().lower()
-    return raw if raw in CHANNELS else default
+    if raw in CHANNELS:
+        return raw
+    hint = (fallback or "").strip().lower()
+    return hint if hint in CHANNELS else default
 
 
 def check_interval(fallback: str = "") -> float:
@@ -267,7 +290,8 @@ class CheckOutcome:
 
 
 def check_outcome(*, pending: str = "", blocked: str = "",
-                  failed: bool = False, ran: bool = True) -> CheckOutcome:
+                  failed: bool = False, ran: bool = True,
+                  current: str = "") -> CheckOutcome:
     """Turn a finished manual check into something honest to show.
 
     `ran` exists because a check that never happened must not be reported as
@@ -275,6 +299,15 @@ def check_outcome(*, pending: str = "", blocked: str = "",
     is current AND when another update run already holds the lock (or updates
     are switched off) — so the caller compares the state file's checkedAt
     before and after, and passes ran=False when nothing moved.
+
+    `current` exists because "available" has to mean CLICKABLE. Every front
+    end refuses to offer an upgrade to the version it is already running —
+    that is a no-op that would restart the app for nothing — so a plan naming
+    that version leaves the user reading "⬆ 0.11.0 available" beside a footer
+    with no button, and a notification pointing at a control that was never
+    drawn. The suppression is decided HERE rather than in each UI so the
+    wording and the rule cannot drift apart: if there is nothing to click,
+    this must not say there is.
     """
     if failed:
         return CheckOutcome("✕ Check failed", "AI smartbar",
@@ -284,12 +317,20 @@ def check_outcome(*, pending: str = "", blocked: str = "",
         return CheckOutcome("… Check busy", "AI smartbar",
                             "An update run is already in progress — "
                             "try again in a moment.")
-    if pending:
+    if pending and pending != current:
         # pendingVersion is only ever set for an actionable update (ui_state
         # clears it otherwise), so this cannot collide with `blocked`.
+        #
+        # The body names the control rather than the surface: this same text
+        # is read on a Linux/Windows tray row, a cairo popover button and the
+        # Mac's SwiftUI footer. It used to say "in the tray menu", which the
+        # Mac app has never had — it sends the user looking for a menu item
+        # that does not exist. "Update to X" is the one label all four
+        # actually render.
         return CheckOutcome(f"⬆ {pending} available", "AI smartbar update",
-                            f"{pending} is ready. Pick “⬆ Update to {pending}” "
-                            "in the tray menu to apply it now.", found=True)
+                            f"{pending} is ready. Open AI smartbar and pick "
+                            f"“Update to {pending}” to apply it now.",
+                            found=True)
     if blocked:
         return CheckOutcome("✕ Update held back", "AI smartbar update",
                             "An update is waiting but held back: " + blocked)
@@ -297,7 +338,8 @@ def check_outcome(*, pending: str = "", blocked: str = "",
                         "No new release — this device is current.")
 
 
-def ui_state(plan, version: str, now=None, applied: str = "") -> dict:
+def ui_state(plan, version: str, now=None, applied: str = "",
+             channel: str = "") -> dict:
     """The JSON blob the UIs read to offer their one-click upgrade button."""
     stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     payload = {
@@ -308,6 +350,13 @@ def ui_state(plan, version: str, now=None, applied: str = "") -> dict:
         "pendingVersion": plan.target_version if plan.should_apply else "",
         "pendingRef": plan.target_ref if plan.should_apply else "",
     }
+    if channel:
+        # The device's own answer to "which channel am I on", left where the
+        # next run can find it. Only the agent's process reliably HAS the
+        # setting (it is baked into the agent, not into config.env), so
+        # recording it here is what lets a manual check resolve the same
+        # channel instead of assuming one — see channel()'s `fallback`.
+        payload["channel"] = channel
     if applied:
         payload["appliedVersion"] = applied
         payload["appliedAt"] = payload["checkedAt"]
