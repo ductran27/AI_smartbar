@@ -252,13 +252,10 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     shapes.append(t.Box(
         left, top, right - left, height, radius=t.CARD_RADIUS, fill=s.card_bg,
         stroke=s.card_border, line_width=1.0))
-    if account.active:
-        # Drawn AFTER the card so it sits on top, and deliberately inset
-        # into the card's own horizontal padding rather than shifting
-        # inner_l — becoming active must never reflow a row.
-        shapes.append(t.Box(left, top + t.RAIL_INSET, t.RAIL_W,
-                            height - t.RAIL_INSET * 2, radius=t.RAIL_W / 2,
-                            fill=s.rail))
+    # No extra mark on the active card: the green ACTIVE chip in its header
+    # already says so, in words, and a leading rail beside it was one signal
+    # too many — the brightest ink on the panel spent on a fact already
+    # stated. Every card is now the same shape, whichever one is active.
 
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
 

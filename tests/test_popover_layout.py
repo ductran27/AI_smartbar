@@ -46,13 +46,6 @@ def bars(built):
     return [b for b in boxes(built) if abs(b.h - t.BAR_H) < 0.01]
 
 
-def rails(built):
-    """Active-card leading-rail boxes, picked by fill color — the rail is
-    the only box painted RAIL, so this can't be confused with a card box,
-    a bar, or a button of the same width."""
-    return [b for b in boxes(built) if b.fill == t.DARK.rail]
-
-
 def chips(built):
     """Plan/device micro-chip boxes, picked by fill+height so a disabled
     Make Active button (also BUTTON_DISABLED-filled, but BUTTON_H tall)
@@ -186,7 +179,7 @@ class TestCardContent(unittest.TestCase):
     def test_every_card_gets_the_same_hairline_border(self):
         # The 1.5pt pure-white outline that used to single out the active
         # card is gone — active and inactive cards share one quiet hairline
-        # now; the rail (below) is what marks "active" instead.
+        # now, and the ACTIVE chip is what marks "active" instead.
         active = layout.build(snap(account(active=True)), now=NOW)
         inactive = layout.build(snap(account(number=4)), now=NOW)
         self.assertIn("ACTIVE", labels(active))
@@ -204,23 +197,19 @@ class TestCardContent(unittest.TestCase):
         built = layout.build(snap(account(number=4, active=True)), now=NOW)
         self.assertFalse(any(h.name.startswith("switch") for h in built.hits))
 
-    def test_active_card_gets_exactly_one_rail_at_its_left_edge(self):
+    def test_the_active_card_is_marked_by_its_chip_alone(self):
+        """A rail used to run down the active card's left edge as well —
+        the brightest ink on the panel spent on a fact the green ACTIVE
+        chip already states in words. Nothing is drawn at the card's own
+        edge now; everything inside it starts past the card's padding."""
         built = layout.build(snap(account(active=True)), now=NOW)
         card = boxes(built)[0]
-        rail_boxes = rails(built)
-        self.assertEqual(len(rail_boxes), 1)
-        self.assertAlmostEqual(rail_boxes[0].x, card.x)
-        self.assertAlmostEqual(rail_boxes[0].w, t.RAIL_W)
-        self.assertAlmostEqual(rail_boxes[0].h, card.h - t.RAIL_INSET * 2)
-
-    def test_non_active_card_gets_no_rail(self):
-        built = layout.build(snap(account(number=4)), now=NOW)
-        self.assertEqual(rails(built), [])
-
-    def test_only_the_active_card_among_several_gets_a_rail(self):
-        built = layout.build(
-            snap(account(number=2), account(number=3, active=True)), now=NOW)
-        self.assertEqual(len(rails(built)), 1)
+        within = [b for b in boxes(built)[1:]
+                  if card.y <= b.y and b.y + b.h <= card.y + card.h]
+        self.assertIn("ACTIVE", labels(built))
+        self.assertTrue(within, "no boxes inside the card — test is vacuous")
+        for box in within:
+            self.assertGreaterEqual(box.x, card.x + t.CARD_PAD_H)
 
     def test_the_device_count_becomes_a_micro_chip(self):
         card = account(email="a@example.com")
