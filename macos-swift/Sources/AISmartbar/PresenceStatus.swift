@@ -95,17 +95,6 @@ final class PresenceStatus: ObservableObject {
         }
     }
 
-    /// Mirror of model.account_label: the address, plus the device count
-    /// when anyone is on it. Appended rather than prefixed so that middle
-    /// truncation of a long address keeps the badge visible.
-    static func label(_ email: String, devices: Int) -> String {
-        devices > 0 ? "\(email) (\(devices))" : email
-    }
-
-    func label(for account: Account) -> String {
-        Self.label(account.email, devices: counts[account.email] ?? 0)
-    }
-
     private static var stateURL: URL {
         let env = ProcessInfo.processInfo.environment
         let dir = env["SMARTBAR_CACHE_DIR"].flatMap { $0.isEmpty ? nil : $0 }

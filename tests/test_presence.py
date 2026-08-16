@@ -407,14 +407,9 @@ class TestRendering(unittest.TestCase):
         acct.devices = devices
         return acct
 
-    def test_the_count_follows_the_address(self):
-        self.assertEqual(model.account_label(self.account(2)), "a@b.com (2)")
-
-    def test_no_badge_when_nobody_is_on_it(self):
-        self.assertEqual(model.account_label(self.account(0)), "a@b.com")
-
-    def test_menu_rows_carry_it_too(self):
-        self.assertIn("a@b.com (3)", model.menu_row(self.account(3)))
+    def test_the_count_never_shows_in_the_label_or_menu_row(self):
+        self.assertEqual(model.account_label(self.account(2)), "a@b.com")
+        self.assertNotIn("(3)", model.menu_row(self.account(3)))
 
     def test_accounts_default_to_no_count(self):
         self.assertEqual(model.account_label(model.Account(1, "a@b.com")),
@@ -528,12 +523,12 @@ class TestMacAndLinuxAgree(unittest.TestCase):
     """The one place presence exists twice, in two languages.
 
     Publishing and reading refs is shared Python, so the WIRE cannot drift.
-    But the macOS UI re-implements four policy decisions in Swift that the
-    Linux UI takes from core/presence.py — the badge format, the kill switch,
-    the beat interval and the staleness window. Nothing else in the build
-    compares them, so they can silently diverge and give two machines
-    different answers from identical config. This reads the Swift source and
-    pins the constants to the Python ones.
+    But the macOS UI re-implements policy decisions in Swift that the Linux
+    UI takes from core/presence.py — the kill switch, the beat interval and
+    the staleness window. Nothing else in the build compares them, so they
+    can silently diverge and give two machines different answers from
+    identical config. This reads the Swift source and pins the constants to
+    the Python ones.
 
     Source-scraping is deliberate: it runs in the ordinary unit suite, on
     Linux, with no Swift toolchain — so a Linux-only contributor still cannot
@@ -561,21 +556,16 @@ class TestMacAndLinuxAgree(unittest.TestCase):
             else:
                 os.environ[key] = value
 
-    def test_the_badge_is_formatted_the_same_on_both(self):
-        # model.account_label is what Linux renders; this is what macOS
-        # renders. Same address, same count, same string.
-        self.assertIn(r'devices > 0 ? "\(email) (\(devices))" : email',
-                      self.swift)
-        account = model.Account(number=1, email="a@b.c", devices=2)
-        self.assertEqual(model.account_label(account), "a@b.c (2)")
-
-    def test_zero_devices_renders_no_badge_on_both(self):
-        # The Swift guard is `devices > 0`; Python's is `count > 0`. A "(0)"
-        # on one platform and a bare address on the other would be the most
-        # visible possible drift.
-        account = model.Account(number=1, email="a@b.c", devices=0)
-        self.assertEqual(model.account_label(account), "a@b.c")
-        self.assertIn("devices > 0 ?", self.swift)
+    def test_neither_side_renders_a_device_count_badge(self):
+        # The device count used to ride on model.account_label /
+        # PresenceStatus.label on both platforms; it no longer does on
+        # either — AccountCardView's own accountBadge/accountLabel (pinned
+        # by test_account_card_parity.py) is the only badge each renders.
+        for devices in (0, 2):
+            account = model.Account(number=1, email="a@b.c", devices=devices)
+            self.assertEqual(model.account_label(account), "a@b.c")
+        self.assertNotIn("devices > 0 ? \"\\(email) (\\(devices))\" : email",
+                         self.swift)
 
     def test_the_kill_switch_is_spelled_the_same(self):
         self.assertIn('environment["SMARTBAR_PRESENCE"]', self.swift)

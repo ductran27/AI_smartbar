@@ -233,28 +233,24 @@ class TestCardContent(unittest.TestCase):
         self.assertEqual([(b.x, b.w) for b in bars(active)],
                          [(b.x, b.w) for b in bars(inactive)])
 
-    def test_the_device_count_becomes_a_micro_chip(self):
-        card = account(email="a@example.com")
-        card.devices = 2
-        built = layout.build(snap(card), now=NOW)
-        self.assertIn("a@example.com", labels(built))
-        self.assertIn("(2)", labels(built))
-        self.assertEqual(len(chips(built)), 1)
-
-    def test_the_plan_and_device_badges_share_one_chip(self):
+    def test_the_plan_becomes_a_micro_chip(self):
         card = account(email="a@example.com")
         card.plan = "20x"
-        card.devices = 2
         built = layout.build(snap(card), now=NOW)
         self.assertIn("a@example.com", labels(built))
-        self.assertIn("20x (2)", labels(built))
+        self.assertIn("20x", labels(built))
         self.assertEqual(len(chips(built)), 1)
 
     def test_no_chip_when_there_is_nothing_to_say(self):
-        # No plan and no devices: account_badge() is "", and the card must
-        # draw no chip at all rather than an empty pill.
+        # No plan: account_badge() is "", and the card must draw no chip at
+        # all rather than an empty pill. A device count alone (no plan)
+        # draws no chip either — the badge no longer counts devices.
         built = layout.build(snap(account()), now=NOW)
         self.assertIn("a@example.com", labels(built))
+        self.assertEqual(chips(built), [])
+        card = account(email="b@example.com")
+        card.devices = 2
+        built = layout.build(snap(card), now=NOW)
         self.assertEqual(chips(built), [])
 
     def test_the_chip_shrinks_the_address_budget(self):
@@ -273,7 +269,7 @@ class TestCardContent(unittest.TestCase):
         # have to clear the ACTIVE chip — or a long address / wide badge
         # would be drawn straight through it.
         card = account(email="a" * 60 + "@example.com", active=True)
-        card.devices = 3
+        card.plan = "20x"
         built = layout.build(snap(card), now=NOW)
         address = next(s for s in built.shapes
                        if isinstance(s, t.Label) and s.text.startswith("aaa"))
@@ -867,17 +863,16 @@ class TestRemoveAffordance(unittest.TestCase):
 
     def test_the_confirm_question_never_needs_more_than_its_reserved_lines(self):
         # CONSTRAINT from FINDING 2: the full account label — including the
-        # plan badge and device count, not just the bare address — must
-        # stay readable, un-truncated, for a realistic address. Stack a
-        # long one with both badges to stress the reserved line budget.
+        # plan badge, not just the bare address — must stay readable,
+        # un-truncated, for a realistic address. Stack a long one with the
+        # badge to stress the reserved line budget.
         card = account(number=2, email="nguyentran4896@gmail.com")
         card.plan = "20x"
-        card.devices = 3
         built = layout.build(snap(card), confirm="claude:2", now=NOW)
         label = next(s for s in built.shapes
                      if isinstance(s, t.Label) and s.text.startswith("Remove"))
         self.assertEqual(
-            label.text, "Remove nguyentran4896@gmail.com · 20x (3)?")
+            label.text, "Remove nguyentran4896@gmail.com · 20x?")
         needed = layout._lines_for_width(label.text, label.max_width,
                                          size=t.SIZE_EMAIL, bold=True,
                                          cap=t.CONFIRM_MAX_LINES)

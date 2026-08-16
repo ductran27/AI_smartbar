@@ -105,16 +105,16 @@ class TestLabelComposition(unittest.TestCase):
     def test_email_only(self):
         self.assertEqual(model.account_label(_account()), "a@x.com")
 
-    def test_plan_slots_between_email_and_devices(self):
+    def test_plan_slots_after_the_email(self):
         self.assertEqual(model.account_label(_account(plan_label="20x")),
                          "a@x.com · 20x")
+
+    def test_devices_never_show_in_the_label(self):
         self.assertEqual(
             model.account_label(_account(plan_label="5x", devices=2)),
-            "a@x.com · 5x (2)")
-
-    def test_devices_without_plan_is_unchanged(self):
+            "a@x.com · 5x")
         self.assertEqual(model.account_label(_account(devices=3)),
-                         "a@x.com (3)")
+                         "a@x.com")
 
 
 class TestApplyPlans(unittest.TestCase):
@@ -166,16 +166,16 @@ class TestPlanParity(unittest.TestCase):
             p.read_text(encoding="utf-8") for p in sorted(SWIFT_DIR.glob("*.swift")))
 
     def test_badge_composition_matches_python(self):
-        # Stage 03: the plan/device badge moved off the header string and
-        # into its own micro-chip (accountBadge / planBadge in Swift,
+        # Stage 03: the plan badge moved off the header string and into its
+        # own micro-chip (accountBadge / planBadge in Swift,
         # model.account_badge in Python) — pinned in full, alongside the
         # Swift literals it composes, by tests/test_account_card_parity.py.
         # account_label (the un-chipped, full-identity form the remove
         # confirmation still uses) is untouched by that move.
         self.assertIn("private var accountBadge: String", self.card)
         self.assertEqual(
-            model.account_label(_account(plan_label="20x", devices=2)),
-            "a@x.com · 20x (2)")
+            model.account_label(_account(plan_label="20x")),
+            "a@x.com · 20x")
 
     def test_swift_maps_nothing(self):
         for marker in ("organizationRateLimitTier", "default_claude",
