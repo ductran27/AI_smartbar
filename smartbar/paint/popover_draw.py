@@ -42,14 +42,23 @@ def _select_font(ctx, label) -> None:
     ctx.set_font_size(label.size)
 
 
-def _fit(ctx, text: str, max_width: float) -> str:
-    """Middle-truncate to fit — mirrors SwiftUI .truncationMode(.middle)."""
+def _fit(ctx, text: str, max_width: float, mode: str = "tail") -> str:
+    """Truncate to fit, mirroring SwiftUI's own default (.tail) or the one
+    Text that opts into .truncationMode(.middle) — see Label.mode's comment
+    in popover_theme.py for which is which."""
     if max_width <= 0 or ctx.text_extents(text).x_advance <= max_width:
         return text
+    if mode == "middle":
+        for keep in range(len(text) - 1, 0, -1):
+            head = (keep + 1) // 2
+            tail = keep - head
+            candidate = (text[:head] + "…"
+                        + (text[len(text) - tail:] if tail else ""))
+            if ctx.text_extents(candidate).x_advance <= max_width:
+                return candidate
+        return "…"
     for keep in range(len(text) - 1, 0, -1):
-        head = (keep + 1) // 2
-        tail = keep - head
-        candidate = text[:head] + "…" + (text[len(text) - tail:] if tail else "")
+        candidate = text[:keep] + "…"
         if ctx.text_extents(candidate).x_advance <= max_width:
             return candidate
     return "…"
@@ -82,10 +91,11 @@ def _draw_dot(ctx, dot) -> None:
     ctx.new_path()
 
 
-def _wrap(ctx, text: str, max_width: float, max_lines: int) -> list:
+def _wrap(ctx, text: str, max_width: float, max_lines: int,
+          mode: str = "tail") -> list:
     """Word-wrap to at most max_lines, truncating the last — .lineLimit(n)."""
     if max_lines <= 1 or max_width <= 0:
-        return [_fit(ctx, text, max_width)]
+        return [_fit(ctx, text, max_width, mode)]
     words, lines, current = text.split(), [], ""
     for index, word in enumerate(words):
         candidate = (current + " " + word).strip()
@@ -97,13 +107,14 @@ def _wrap(ctx, text: str, max_width: float, max_lines: int) -> list:
             current = word
         else:
             current = candidate
-    lines.append(_fit(ctx, current, max_width))
+    lines.append(_fit(ctx, current, max_width, mode))
     return lines[:max_lines]
 
 
 def _draw_label(ctx, label) -> None:
     _select_font(ctx, label)
-    lines = _wrap(ctx, label.text, label.max_width, label.max_lines)
+    lines = _wrap(ctx, label.text, label.max_width, label.max_lines,
+                  label.mode)
     ascent, descent, line_h = ctx.font_extents()[:3]
     _set(ctx, label.color)
     top = label.y - (len(lines) - 1) * line_h / 2
