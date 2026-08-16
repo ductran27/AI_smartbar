@@ -216,6 +216,41 @@ class TestMacOSCarriesTheNameAndTheLogo(unittest.TestCase):
         self.assertIn("WARNING", block)
         self.assertNotIn("exit 1", block)
 
+    def test_the_bundle_is_touched_and_re_registered_after_signing(self):
+        """Writing a correct icon is not the same as macOS reading it.
+
+        LaunchServices keys its cached Info.plist on the .app DIRECTORY's
+        mtime, and everything this installer writes goes INSIDE Contents/ —
+        so an upgraded device keeps serving the record from its very first
+        install: no icon, and a version string frozen wherever it started.
+        Both halves are load-bearing. `touch` alone leaves the refresh until
+        macOS happens to rescan; `lsregister -f` alone re-reads a bundle
+        macOS still believes is unchanged.
+        """
+        script = read(MACOS)
+        self.assertIn('touch "$APP_DIR"', script)
+        self.assertRegex(script, r'"\$LSREGISTER" -f "\$APP_DIR"')
+        # Order matters: re-registering before the mtime moves asks macOS to
+        # refresh from a bundle it still considers untouched.
+        self.assertLess(script.index('touch "$APP_DIR"'),
+                        script.index('"$LSREGISTER" -f'))
+        # And it must run AFTER the plist it is meant to publish exists —
+        # registering the bundle before Info.plist is written caches the very
+        # staleness this is here to clear.
+        self.assertLess(script.index("<key>CFBundleIconFile</key>"),
+                        script.index('touch "$APP_DIR"'))
+
+    def test_the_re_registration_cannot_take_the_install_down_with_it(self):
+        # Same contract as the icon build above: this runs unattended from
+        # the updater, where trading a working menu bar for a fresh icon is
+        # the wrong way round. lsregister is an undocumented support binary
+        # Apple has moved before, so absence is a supported answer.
+        script = read(MACOS)
+        block = script.split('touch "$APP_DIR"')[1].split("cat > \"$PLIST\"")[0]
+        self.assertIn("WARNING", block)
+        self.assertNotIn("exit 1", block)
+        self.assertIn('[[ -x "$LSREGISTER" ]]', block)
+
 
 class TestWindowsCarriesTheNameAndTheLogo(unittest.TestCase):
     def test_the_shortcut_points_at_an_ico_converted_from_the_asset(self):
