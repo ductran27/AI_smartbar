@@ -563,6 +563,8 @@ def run_once(*, reset: bool = False, force: bool = False,
     targets = update.apply_targets(present_installers())
     log.info("applying %s via: %s", plan.target_ref,
              ", ".join(targets) or "no installers detected")
+    notify("AI smartbar",
+           f"Updating to {plan.target_version or plan.target_ref[:8]}…")
     prev_head, prev_branch = repo.head, repo.branch
     bundled = backup_bundle() if "macos_swift" in targets else False
 
