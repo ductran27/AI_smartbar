@@ -141,6 +141,17 @@ jobs:
       - name: Install Cairo build dependencies
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
 
+      # pip's wheel cache persists the compiled sdist build, so a cache hit
+      # turns this from a from-source compile into a plain unpack. Bump the
+      # key's version suffix whenever the pin below changes -- a stale key
+      # just costs one rebuild, not correctness, since the key only decides
+      # whether pip's cache is warm.
+      - name: Cache built pycairo wheel
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-pycairo-1.29.0-py3.12
+
       - name: Install pinned pycairo
         run: python -m pip install --disable-pip-version-check pycairo==1.29.0
 
