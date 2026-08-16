@@ -407,28 +407,20 @@ class TestAccountAddress(Env):
 
 
 class TestAccountBadge(Env):
-    def test_neither_plan_nor_devices_is_empty(self):
+    def test_no_plan_is_empty(self):
         self.assertEqual(model.account_badge(_badge_account()), "")
 
     def test_plan_only(self):
         self.assertEqual(model.account_badge(_badge_account(plan="Pro")),
                          "Pro")
 
-    def test_devices_only(self):
-        self.assertEqual(model.account_badge(_badge_account(devices=2)),
-                         "(2)")
-
-    def test_plan_and_devices(self):
+    def test_devices_never_contribute(self):
+        # The device count used to ride on the badge as "(N)"; it no longer
+        # does — see AccountCardView's own devicesHelp tooltip instead.
         self.assertEqual(
             model.account_badge(_badge_account(plan="20x", devices=2)),
-            "20x (2)")
-
-    def test_a_zero_device_count_contributes_nothing(self):
-        # 0 means "nobody is on it", not "(0)" — same convention as the
-        # old account_label (see core/presence.py).
-        self.assertEqual(
-            model.account_badge(_badge_account(plan="Pro", devices=0)),
-            "Pro")
+            "20x")
+        self.assertEqual(model.account_badge(_badge_account(devices=3)), "")
 
 
 class TestAccountLabelComposition(Env):
@@ -440,18 +432,14 @@ class TestAccountLabelComposition(Env):
     def _check(self, acct):
         address = model.account_address(acct)
         badge = model.account_badge(acct)
-        composed = address if not badge else (
-            f"{address} {badge}" if badge.startswith("(")
-            else f"{address} · {badge}")
+        composed = f"{address} · {badge}" if badge else address
         self.assertEqual(model.account_label(acct), composed)
 
     def test_plan_only(self):
         self._check(_badge_account(plan="20x"))
 
-    def test_devices_only(self):
+    def test_devices_never_show(self):
         self._check(_badge_account(devices=3))
-
-    def test_plan_and_devices(self):
         self._check(_badge_account(plan="20x", devices=2))
 
     def test_neither(self):

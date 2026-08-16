@@ -42,27 +42,22 @@ struct AccountCardView: View {
             : (planStatus.plans[account.email] ?? "")
     }
 
-    /// "20x (2)", "Pro", "(2)", or "" — the plan/device suffix alone, drawn
-    /// as its own micro-chip (planBadge) rather than riding inside the
-    /// header string. Composed the same way model.account_badge is, so
-    /// Swift's chip and Python's chip can never disagree (pinned by
+    /// "20x", "Pro", or "" — the plan suffix alone, drawn as its own
+    /// micro-chip (planBadge) rather than riding inside the header string.
+    /// Composed the same way model.account_badge is, so Swift's chip and
+    /// Python's chip can never disagree (pinned by
     /// tests/test_account_card_parity.py).
-    private var accountBadge: String {
-        let plan = accountPlan
-        guard devices > 0 else { return plan }
-        return plan.isEmpty ? "(\(devices))" : "\(plan) (\(devices))"
-    }
+    private var accountBadge: String { accountPlan }
 
-    /// "a@b.com · 20x (2)" — model.account_label(account) as a plain
-    /// String, for the one spot (the remove confirmation) that still wants
-    /// the full identity as one un-chipped line. Composed from
-    /// accountBadge, the same way model.account_label composes from
+    /// "a@b.com · 20x" — model.account_label(account) as a plain String,
+    /// for the one spot (the remove confirmation) that still wants the
+    /// full identity as one un-chipped line. Composed from accountBadge,
+    /// the same way model.account_label composes from
     /// account_address/account_badge, so the two can never drift apart.
     private var accountLabel: String {
         let badge = accountBadge
         guard !badge.isEmpty else { return account.email }
-        let separator = badge.hasPrefix("(") ? " " : " \u{00B7} "
-        return "\(account.email)\(separator)\(badge)"
+        return "\(account.email) \u{00B7} \(badge)"
     }
 
     /// OpenAI cards say when their numbers were measured (they move only
