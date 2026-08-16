@@ -47,6 +47,7 @@ _FIELD_FOR = {
     "textSecondary": "text_secondary",
     "textTertiary": "text_tertiary",
     "textSpent": "text_spent",
+    "rail": "rail",
     "barTrack": "bar_track",
     "pace": "pace",
     "buttonBG": "button_bg",
