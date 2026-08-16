@@ -14,28 +14,33 @@ The panel — the same layout on macOS, Linux and Windows:
  [✳ Claude]  ❁ OpenAI
   ┌──────────────────────────────────────────┐
   │ ● ios8build@gmail.com  20x [Make Active] │
-  │ 5h                          45% ◷ 2h 43m │
-  │ ██████████████████──────╎─────────────── │
-  │ 7d                          24% ◷ 6d 14h │
-  │ ██████████─────────────╎──────────────── │
-  │ Fable                       34% ◷ 6d 14h │
+  │ 5h   resets in 2h 43m                45% │
+  │ ██████████████████────────────────────── │
+  │                        ╷                 │
+  │ 7d   resets in 6d 14h                24% │
+  │ ██████████────────────────────────────── │
+  │                       ╷                  │
+  │ Fable  resets in 6d 14h              34% │
   │ ██████████████────────────────────────── │
   └──────────────────────────────────────────┘
   ┌──────────────────────────────────────────┐
   │ ● other@account          (2)    [ACTIVE] │
-  │ 5h                          62% ◷ 1h 02m │
-  │ ███████████████████╎█████─────────────── │
+  │ 5h   resets in 1h 02m                62% │
+  │ █████████████████████████─────────────── │
+  │                   ╷                      │
   └──────────────────────────────────────────┘
    v1.0.0                    [Update to 1.1.0]
 
  (numbers are % USED — the /usage scale; each limit is a label line over a
   full-width bar; the [ACTIVE] chip is the only mark on the active card;
-  ╎ = the pace notch, how far through that window you are — past the fill
-  means you are under budget, inside it means you are burning faster;
-  ◷ = time to reset; one chip carries the plan and the device count;
-  [✳ Claude] ❁ OpenAI = provider tabs, each with its provider's mark, the
-  selected pill bright and the other faded, row only present when both
-  providers have accounts; follows the system's light/dark appearance)
+  "resets in …" sits beside the window it belongs to, so the only number
+  over the bar is the bar's own; ╷ = the pace tick under the bar, how far
+  through that window you are — past the fill means you are under budget,
+  before it means you are burning faster; one chip carries the plan and
+  the device count; [✳ Claude] ❁ OpenAI = provider tabs, each with its
+  provider's mark, the selected pill bright and the other faded, row only
+  present when both providers have accounts; follows the system's
+  light/dark appearance)
 ```
 
 ## Features
@@ -51,8 +56,8 @@ The panel — the same layout on macOS, Linux and Windows:
   into the API's percentages, so both read the same scale.
 - **Native macOS popover** (SwiftUI, macOS 13+). One card per account,
   one row per window (5h / 7d / per-model): a label line
-  (`5h    45% ◷ 2h 43m`) over a bar that gets the card's full width,
-  countdowns ticking live from the absolute reset time, the active card
+  (`5h   resets in 2h 43m   45%`) over a bar that gets the card's full
+  width, countdowns ticking live from the absolute reset time, the active card
   marked by a green `ACTIVE` chip and nothing else, and an "Updated"
   stamp that shows when the usage was actually measured at the API — not
   when the app last polled. It is the ACTIVE account's measurement time,
@@ -68,15 +73,21 @@ The panel — the same layout on macOS, Linux and Windows:
   in both, so the two can never drift into different layouts. The Linux
   and Windows panels stay dark for now; the appearance is a parameter they
   simply don't pass yet.
-- **The pace notch.** A hairline cut through each bar marks how far
-  through that window you currently are, so one bar answers two
-  questions: the fill is how much you have spent, the notch is whether
-  that is ahead of schedule. Notch past the fill means you are under
-  budget for the window; notch inside the fill means you are burning
-  faster than the clock. It is drawn as a hole rather than a line over the
-  top, so it stays legible against both the bare track and a saturated
-  fill. Rows that state no window length — a per-model bucket like
-  Fable — get no notch rather than a guessed one.
+- **Nothing about time touches the bar.** The bar answers one question —
+  how much of this window you have spent — so the countdown reads
+  `resets in 2h 43m` beside the window's own name, and the percentage is
+  the only value over the bar. Both used to sit at the right, which made
+  the bar look like it was counting down to the time next to it.
+- **The pace tick.** A hairline hanging under each bar marks how far
+  through that window you currently are, so the row answers a second
+  question: the fill is how much you have spent, the tick is whether that
+  is ahead of schedule. Tick behind the fill means you are burning faster
+  than the clock; ahead of it means you are under budget for the window.
+  It used to be a notch cut THROUGH the bar, which made a 79% bar look
+  like it ended at 72% — the fill's end is the one thing here that has to
+  be unambiguous, so the mark moved out from under it. Rows that state no
+  window length — a per-model bucket like Fable — get no tick rather than
+  a guessed one.
 - **One-click switching.** `Make Active` flips the account instantly
   (optimistic UI; failures surface in the popover and the next fetch
   corrects the display). New Claude Code sessions use the new account;

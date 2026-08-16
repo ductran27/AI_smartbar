@@ -151,7 +151,7 @@ class TestGlyphDispatchCoversLayout(unittest.TestCase):
         # if the demo snapshot ever stopped covering one of stage 04's new
         # kinds, "nothing is missing" would stop meaning "nothing broke".
         self.assertEqual(
-            {"claude", "openai", "clock", "warn", "pause"}
+            {"claude", "openai", "warn", "pause"}
             - self._emitted_kinds(), set())
 
 

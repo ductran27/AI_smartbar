@@ -265,48 +265,77 @@ class TestCardContent(unittest.TestCase):
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])), now=NOW)
-        # Two separate labels, each right-anchored in its own reserved
-        # sub-column — see test_percent_position_is_stable_across_countdown_
-        # lengths for why keeping them apart matters.
         self.assertIn("79%", labels(built))
-        # No " · " separator: the clock glyph sits in the gap that
-        # separator used to occupy, so the string keeps only its lead space.
-        self.assertIn(" 2h 5m", labels(built))
+        # Worded, not a bare duration: "2h 5m" sitting beside "79%" reads
+        # to some people as budget left rather than time left.
+        self.assertIn("resets in 2h 5m", labels(built))
 
     def test_countdown_falls_back_to_the_fetch_time_string(self):
         built = layout.build(
             snap(account(metrics=[metric(pct=5.0, resets_at="junk",
                                          countdown="3h 1m")])), now=NOW)
         self.assertIn("5%", labels(built))
-        self.assertIn(" 3h 1m", labels(built))
+        self.assertIn("resets in 3h 1m", labels(built))
 
-    def test_a_countdown_gets_a_clock_glyph_immediately_left_of_it(self):
+    def test_a_row_with_no_countdown_says_nothing_about_resets(self):
+        built = layout.build(snap(account(metrics=[metric(pct=50.0)])),
+                             now=NOW)
+        self.assertFalse(any(s.startswith("resets in") for s in labels(built)))
+
+    def test_the_countdown_sits_beside_the_label_not_over_the_bar(self):
+        # The whole point of the move. A number anchored over the bar's
+        # right END reads as the thing the bar is counting towards, which
+        # is how "1d 22h" came to be read as the bar's own scale. The
+        # caption is left-anchored a BAR_GAP past the label column, and the
+        # percentage — the only value that IS about the bar — keeps the
+        # right edge to itself.
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])),
             now=NOW)
-        clocks = [s for s in built.shapes
-                 if isinstance(s, t.Glyph) and s.kind == "clock"]
-        self.assertEqual(len(clocks), 1)
-        countdown_label = next(s for s in built.shapes
-                               if isinstance(s, t.Label) and s.text == " 2h 5m")
-        text_edge = countdown_label.x - t.text_width(
-            countdown_label.text, t.SIZE_ROW_VALUE, mono=True)
-        self.assertLess(clocks[0].cx, text_edge)
+        inner_l = t.PAD + t.CARD_PAD_H
+        inner_r = t.WIDTH - t.PAD - t.CARD_PAD_H
+        caption = next(s for s in built.shapes
+                       if isinstance(s, t.Label)
+                       and s.text == "resets in 2h 5m")
+        pct = next(s for s in built.shapes
+                   if isinstance(s, t.Label) and s.text == "79%")
+        self.assertEqual(caption.anchor, "left")
+        self.assertEqual(caption.x, inner_l + t.LABEL_W + t.BAR_GAP)
+        self.assertEqual(pct.anchor, "right")
+        self.assertEqual(pct.x, inner_r)
+        # …and the caption can never grow into the percentage's column.
+        self.assertLessEqual(caption.x + caption.max_width,
+                             inner_r - t.VALUE_PCT_W)
 
-    def test_a_row_with_no_countdown_draws_no_clock_glyph(self):
-        built = layout.build(snap(account(metrics=[metric(pct=50.0)])),
-                             now=NOW)
-        self.assertFalse(any(isinstance(s, t.Glyph) and s.kind == "clock"
-                             for s in built.shapes))
+    def test_the_countdown_is_quieter_than_the_two_facts_it_sits_between(self):
+        # Colour and weight carry the hierarchy, not size: the window name
+        # and the percentage are the row's facts, the caption qualifies the
+        # name. A caption in the same ink would read as a third number to
+        # compare against the other two.
+        resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(pct=79.0, resets_at=resets)])),
+            now=NOW)
+        caption = next(s for s in built.shapes
+                       if isinstance(s, t.Label)
+                       and s.text == "resets in 2h 5m")
+        pct = next(s for s in built.shapes
+                   if isinstance(s, t.Label) and s.text == "79%")
+        self.assertEqual(caption.color, t.DARK.text_secondary)
+        self.assertEqual(pct.color, t.DARK.text)
+        self.assertFalse(caption.bold)
+        self.assertTrue(pct.bold)
+        self.assertEqual(caption.size, pct.size)
 
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of
         # ONE string with the countdown, so it visibly slid sideways every
         # time the countdown's length changed (e.g. "1h 0m" -> "59m"). The
-        # two are independently right-anchored in their own reserved
-        # sub-columns now, so the percentage's x cannot move however long
-        # the countdown runs.
+        # countdown has left the value area entirely now, but the guard is
+        # worth keeping: it is the property that broke, and a future layout
+        # that put anything else back beside the percentage would break it
+        # again in exactly the same way.
         short = layout.build(
             snap(account(metrics=[metric(pct=79.0, countdown="9m")])),
             now=NOW)
@@ -337,15 +366,31 @@ class TestCardContent(unittest.TestCase):
         built = layout.build(
             snap(account(metrics=[metric(key="7d", resets_at=resets)])),
             now=NOW)
-        # Filtered on width as well as fill: the notch is drawn in the
-        # card's own colour (that is what makes it read as a hole rather
-        # than a stripe), so `fill == pace` alone also matches every card
-        # background on the panel.
+        # Filtered on width as well as fill: the tick is the scheme's
+        # tertiary ink, which other quiet marks also use.
         carets = [b for b in boxes(built)
                   if b.fill == t.DARK.pace and b.w == t.PACE_W]
         self.assertEqual(len(carets), 1)
         self.assertAlmostEqual(carets[0].w, t.PACE_W)
-        self.assertAlmostEqual(carets[0].h, t.BAR_H)
+        self.assertAlmostEqual(carets[0].h, t.PACE_H)
+
+    def test_the_caret_hangs_below_the_bar_and_never_cuts_it(self):
+        # The fill's end is the one thing on this row that has to be
+        # unambiguous. A mark drawn THROUGH the fill made a 79% bar look
+        # like it ended at 72%, which is the confusion this row was
+        # redesigned around; the tick's top must therefore start exactly
+        # where the bar's bottom is, and it must sit inside the bar's own
+        # horizontal span rather than poking out past either end.
+        resets = (NOW + timedelta(hours=1)).isoformat()
+        built = layout.build(
+            snap(account(metrics=[metric(key="7d", resets_at=resets)])),
+            now=NOW)
+        track, _fill = bars(built)
+        caret = next(b for b in boxes(built)
+                     if b.fill == t.DARK.pace and b.w == t.PACE_W)
+        self.assertAlmostEqual(caret.y, track.y + t.BAR_H)
+        self.assertGreaterEqual(caret.x, track.x)
+        self.assertLessEqual(caret.x + caret.w, track.x + track.w)
 
     def test_no_caret_for_a_window_with_no_stated_length(self):
         # "spend" carries a reset TIME (same as 5h/7d) but no window-size
