@@ -20,11 +20,69 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Whether this change can possibly break the Swift front-end, decided once
+  # so the `swift` job below can be skipped outright rather than started and
+  # short-circuited. That distinction is the entire point: GitHub bills a job
+  # that starts and immediately skips its steps exactly like one that does the
+  # work, and on macOS that is ten billable minutes for nothing.
+  #
+  # The arithmetic behind this whole file: minutes are multiplied by runner —
+  # Linux 1x, Windows 2x, macOS 10x — and every job rounds UP to a whole
+  # minute. So one macOS job is ten minutes however briefly it runs, which
+  # made it about three quarters of this repo's entire Actions bill while the
+  # other three jobs together came to four. The only lever that moves that
+  # number is running the macOS job less often, which is what this job exists
+  # to allow. One extra Linux minute to skip ten macOS ones.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      swift: ${{ steps.filter.outputs.swift }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The diff below needs both endpoints present, and a shallow clone
+          # has neither for anything but the newest commit.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # Fails SAFE, in every direction: a missing base, the all-zero SHA
+          # git reports for a branch's first push, or a base this clone does
+          # not have all answer "run it". Skipping the Swift build wrongly
+          # lets a broken front-end reach a tag; running it wrongly costs ten
+          # minutes. Those are not the same size of mistake, so every case
+          # this cannot decide resolves toward coverage.
+          if [[ -z "${BASE}" || "${BASE}" =~ ^0+$ ]] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Three-dot: compare against the MERGE BASE, so a PR is judged on
+          # what it changed rather than on everything main gained underneath
+          # it while the branch sat open.
+          if git diff --name-only "${BASE}...${GITHUB_SHA}" | grep -q '^macos-swift/'; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "swift=false" >> "$GITHUB_OUTPUT"
+          fi
+
   unittest:
     strategy:
       fail-fast: false
+      # macOS used to be a third leg here and is not one any more. It was
+      # never earning its ten-minute multiplier: the suite is stdlib
+      # unittest, the win32 branches are exercised by FAKING sys.platform
+      # (see smartbar/core/portable.py and update_runner.py, both of which
+      # say so), and the only thing that genuinely needed a real Mac was the
+      # `plutil` test in tests/test_device_config.py — one test, guarded by
+      # skipUnless, and re-run on a real Mac by install/release.sh's own
+      # local suite before any tag is cut. What macOS uniquely verified was
+      # the Swift build, which now has its own job below.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -47,7 +105,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Linux/macOS build pycairo from its sdist and therefore need cairo's
+      # Linux builds pycairo from its sdist and therefore needs cairo's
       # headers plus pkg-config. Windows receives PyPI's cp312 win_amd64
       # wheel and needs no system SDK. Keep GTK/PyGObject absent: the portable
       # painter deliberately has no GTK dependency, while importing cairo is
@@ -55,10 +113,6 @@ jobs:
       - name: Install Cairo build dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
-
-      - name: Install Cairo build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cairo pkg-config
 
       - name: Install pinned pycairo
         run: python -m pip install --disable-pip-version-check pycairo==1.29.0
@@ -97,11 +151,38 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: ruff check .
 
-      # Compile the Swift front-end so a macOS-breaking change cannot land
-      # green. There is no Swift test target: the state policy Swift mirrors
-      # is pinned from the Python side by the source-scraping parity tests.
+  # Compile the Swift front-end so a macOS-breaking change cannot land green.
+  # There is no Swift test target: the state policy Swift mirrors is pinned
+  # from the Python side by the source-scraping parity tests, which run on
+  # every leg of `unittest` above and therefore on every single run — a
+  # colour or geometry number drifting between the two languages fails there,
+  # on Linux, without this job.
+  #
+  # Which is what makes skipping this one safe when macos-swift/ is untouched:
+  # a change that leaves the Swift sources byte-identical cannot alter whether
+  # they compile, and the one class of Python-side change that CAN invalidate
+  # them — drifting away from what the Swift declares — is caught by those
+  # parity tests instead.
+  #
+  # The release gate keeps working for free. install/release.sh bumps
+  # macos-swift/Sources/AISmartbar/Version.swift as part of the release commit
+  # itself, so every commit that ever gets tagged touches macos-swift/ by
+  # construction and therefore always arrives here. A skipped job still
+  # concludes the run `success`, so the ordinary main pushes in between cost
+  # nothing and still satisfy the gate.
+  #
+  # No Python on this leg: it does not run the suite any more, so it needs
+  # neither cairo nor an interpreter, which is most of what used to keep this
+  # job hovering either side of the 60-second line that decides whether macOS
+  # bills ten minutes or twenty.
+  swift:
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
       - name: Build the Swift front-end
-        if: runner.os == 'macOS'
         run: swift build -c release --package-path macos-swift
 
   # The e2e suites used to run ONLY from install/release.sh, on whichever
