@@ -120,6 +120,30 @@ EOF
 # Finder launches see a consistent local application.
 codesign --force --deep --sign - "$APP_DIR"
 
+# LaunchServices caches a bundle's Info.plist keyed on the .app DIRECTORY's
+# own mtime, and every write above lands INSIDE Contents/ — which leaves that
+# mtime exactly where the FIRST install left it. So on a device that already
+# had the app, macOS goes on serving whatever it recorded back then: the icon
+# added in 1.0.2 never appeared in the Finder or Login Items, and the cached
+# record still said "1.0.1" while 1.0.3 was the thing running.
+#
+# A fresh install is a brand new directory and never shows this, which is
+# precisely why it survived so long — the bug is invisible to the machine
+# that installs from scratch to test it, and visible only to everyone who
+# upgrades. Touch the bundle so the mtime moves, then re-register so the
+# refresh happens now rather than whenever macOS next rescans.
+#
+# Never fatal, for the reason the icon build is not: this is the update APPLY
+# step, and a stale icon is not worth trading a working menu bar for.
+touch "$APP_DIR"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/\
+LaunchServices.framework/Support/lsregister"
+if [[ -x "$LSREGISTER" ]]; then
+  "$LSREGISTER" -f "$APP_DIR" >/dev/null 2>&1 \
+    || echo "WARNING: could not re-register the bundle — the icon and name" \
+            "may lag until the next login." >&2
+fi
+
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
