@@ -553,8 +553,12 @@ next update.
 **How a device tells you.** A waiting release badges the bar icon with a
 small red dot — the icon gets slightly wider rather than the dot covering a
 pill, since a pill's top is where "nearly at the limit" is read. A desktop
-notification also fires once the update has been applied. Both UIs learn
-this from `~/.cache/ai-smartbar/update-state.json`, written by the updater.
+notification also fires once the update has been applied, with a short
+excerpt of what changed: on `release` the tagged GitHub Release's notes,
+fetched over the network and silently omitted if that fetch fails; on
+`main`, which has no Release object to ask, a local `git log --oneline` of
+the commits just pulled in instead. Both UIs learn the version change from
+`~/.cache/ai-smartbar/update-state.json`, written by the updater.
 
 On macOS that notification arrives wearing **Script Editor's** name and
 icon, and that is not a bug you can report away. macOS credits a

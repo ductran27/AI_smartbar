@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -414,6 +415,194 @@ class TestTheManualCheckNeverAnnouncesANoOp(Env):
                               "currentVersion": "0.11.0"})
         self.assertTrue(outcome.found)
         self.assertIn("0.12.0", outcome.label)
+
+
+class TestGithubRepoFromUrl(Env):
+    """Port of install/release.sh's github_repo_from_url: the updater runs
+    this same derivation on every device, not just the release machine."""
+
+    def test_handles_https_ssh_and_scp_style_remotes(self):
+        f = update_runner._github_repo_from_url
+        self.assertEqual(f("https://github.com/ductran27/AI_smartbar"),
+                         "ductran27/AI_smartbar")
+        self.assertEqual(f("https://github.com/ductran27/AI_smartbar.git"),
+                         "ductran27/AI_smartbar")
+        self.assertEqual(f("git@github.com:ductran27/AI_smartbar.git"),
+                         "ductran27/AI_smartbar")
+        self.assertEqual(f("ssh://git@github.com/ductran27/AI_smartbar.git"),
+                         "ductran27/AI_smartbar")
+
+    def test_rejects_non_github_or_malformed_remotes(self):
+        f = update_runner._github_repo_from_url
+        self.assertEqual(f("https://gitlab.com/ductran27/AI_smartbar.git"), "")
+        self.assertEqual(f(""), "")
+        self.assertEqual(f("not a url at all"), "")
+
+
+class TestReleaseNotesFetch(Env):
+    """_fetch_release_notes() / _release_notes(): the network call is
+    strictly best-effort, and channel routing decides whether it happens
+    at all.
+    """
+
+    def _urlopen_returning(self, payload: dict):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+        return response
+
+    def test_a_successful_fetch_returns_the_release_body(self):
+        with mock.patch.object(update_runner.update_git, "git",
+                               return_value="https://github.com/o/r.git"), \
+             mock.patch.object(
+                 update_runner.urllib.request, "urlopen",
+                 return_value=self._urlopen_returning(
+                     {"body": "Fixed the thing that broke."})) as urlopen:
+            notes = update_runner._fetch_release_notes("v1.2.3")
+        self.assertEqual(notes, "Fixed the thing that broke.")
+        # The tag is part of the request, not a query the server has to
+        # disambiguate itself.
+        self.assertIn("v1.2.3", urlopen.call_args.args[0].full_url)
+
+    def test_an_unreachable_github_falls_back_to_empty_without_raising(self):
+        with mock.patch.object(update_runner.update_git, "git",
+                               return_value="https://github.com/o/r.git"), \
+             mock.patch.object(update_runner.urllib.request, "urlopen",
+                               side_effect=OSError("rate limited")):
+            notes = update_runner._fetch_release_notes("v1.2.3")  # must not raise
+        self.assertEqual(notes, "")
+
+    def test_a_non_github_remote_never_makes_a_network_call(self):
+        with mock.patch.object(update_runner.update_git, "git",
+                               return_value="https://example.com/o/r.git"), \
+             mock.patch.object(update_runner.urllib.request,
+                               "urlopen") as urlopen:
+            notes = update_runner._fetch_release_notes("v1.2.3")
+        self.assertEqual(notes, "")
+        urlopen.assert_not_called()
+
+    def test_release_channel_routes_through_the_github_fetch(self):
+        plan = update.UpdatePlan(action=update.UPDATE, target_ref="v1.2.3",
+                                 target_version="1.2.3")
+        with mock.patch.object(update_runner, "_fetch_release_notes",
+                               return_value="Fixed the thing.") as fetch, \
+             mock.patch.object(update_runner, "_git_log_summary") as gitlog:
+            notes = update_runner._release_notes(plan, update.CHANNEL_RELEASE,
+                                                  "a" * 40, "b" * 40)
+        self.assertEqual(notes, "Fixed the thing.")
+        fetch.assert_called_once_with("v1.2.3")
+        gitlog.assert_not_called()
+
+    def test_main_channel_uses_the_git_log_fallback_with_no_network_call(self):
+        plan = update.UpdatePlan(action=update.UPDATE,
+                                 target_ref="b" * 40, target_version="")
+        with mock.patch.object(update_runner.update_git, "git",
+                               return_value="abc1234 fix the thing") as git, \
+             mock.patch.object(update_runner.urllib.request,
+                               "urlopen") as urlopen:
+            notes = update_runner._release_notes(plan, update.CHANNEL_MAIN,
+                                                  "a" * 40, "b" * 40)
+        self.assertEqual(notes, "abc1234 fix the thing")
+        git.assert_called_once_with("log", "--oneline", "a" * 40 + ".." + "b" * 40,
+                                    check=False)
+        urlopen.assert_not_called()
+
+    def test_notes_are_truncated_for_a_desktop_notification(self):
+        plan = update.UpdatePlan(action=update.UPDATE, target_ref="v1.2.3",
+                                 target_version="1.2.3")
+        long_notes = "x" * 500
+        with mock.patch.object(update_runner, "_fetch_release_notes",
+                               return_value=long_notes):
+            notes = update_runner._release_notes(plan, update.CHANNEL_RELEASE,
+                                                  "a" * 40, "b" * 40)
+        self.assertLessEqual(len(notes), update_runner.RELEASE_NOTES_MAX_CHARS)
+        self.assertTrue(notes.endswith("…"))
+
+
+class TestTheAppliedNotificationIncludesReleaseNotes(Env):
+    """run_once()'s success arm: _release_notes()'s result must reach the
+    notification body, called with the previous HEAD run_once already
+    captured for rollback -- not re-derived -- and the new one it landed on.
+    """
+
+    def drive(self, *, notes):
+        plan = update.UpdatePlan(action=update.UPDATE, target_ref="v1.2.3",
+                                 target_version="1.2.3", reason="test")
+        old_repo = mock.Mock(head="a" * 40, branch="main", version="1.2.2",
+                             dirty=False)
+        new_repo = mock.Mock(head="b" * 40, branch="main", version="1.2.3",
+                             dirty=False)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patches = [
+            mock.patch.object(update_runner, "CACHE_DIR", tmp.name),
+            mock.patch.object(update_runner, "LOG_FILE",
+                              os.path.join(tmp.name, "update.log")),
+            mock.patch.object(update_runner.logging, "basicConfig"),
+            mock.patch.object(update_runner, "load_state", return_value={}),
+            mock.patch.object(update_runner, "save_state"),
+            mock.patch.object(update_runner.portable, "lock",
+                              return_value=mock.Mock()),
+            mock.patch.object(update_runner.update_git, "fetch"),
+            mock.patch.object(update_runner.update_git, "repo_state",
+                              side_effect=[old_repo, new_repo]),
+            mock.patch.object(update_runner.update_git, "checkout",
+                              return_value=""),
+            mock.patch.object(update_runner.update_git, "version_in_checkout",
+                              return_value="1.2.3"),
+            mock.patch.object(update_runner, "_plan", return_value=plan),
+            mock.patch.object(update_runner, "present_installers",
+                              return_value={}),
+            mock.patch.object(update_runner, "run_installer", return_value=""),
+            mock.patch.object(update_runner, "verify", return_value=""),
+            mock.patch.object(update_runner, "drop_backup"),
+            mock.patch.object(update_runner, "_release_notes",
+                              return_value=notes),
+            mock.patch.object(update_runner, "notify"),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        code = update_runner.run_once()
+        return code, update_runner.notify, update_runner._release_notes
+
+    def test_notes_are_appended_to_the_success_notification(self):
+        code, notify, release_notes = self.drive(notes="Fixed the thing.")
+        self.assertEqual(code, 0)
+        body = notify.call_args_list[-1].args[1]
+        self.assertIn("Now on 1.2.3", body)
+        self.assertIn("Fixed the thing.", body)
+        release_notes.assert_called_once_with(mock.ANY, mock.ANY,
+                                              "a" * 40, "b" * 40)
+
+    def test_no_notes_leaves_the_original_body_unchanged(self):
+        code, notify, _ = self.drive(notes="")
+        self.assertEqual(code, 0)
+        body = notify.call_args_list[-1].args[1]
+        self.assertEqual(body, "Now on 1.2.3 — app restarted")
+
+
+@unittest.skipIf(sys.platform != "darwin",
+                 "exercises notify()'s osascript branch specifically")
+class TestReleaseNotesBodyEscapesSafelyThroughNotify(Env):
+    """Release notes are fetched text -- exactly the untrusted input
+    notify()'s AppleScript-escaping comment warns about. This does not
+    duplicate that escaping; it pins that a body shaped like real release
+    notes (a quote and a trailing backslash) still comes out safe when
+    handed to the existing notify() path unchanged.
+    """
+
+    def test_a_quote_and_backslash_in_the_notes_do_not_break_out(self):
+        body = ('Now on 1.2.3 — app restarted\n'
+                'Fixed the "quoting" bug in C:\\')
+        with mock.patch.object(update_runner.subprocess, "run") as run:
+            update_runner.notify("AI smartbar updated", body)
+        script = run.call_args.args[0][2]
+        self.assertIn(
+            'display notification "Now on 1.2.3 — app restarted\n'
+            'Fixed the \\"quoting\\" bug in C:\\\\" with title '
+            '"AI smartbar updated"',
+            script)
 
 
 if __name__ == "__main__":
