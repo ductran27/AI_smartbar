@@ -23,22 +23,23 @@ The panel — the same layout on macOS, Linux and Windows:
   │ Fable  resets in 6d 14h              34% │
   │ ██████████████────────────────────────── │
   └──────────────────────────────────────────┘
-  ┌──────────────────────────────────────────┐
-  │ ● other@account          (2)    [ACTIVE] │
-  │ 5h   resets in 1h 02m                62% │
-  │ █████████████████████████─────────────── │
-  │                   ╷                      │
-  └──────────────────────────────────────────┘
+ ▌┌──────────────────────────────────────────┐
+ ▌│ ● other@account          (2)    [ACTIVE] │
+ ▌│ 5h   resets in 1h 02m                62% │
+ ▌│ █████████████████████████─────────────── │
+ ▌│                   ╷                      │
+ ▌└──────────────────────────────────────────┘
    v1.0.0                    [Update to 1.1.0]
 
  (numbers are % USED — the /usage scale; each limit is a label line over a
-  full-width bar; the [ACTIVE] chip is the only mark on the active card;
-  "resets in …" sits beside the window it belongs to, so the only number
-  over the bar is the bar's own; ╷ = the pace tick under the bar, how far
-  through that window you are — past the fill means you are under budget,
-  before it means you are burning faster; one chip carries the plan and
-  the device count; [✳ Claude] ❁ OpenAI = provider tabs, each with its
-  provider's mark, the selected pill bright and the other faded, row only
+  full-width bar; ▌ = the rail marking the ACTIVE account, alongside its
+  [ACTIVE] chip; "resets in …" sits beside the window it belongs to, so
+  the only number over the bar is the bar's own; ╷ = the pace tick under
+  the bar, how far through that window you are — past the fill means you
+  are under budget, before it means you are burning faster; one chip
+  carries the plan and the device count; [✳ Claude] ❁ OpenAI = provider
+  tabs, each with its provider's mark, the selected pill bright and the
+  other faded, row only
   present when both providers have accounts; follows the system's
   light/dark appearance)
 ```
@@ -58,7 +59,7 @@ The panel — the same layout on macOS, Linux and Windows:
   one row per window (5h / 7d / per-model): a label line
   (`5h   resets in 2h 43m   45%`) over a bar that gets the card's full
   width, countdowns ticking live from the absolute reset time, the active card
-  marked by a green `ACTIVE` chip and nothing else, and an "Updated"
+  marked by a leading rail and a green `ACTIVE` chip, and an "Updated"
   stamp that shows when the usage was actually measured at the API — not
   when the app last polled. It is the ACTIVE account's measurement time,
   the same account `/usage` describes; cswap refreshes each slot on its

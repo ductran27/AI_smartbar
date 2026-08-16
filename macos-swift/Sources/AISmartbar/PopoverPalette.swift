@@ -19,6 +19,7 @@ struct Palette {
     let textSecondary: Color
     let textTertiary: Color
     let textSpent: Color
+    let rail: Color
     let barTrack: Color
     let pace: Color
     let buttonBG: Color
@@ -43,6 +44,7 @@ struct Palette {
         textSecondary: Color(red: 0.596, green: 0.639, blue: 0.690, opacity: 1.0),
         textTertiary: Color(red: 0.361, green: 0.400, blue: 0.447, opacity: 1.0),
         textSpent: Color(red: 0.725, green: 0.757, blue: 0.796, opacity: 1.0),
+        rail: Color(red: 0.914, green: 0.929, blue: 0.949, opacity: 1.0),
         barTrack: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.09),
         pace: Color(red: 0.361, green: 0.400, blue: 0.447, opacity: 1.0),
         buttonBG: Color(red: 1.0, green: 1.0, blue: 1.0, opacity: 0.12),
@@ -67,6 +69,7 @@ struct Palette {
         textSecondary: Color(red: 0.361, green: 0.400, blue: 0.447, opacity: 1.0),
         textTertiary: Color(red: 0.545, green: 0.588, blue: 0.639, opacity: 1.0),
         textSpent: Color(red: 0.263, green: 0.294, blue: 0.341, opacity: 1.0),
+        rail: Color(red: 0.086, green: 0.106, blue: 0.133, opacity: 1.0),
         barTrack: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.08),
         pace: Color(red: 0.545, green: 0.588, blue: 0.639, opacity: 1.0),
         buttonBG: Color(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.06),
