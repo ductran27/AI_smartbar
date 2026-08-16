@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 from smartbar import update_git
 from smartbar.core import branding, paths, portable, update
@@ -37,6 +38,8 @@ LOG_FILE = os.path.join(CACHE_DIR, "update.log")
 
 INSTALL_TIMEOUT = 1200   # a cold `swift build -c release` is genuinely slow
 VERIFY_TIMEOUT = 30
+RELEASE_NOTES_TIMEOUT = 5    # a slow GitHub must never stall the update pass
+RELEASE_NOTES_MAX_CHARS = 200
 
 HOME = os.path.expanduser("~")
 APP_BUNDLE = os.path.join(HOME, "Applications", "AI_smartbar.app")
@@ -218,6 +221,84 @@ def notify(title: str, body: str) -> None:
         # is called from run_once()'s failure arm where an escape loses the
         # exit code the caller acts on.
         log.exception("notification failed")
+
+
+def _github_repo_from_url(url: str) -> str:
+    """OWNER/REPO from a GitHub origin remote URL, or "" if it is not one.
+
+    Ports install/release.sh's github_repo_from_url bash function: the
+    updater runs this same derivation on every device (release.sh only ever
+    runs it on the maintainer's machine), so it has to stand on its own.
+    """
+    for prefix in ("https://github.com/", "git@github.com:",
+                   "ssh://git@github.com/"):
+        if url.startswith(prefix):
+            answer = url[len(prefix):]
+            break
+    else:
+        return ""
+    if answer.endswith(".git"):
+        answer = answer[:-len(".git")]
+    return answer if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", answer) else ""
+
+
+def _fetch_release_notes(tag: str) -> str:
+    """Best-effort GitHub release body for `tag`; "" on ANY failure.
+
+    A GitHub outage, rate limit, or a private-repo device with no working
+    credential must never block or fail the update pass over what is purely
+    cosmetic text for a notification -- hence the blanket except.
+    """
+    try:
+        origin = update_git.git("remote", "get-url", "origin", check=False)
+        repo = _github_repo_from_url(origin)
+        if not repo:
+            return ""
+        url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+        request = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github+json",
+                          "User-Agent": "ai-smartbar-updater"})
+        with urllib.request.urlopen(request, timeout=RELEASE_NOTES_TIMEOUT) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        return str(payload.get("body") or "").strip()
+    except Exception:
+        log.exception("could not fetch release notes for %s", tag)
+        return ""
+
+
+def _git_log_summary(prev_head: str, new_head: str) -> str:
+    """One-line-per-commit summary of what channel=main just pulled in.
+
+    channel=main has no GitHub Release object to ask about -- its target is
+    a commit, not a tag -- so this stays entirely local and network-free.
+    """
+    return update_git.git("log", "--oneline", f"{prev_head}..{new_head}",
+                          check=False)
+
+
+def _release_notes(plan, channel: str, prev_head: str, new_head: str) -> str:
+    """Short "what changed" summary for the update-applied notification.
+
+    release: the tagged GitHub Release's notes, fetched over the network.
+    main: a local `git log --oneline` between the two heads instead, since
+    a bare commit has no Release object to ask.
+
+    Wrapped in its own broad except on top of the two helpers already being
+    careful: this is cosmetic text, and notify() runs unconditionally right
+    after -- nothing here may ever be the reason that call is skipped.
+    """
+    try:
+        if channel == update.CHANNEL_RELEASE:
+            notes = _fetch_release_notes(plan.target_ref)
+        else:
+            notes = _git_log_summary(prev_head, new_head)
+        notes = notes.strip()
+        if len(notes) > RELEASE_NOTES_MAX_CHARS:
+            notes = notes[:RELEASE_NOTES_MAX_CHARS - 1].rstrip() + "…"
+        return notes
+    except Exception:
+        log.exception("could not build the release-notes summary")
+        return ""
 
 
 def _read_text(path: str) -> str:
@@ -633,6 +714,9 @@ def run_once(*, reset: bool = False, force: bool = False,
                                  applied_ref=new_repo.head, channel=channel))
     save_state(state)
     log.info("updated to %s (version %s)", plan.target_ref, new_version)
-    notify("AI smartbar updated",
-           f"Now on {plan.target_version or plan.target_ref[:8]} — app restarted")
+    body = f"Now on {plan.target_version or plan.target_ref[:8]} — app restarted"
+    notes = _release_notes(plan, channel, prev_head, new_repo.head)
+    if notes:
+        body += f"\n{notes}"
+    notify("AI smartbar updated", body)
     return 0
