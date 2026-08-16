@@ -10,9 +10,11 @@ on:
     branches: [main]
   pull_request:
   # Manual escape hatch: Actions → tests → "Run workflow" against any branch
-  # runs the FULL matrix (see the strategy comment below) without waiting for
-  # a merge — use it on a PR branch that touches macos-swift/ or win32 paths
-  # when you want the cross-OS verdict before merging.
+  # runs EVERY leg — Windows and the Swift build included — without waiting for
+  # a merge. Dispatch has no "before" SHA, so it lands in the fail-safe arm of
+  # the `changes` job below and gets the lot. Use it on a PR branch that
+  # touches macos-swift/ or the win32 paths when you want the cross-OS verdict
+  # before merging.
   workflow_dispatch:
 
 # A new push makes the run already in flight obsolete, so stop paying for it.
@@ -26,36 +28,38 @@ concurrency:
 
 # The arithmetic the whole file is shaped around: Actions minutes are
 # multiplied by runner — Linux 1x, Windows 2x, macOS 10x — and every job
-# rounds UP to a whole minute. So one macOS job costs ten minutes however
-# briefly it runs, which made it ~75% of this repo's entire Actions bill (480
-# of 641 billable minutes in Aug 2026) while the other three jobs together
-# came to four minutes a run. Nothing about that is fixed by making jobs
-# faster. The only lever is running the macOS job LESS OFTEN, and there are
-# two independent places to pull it, because the spend splits in two:
+# rounds UP to a whole minute. A job's duration is therefore almost irrelevant;
+# `swift build` finishes in 25 seconds and still bills ten minutes. Nothing
+# here is fixed by making jobs faster. The only lever any of it responds to is
+# running the expensive runners LESS OFTEN, and there are three independent
+# places to pull it:
 #
-#   - PR runs (18 in Aug) are trimmed to the ubuntu leg by the matrix
-#     expression below.
-#   - push runs on main (39 in Aug — the bigger half, and the ones the
-#     release gate actually reads) keep Windows, and reach macOS only when
-#     `macos-swift/` genuinely changed, via the `changes` job.
+#   - PR runs get the ubuntu leg and nothing else. No Windows, no macOS.
+#   - push runs on main reach macOS only when `macos-swift/` genuinely
+#     changed, and Windows only on the commits that can become a release.
+#     Both verdicts come from the `changes` job.
 #
-# Neither trim subsumes the other: the first leaves every main push paying
-# full freight, the second leaves every PR doing so.
+# None of the three subsumes the others: PR runs and push runs are separate
+# populations (18 and 39 respectively in Aug 2026), and within push runs the
+# macOS and Windows gates fire on different commits — measured over the last
+# 25 pushes to main, 17 touch macos-swift/ while only the handful that
+# install/release.sh authored touch Version.swift.
 jobs:
-  # Whether this change can possibly break the Swift front-end, decided once
-  # so the `swift` job below can be skipped OUTRIGHT rather than started and
+  # Which expensive runners this change can possibly break, decided once on a
+  # cheap one so the jobs below can be skipped OUTRIGHT rather than started and
   # short-circuited. That distinction is the entire point: GitHub bills a job
   # that starts and immediately skips its steps exactly like one that does the
-  # work, so an `if:` on the steps would save nothing. One extra Linux minute
-  # to skip ten macOS ones.
+  # work, so an `if:` on the steps would save nothing. One Linux minute to skip
+  # ten macOS ones and two Windows ones.
   #
-  # Not on pull_request: PRs do not run the macOS leg at all (see the matrix
-  # comment below), so there would be nothing for this verdict to gate.
+  # Not on pull_request: PRs run neither of the gated legs (see their own
+  # comments below), so there would be nothing for these verdicts to gate.
   changes:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       swift: ${{ steps.filter.outputs.swift }}
+      windows: ${{ steps.filter.outputs.windows }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -72,52 +76,43 @@ jobs:
           # git reports for a branch's first push, a base this clone does not
           # have, or a manual dispatch (which has no "before" at all and is
           # asked for precisely when someone wants the full verdict) all
-          # answer "run it". Skipping the Swift build wrongly lets a broken
-          # front-end reach a tag; running it wrongly costs ten minutes.
-          # Those are not the same size of mistake, so every case this cannot
-          # decide resolves toward coverage.
+          # answer "run everything". Skipping a leg wrongly lets a broken
+          # front-end or a broken Windows path reach a tag; running one
+          # wrongly costs minutes. Those are not the same size of mistake, so
+          # every case this cannot decide resolves toward coverage.
           if [[ -z "${BASE}" || "${BASE}" =~ ^0+$ ]] \
              || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
             echo "swift=true" >> "$GITHUB_OUTPUT"
+            echo "windows=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Three-dot: compare against the MERGE BASE, so a merge commit is
           # judged on what it brought in rather than on everything main
           # gained underneath the branch while it sat open.
-          if git diff --name-only "${BASE}...${GITHUB_SHA}" | grep -q '^macos-swift/'; then
+          CHANGED="$(git diff --name-only "${BASE}...${GITHUB_SHA}")"
+
+          if grep -q '^macos-swift/' <<<"$CHANGED"; then
             echo "swift=true" >> "$GITHUB_OUTPUT"
           else
             echo "swift=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Version.swift is the release commit's fingerprint — see the
+          # `windows` job's comment for why that is the commit Windows runs on.
+          if grep -qx 'macos-swift/Sources/AISmartbar/Version.swift' \
+               <<<"$CHANGED"; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "windows=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The always-on leg, on every event, and the only one most changes ever
+  # reach. It is a plain job rather than a 1-entry matrix because the other
+  # OSes are no longer siblings of it — they are separately gated jobs below,
+  # which is also what lets the ruff and apt steps here drop the
+  # `if: matrix.os == ...` guards they used to carry.
   unittest:
-    strategy:
-      fail-fast: false
-      # PRs run the ubuntu leg only; push (main) and workflow_dispatch add
-      # Windows. This is a billing decision, not a coverage one — see the
-      # arithmetic above. What the trim actually risks: a PR touching the
-      # win32 branches can go green here and only fail on the push run after
-      # merge. That is acceptable because the thing this workflow ultimately
-      # protects is the RELEASE, and install/release.sh's tag gate reads only
-      # push runs on main (`--event push --branch main --commit <sha>`),
-      # which still get the wider matrix — a cross-OS break caught post-merge
-      # blocks the tag exactly as before, it just surfaces one step later. For
-      # pre-merge cross-OS confidence, dispatch the workflow on the PR branch
-      # by hand (see the `on:` comment above).
-      #
-      # macOS is not a leg here on ANY event any more. It was never earning
-      # its ten-minute multiplier as a test leg: the suite is stdlib
-      # unittest, the win32 branches are exercised by FAKING sys.platform
-      # (see smartbar/core/portable.py and update_runner.py, both of which
-      # say so), and the only thing that genuinely needed a real Mac was the
-      # `plutil` test in tests/test_device_config.py — one test, guarded by
-      # skipUnless, and re-run on a real Mac by install/release.sh's own
-      # local suite before any tag is cut. What macOS uniquely verified was
-      # the Swift build, which now has its own job below and runs only when
-      # there is Swift to build.
-      matrix:
-        os: ${{ (github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]')) || fromJSON('["ubuntu-latest", "windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -140,12 +135,10 @@ jobs:
           python-version: "3.12"
 
       # Linux builds pycairo from its sdist and therefore needs cairo's
-      # headers plus pkg-config. Windows receives PyPI's cp312 win_amd64
-      # wheel and needs no system SDK. Keep GTK/PyGObject absent: the portable
+      # headers plus pkg-config. Keep GTK/PyGObject absent: the portable
       # painter deliberately has no GTK dependency, while importing cairo is
       # mandatory below so painter tests cannot quietly turn into skips.
-      - name: Install Cairo build dependencies (Ubuntu)
-        if: runner.os == 'Linux'
+      - name: Install Cairo build dependencies
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
 
       - name: Install pinned pycairo
@@ -169,28 +162,74 @@ jobs:
       # unused imports, unused locals, genuine defects -- without touching
       # any of that layout, so it is the one half of "ruff" this job runs.
       #
-      # One leg only: unlike the unittest step above, ruff check is pure
-      # static analysis over the checked-out source tree -- it never
-      # executes any of this repo's OS-conditional code paths (win32
-      # branches, gi/GTK on Linux, etc.), so its result cannot vary by
-      # runner OS. Running it on all three would just be the same verdict
-      # three times for three times the CI minutes. ubuntu-latest is
-      # picked as the one leg because it is the cheapest GitHub-hosted
-      # runner and needs no extra setup for this step.
+      # Here and nowhere else: ruff check is pure static analysis over the
+      # checked-out source tree -- it never executes any of this repo's
+      # OS-conditional code paths (win32 branches, gi/GTK on Linux, etc.), so
+      # its result cannot vary by runner OS. Running it on another leg would
+      # just be the same verdict twice for twice the CI minutes.
       - name: Install ruff
-        if: matrix.os == 'ubuntu-latest'
         run: pip install ruff==0.15.16
 
       - name: Lint (ruff check)
-        if: matrix.os == 'ubuntu-latest'
         run: ruff check .
+
+  # Run the suite on a real Windows box, on the commits where a Windows break
+  # could actually cost something.
+  #
+  # This leg does not enable a single test. It DISABLES three — the
+  # `skipIf sys.platform == "win32"` guards in tests/test_update_rollback.py
+  # and tests/test_warmup_runner.py — because every win32 branch this repo has
+  # is already exercised on Linux by FAKING sys.platform (a dozen sites across
+  # tests/test_runner_portability.py, test_presence.py and test_notify_windows.py;
+  # smartbar/core/portable.py and smartbar/update_runner.py both say so in
+  # their own comments). So in terms of test bodies executed, Windows runs a
+  # strict SUBSET of the ubuntu leg above.
+  #
+  # What it does uniquely prove is environmental rather than logical: that real
+  # Windows path semantics do not upset the tests that were never win32-gated,
+  # and that PyPI's cp312 win_amd64 pycairo wheel installs and imports. Both
+  # are worth knowing before a release and worth very little between them —
+  # which is exactly the shape of a gate rather than a per-push leg.
+  #
+  # So: the release commit, and only the release commit. install/release.sh
+  # writes one whose ONLY two files are Version.swift and smartbar/__init__.py
+  # (it pins that shape itself, as EXPECTED_CANDIDATE_FILES), pushes it to
+  # main, and refuses to tag until that exact SHA's push run concludes
+  # `success`. Gating on Version.swift therefore lands this job precisely on
+  # the commits that become releases, where a Windows failure blocks the tag —
+  # the only outcome it was ever in a position to block. Ordinary pushes in
+  # between skip it, and a skipped job still concludes the run `success`, so
+  # the gate keeps working untouched. When you want the verdict sooner, the
+  # workflow_dispatch escape hatch at the top of this file runs it on demand.
+  windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # No apt step: Windows receives PyPI's cp312 win_amd64 wheel and needs
+      # no system cairo SDK. The import check below is the point of the leg,
+      # not boilerplate — it is what proves that wheel is still shipping.
+      - name: Install pinned pycairo
+        run: python -m pip install --disable-pip-version-check pycairo==1.29.0
+
+      - name: Verify Cairo is importable
+        run: python -c "import cairo; print(cairo.cairo_version_string())"
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
 
   # Compile the Swift front-end so a macOS-breaking change cannot land green.
   # There is no Swift test target: the state policy Swift mirrors is pinned
-  # from the Python side by the source-scraping parity tests, which run on
-  # every leg of `unittest` above and therefore on every single run — a colour
-  # or geometry number drifting between the two languages fails there, on
-  # Linux, without this job.
+  # from the Python side by the source-scraping parity tests, which run on the
+  # ubuntu leg above and therefore on every single run — a colour or geometry
+  # number drifting between the two languages fails there, on Linux, without
+  # this job.
   #
   # Which is what makes skipping this one safe when macos-swift/ is untouched:
   # a change that leaves the Swift sources byte-identical cannot alter whether
@@ -206,9 +245,9 @@ jobs:
   # run `success`, so the ordinary main pushes in between cost nothing and
   # still satisfy the gate.
   #
-  # No Python on this leg: it does not run the suite any more, so it needs
-  # neither cairo nor an interpreter, which is most of what used to keep this
-  # job hovering either side of the 60-second line that decides whether macOS
+  # No Python on this leg: it does not run the suite, so it needs neither
+  # cairo nor an interpreter, which is most of what used to keep this job
+  # hovering either side of the 60-second line that decides whether macOS
   # bills ten minutes or twenty.
   swift:
     needs: changes
