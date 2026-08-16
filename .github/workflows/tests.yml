@@ -9,6 +9,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual escape hatch: Actions → tests → "Run workflow" against any branch
+  # runs the FULL matrix (see the strategy comment below) without waiting for
+  # a merge — use it on a PR branch that touches macos-swift/ or win32 paths
+  # when you want the cross-OS verdict before merging.
+  workflow_dispatch:
 
 # A new push makes the run already in flight obsolete, so stop paying for it.
 # main is deliberately EXEMPT: install/release.sh refuses to tag unless the
@@ -23,8 +28,23 @@ jobs:
   unittest:
     strategy:
       fail-fast: false
+      # PRs run the ubuntu leg only; push (main) and workflow_dispatch run all
+      # three OSes. This is a billing decision, not a coverage one: GitHub
+      # rounds every job UP to a whole minute and multiplies macOS ×10 and
+      # Windows ×2, so the ~50 s macOS leg bills 10 min and a full-matrix PR
+      # round-trip (PR run + merge push run) cost ~28 billed minutes for ~5
+      # real ones — that alone burned a third of the account's 2,000-min month
+      # in Aug 2026. What the trim actually risks: a PR touching the win32
+      # branches or macos-swift/ can go green here and only fail on the push
+      # run after merge. That is acceptable because the thing this workflow
+      # ultimately protects is the RELEASE, and install/release.sh's tag gate
+      # reads only push runs on main (`--event push --branch main --commit
+      # <sha>`), which still get the full matrix — a cross-OS break caught
+      # post-merge blocks the tag exactly as before, it just surfaces one step
+      # later. For pre-merge cross-OS confidence, dispatch the workflow on the
+      # PR branch by hand (see the `on:` comment above).
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ (github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]')) || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
