@@ -41,10 +41,16 @@ class TestFitTruncationMode(unittest.TestCase):
         return ctx
 
     def test_tail_is_the_default_and_drops_the_end(self):
+        # Exactly how many characters survive is a font-metrics question —
+        # CI's default sans-serif isn't macOS's, so this pins the BEHAVIOUR
+        # (an ellipsis replacing a real suffix, keeping a real prefix)
+        # rather than an exact character count.
         from smartbar.paint import popover_draw
         ctx = self._ctx()
-        self.assertEqual(popover_draw._fit(ctx, "Bengalfox", t.LABEL_W),
-                         "Beng…")
+        fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W)
+        self.assertTrue(fitted.endswith("…"))
+        self.assertTrue("Bengalfox".startswith(fitted[:-1]))
+        self.assertLess(len(fitted), len("Bengalfox"))
 
     def test_text_that_already_fits_is_returned_unchanged(self):
         from smartbar.paint import popover_draw
@@ -55,12 +61,17 @@ class TestFitTruncationMode(unittest.TestCase):
                     popover_draw._fit(ctx, "7d", t.LABEL_W, mode), "7d")
 
     def test_middle_mode_keeps_head_and_tail(self):
+        # Same font-metrics caveat as above: assert the SHAPE (a real
+        # prefix, an ellipsis, a real suffix) rather than exact characters.
         from smartbar.paint import popover_draw
         ctx = self._ctx()
         fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W, "middle")
-        self.assertNotEqual(fitted, "Beng…")
-        self.assertTrue(fitted.startswith("Be"))
-        self.assertTrue(fitted.endswith("ox"))
+        head, sep, tail = fitted.partition("…")
+        self.assertEqual(sep, "…")
+        self.assertTrue(head, "middle mode should keep a real prefix")
+        self.assertTrue(tail, "middle mode should keep a real suffix")
+        self.assertTrue("Bengalfox".startswith(head))
+        self.assertTrue("Bengalfox".endswith(tail))
 
     def test_every_fitted_result_actually_fits(self):
         from smartbar.paint import popover_draw
