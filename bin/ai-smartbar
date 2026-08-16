@@ -40,6 +40,52 @@ def once() -> int:
     return 0
 
 
+def open_panel() -> int:
+    """Ask an already-running Linux tray to show its panel.
+
+    The CLI half of the open-panel hotkey feature: GNOME/KDE/etc. offer no
+    portable system-wide hotkey API this repo can hook without a new
+    dependency (see docs/superpowers/specs/2026-08-16-open-panel-hotkey-
+    design.md), so the actual key binding lives in the user's OWN desktop
+    environment's keyboard settings — bound to run exactly this command
+    (see the README's Linux panel section). smartbar/linux/tray.py writes
+    its PID to smartbar.core.paths.tray_pid_file() on startup and answers
+    SIGUSR1 by opening the panel through the exact same path a click does.
+
+    macOS and Windows each get a real, in-process global hotkey instead
+    (AISmartbarApp.swift's key monitor, windows/tray.py's RegisterHotKey
+    thread) and have no use for this command, so it refuses there rather
+    than silently doing nothing.
+    """
+    if sys.platform in ("darwin", "win32"):
+        print("--open-panel is Linux-only. macOS opens its panel with the "
+              "built-in ⌃⌥A hotkey; Windows with Ctrl+Alt+A.",
+              file=sys.stderr)
+        return 1
+    import signal
+
+    from smartbar.core import paths
+    pid_path = paths.tray_pid_file()
+    try:
+        with open(pid_path) as handle:
+            pid = int(handle.read().strip())
+    except (OSError, ValueError):
+        print(f"ERROR: no running ai-smartbar tray found (no PID at "
+              f"{pid_path}) -- is it running?", file=sys.stderr)
+        return 1
+    try:
+        os.kill(pid, signal.SIGUSR1)
+    except ProcessLookupError:
+        print(f"ERROR: PID {pid} (from {pid_path}) is not running -- the "
+              "tray may have exited without cleaning up its PID file",
+              file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"ERROR: could not signal PID {pid}: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def print_config(fmt: str) -> int:
     """Render this device's config.env for whichever agent file wants it.
 
@@ -151,6 +197,13 @@ def main() -> int:
                         help="print current state to stdout and exit")
     parser.add_argument("--warmup-once", action="store_true",
                         help="run one gate-checked warmup pass and exit")
+    parser.add_argument("--open-panel", action="store_true",
+                        help="Linux only: ask an already-running tray to "
+                             "show its panel -- bind this command to a "
+                             "shortcut in your desktop environment's own "
+                             "keyboard settings (see the README's Linux "
+                             "panel section) for a hotkey. macOS/Windows "
+                             "each have a real built-in one instead")
     parser.add_argument("--preview-popover", nargs="?", const="", metavar="PATH",
                         help="render the popover to a PNG and exit (needs "
                              "pycairo; works on any OS)")
@@ -242,6 +295,8 @@ def main() -> int:
     if args.warmup_once:
         from smartbar.warmup_runner import run_once
         return run_once()
+    if args.open_panel:
+        return open_panel()
     if args.preview_popover is not None:
         from smartbar.paint.popover_preview import render
         print(render(args.preview_popover, demo=args.demo,

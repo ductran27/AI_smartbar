@@ -69,9 +69,22 @@ importable, that module needs the same tkinter/PIL/cairo fakes described in
 its own docstring. A bare "can this import" smoke test only needs the first
 three; exercising _make_popover's success path needs all five plus a real
 (or faked) smartbar.windows.popover_window.Popover.
+
+Also owns the open-panel hotkey's Windows half: a dedicated ctypes +
+user32.RegisterHotKey thread with its own GetMessageW pump (see the module
+comment above HOTKEY_ID and _run_hotkey_loop's own docstring), started in
+main() alongside the pystray worker thread. A real Win32 message loop --
+neither this file's fakes nor ctypes.windll itself exist off win32 -- so
+`_run_hotkey_loop` cannot run in this suite at all; what IS pinned is the
+seam it delegates a WM_HOTKEY message to (`_on_hotkey_message`), same
+split as everywhere else genuinely unverifiable Win32 behaviour meets
+testable Python in this port. See
+docs/superpowers/specs/2026-08-16-open-panel-hotkey-design.md.
 """
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 import io
 import logging
 import os
@@ -131,6 +144,28 @@ TRAY_ICON_SCALE = TRAY_ICON_PX / 96
 # name was simply wrong and made this getattr's default the only thing
 # deciding the value on every install, verified or not.
 _SUPPORTS_DEFAULT = getattr(pystray.Icon, "HAS_DEFAULT_ACTION", True)
+
+# --- open-panel hotkey (Ctrl+Alt+A) --------------------------------------
+# RegisterHotKey delivers WM_HOTKEY to whichever thread registered it, and
+# only while that thread is pumping messages. Neither existing thread is
+# free for that: root.mainloop() (the tk thread) owns its own message loop
+# nothing else can piggyback on, and pystray's Icon.run() worker thread
+# owns ITS OWN loop already (TrackPopupMenuEx's blocking call lives there).
+# So this gets a third, dedicated thread with nothing else on it --
+# started in main(), alongside the pystray worker thread.
+WM_HOTKEY = 0x0312
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+# Vista+: one WM_HOTKEY per physical key-down, not one per OS auto-repeat
+# tick while the combo is held.
+MOD_NOREPEAT = 0x4000
+VK_A = 0x41
+HOTKEY_ID = 1
+# Ctrl+Alt is a modifier pair almost nothing in Windows' own shortcuts or
+# common apps' default bindings claims (unlike bare Alt or Ctrl), and
+# mirrors macOS's Control+Option+A (AISmartbarApp.swift) so the same
+# muscle memory works on both platforms -- see the design doc for the
+# alternatives this was weighed against.
 
 log = logging.getLogger("ai-smartbar")
 
@@ -720,6 +755,59 @@ def _run_icon(tray):
         tray._quit()
 
 
+def _on_hotkey_message(tray):
+    """What a WM_HOTKEY message actually does -- pulled out of
+    _run_hotkey_loop's message pump so it can be pinned by a test without
+    real ctypes.windll (which does not exist off win32 at all; the pump
+    itself genuinely cannot run in this suite -- see
+    tests/test_windows_tray.py's own docstring on what this module's tests
+    can and cannot reach).
+
+    Calls tray._on_open() directly rather than routing through
+    call_on_ui_thread: _on_open is already the exact same open action
+    _menu_open reaches from the pystray worker thread (a THIRD non-tk
+    thread of its own, per Decision D1), and it already marshals its own
+    popover touch internally (see its own docstring) -- reusing it here
+    is "the same marshaling mechanism this file already uses", not a new
+    one, per the design doc's own requirement.
+    """
+    tray._on_open()
+
+
+def _run_hotkey_loop(tray):
+    """Target for the dedicated hotkey thread -- see the module-level
+    comment above HOTKEY_ID for why this needs its own thread at all.
+
+    Unlike _run_icon just above, an uncaught failure here does not call
+    tray._quit(): losing the hotkey is a degraded feature (the tray icon
+    itself still opens the panel fine), not a reason to take down an
+    otherwise-healthy tray. RegisterHotKey failing outright (a return of
+    0 -- most likely another application already owns Ctrl+Alt+A) is
+    logged and simply exits the thread rather than raising, for the same
+    reason.
+    """
+    user32 = ctypes.windll.user32
+    if not user32.RegisterHotKey(None, HOTKEY_ID,
+                                 MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_A):
+        log.error("RegisterHotKey(Ctrl+Alt+A) failed (GetLastError=%d) -- "
+                  "the open-panel hotkey will not work, most likely "
+                  "because another application already owns that "
+                  "combination", ctypes.GetLastError())
+        return
+    try:
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == WM_HOTKEY:
+                _on_hotkey_message(tray)
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+    except Exception:
+        log.exception("hotkey message loop failed; the open-panel hotkey "
+                      "will stop working (the tray icon itself is unaffected)")
+    finally:
+        user32.UnregisterHotKey(None, HOTKEY_ID)
+
+
 def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
     try:
@@ -755,4 +843,7 @@ def main():
     # its own worker thread while root.mainloop() owns the real main
     # thread and every tk widget.
     threading.Thread(target=_run_icon, args=(tray,), daemon=True).start()
+    # See the module comment above HOTKEY_ID for why this needs a THIRD
+    # thread rather than sharing either of the other two.
+    threading.Thread(target=_run_hotkey_loop, args=(tray,), daemon=True).start()
     root.mainloop()

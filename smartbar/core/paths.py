@@ -51,6 +51,18 @@ def cache_dir() -> str:
     return os.path.expanduser("~/.cache/ai-smartbar")
 
 
+def tray_pid_file() -> str:
+    """cache_dir()/tray.pid — where the Linux tray writes its own PID.
+
+    `ai-smartbar --open-panel` (bin/ai-smartbar) reads this file to find a
+    running instance to signal (see smartbar/linux/tray.py's SIGUSR1
+    handler). Lives under CACHE_DIR rather than CONFIG_DIR: it is
+    disposable, rewritten fresh on every startup, and nothing should ever
+    treat a stale copy left behind by a crashed process as durable state.
+    """
+    return os.path.join(cache_dir(), "tray.pid")
+
+
 def config_dir() -> str:
     """SMARTBAR_CONFIG_DIR, else %APPDATA%\\ai-smartbar or ~/.config/ai-smartbar.
 

@@ -477,6 +477,9 @@ def install_gi():
     GLib.idle_add = mock.Mock(name="GLib.idle_add")
     GLib.timeout_add_seconds = mock.Mock(name="GLib.timeout_add_seconds",
                                          return_value=1)
+    GLib.unix_signal_add = mock.Mock(name="GLib.unix_signal_add",
+                                     return_value=1)
+    GLib.PRIORITY_DEFAULT = 0
     repository.GLib = GLib
     sys.modules["gi.repository.GLib"] = GLib
 

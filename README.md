@@ -130,6 +130,15 @@ The panel — the same layout on macOS, Linux and Windows:
   lives inside the open popover and shows a device count); this is the
   icon in the bar. Linux and Windows already show this natively
   (`AppIndicator`/`pystray` tooltips); macOS now does too.
+- **Open-panel hotkey.** macOS: **⌃⌥A** opens the panel from anywhere,
+  without clicking the menu-bar icon (needs Accessibility permission —
+  see [Requirements](#requirements)). Windows: **Ctrl+Alt+A**, same
+  mnemonic. Linux has no portable system-wide hotkey API to hook without
+  a new dependency, so `ai-smartbar --open-panel` is the building block
+  instead — bind it to a shortcut in your own desktop environment's
+  keyboard settings; see [The Linux panel](#the-linux-panel). Design
+  tradeoffs and what's verified vs. best-effort per platform:
+  [`docs/superpowers/specs/2026-08-16-open-panel-hotkey-design.md`](docs/superpowers/specs/2026-08-16-open-panel-hotkey-design.md).
 - **Plan badge per account.** A small chip beside the address names which
   subscription the account is on (`20x` / `5x` / `Pro` / `Team` /
   `Enterprise` / `Free`), read from claude-swap's local per-slot config
@@ -189,6 +198,12 @@ The panel — the same layout on macOS, Linux and Windows:
   XFCE/GNOME distros. X11 or Wayland with a StatusNotifier-capable tray.
 - macOS: Python 3; `install/macos.sh` creates a venv with
   [rumps](https://github.com/jaredks/rumps).
+- macOS (native Swift app only): **Accessibility permission** for the
+  **⌃⌥A** open-panel hotkey — System Settings > Privacy & Security >
+  Accessibility, add AI smartbar (some macOS versions surface the same
+  grant under Input Monitoring instead). Not required for anything else
+  the app does; without it, ⌃⌥A silently does nothing (logged, not a
+  crash) and every other feature works exactly the same.
 - Windows: Python 3.9+ (pycairo ships `win_amd64` wheels for
   cp39–cp313, so there is no version ceiling here) and Git for
   Windows. `install/windows.ps1` creates a venv in the checkout and
@@ -436,6 +451,27 @@ The menu-bar pills stay Claude-only; the tab is the OpenAI surface.
 The Linux UI is the same panel as the macOS popover, not a reduced menu.
 Open it with **⟳ Open AI smartbar** in the tray menu, or **middle-click**
 the tray icon. Hovering the icon shows the same numbers as a tooltip.
+
+**A hotkey, via your own desktop environment.** GNOME, KDE, XFCE and every
+other DE bind keyboard shortcuts their own, mutually incompatible way, and
+none expose a portable API this repo can hook without a new dependency —
+see the design doc linked from the Features list above for what was
+considered and why. What ships instead is the building block:
+`ai-smartbar --open-panel` signals an already-running tray (over SIGUSR1,
+by PID — see `smartbar/linux/tray.py`) to show its panel, exiting non-zero
+with a clear message if no tray is running. Bind it yourself:
+
+```bash
+# GNOME: Settings → Keyboard → Keyboard Shortcuts → View and Customize
+# Shortcuts → Custom Shortcuts → +
+#   Name:    Open AI smartbar
+#   Command: /path/to/AI_smartbar/bin/ai-smartbar --open-panel
+#   Shortcut: whatever you like — ⌃⌥A mirrors macOS/Windows if you want
+#             the same muscle memory across machines
+
+# KDE: System Settings → Shortcuts → Custom Shortcuts → New → Global
+# Shortcut → Command/URL, same command as above.
+```
 
 Windows hosts the identical panel in a borderless tkinter window instead
 of GTK — see [`docs/windows-bring-up.md`](docs/windows-bring-up.md) for
