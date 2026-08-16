@@ -155,7 +155,9 @@ class TestRollbackOnlyRestartsWhatIsThere(Env):
         code, kickstart, notify = self.drive(restored=True)
         self.assertEqual(code, 1)
         kickstart.assert_called_once_with(update_runner.APP_LABEL)
-        notify.assert_called_once()
+        # One ping before the install attempt, one for the failure.
+        self.assertEqual(notify.call_count, 2)
+        self.assertIn("failed", notify.call_args_list[-1].args[0])
 
     def test_a_bundle_that_could_not_be_restored_is_never_restarted(self):
         """The defect: kickstarting an agent whose program was just deleted.
@@ -168,8 +170,10 @@ class TestRollbackOnlyRestartsWhatIsThere(Env):
         code, kickstart, notify = self.drive(restored=False)
         self.assertEqual(code, 1)
         kickstart.assert_not_called()
-        # The failure is still recorded and still announced either way.
-        notify.assert_called_once()
+        # The failure is still recorded and still announced either way,
+        # on top of the pre-install ping.
+        self.assertEqual(notify.call_count, 2)
+        self.assertIn("failed", notify.call_args_list[-1].args[0])
 
 
 @unittest.skipIf(sys.platform == "win32",
