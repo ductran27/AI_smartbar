@@ -176,6 +176,59 @@ class TestRollbackOnlyRestartsWhatIsThere(Env):
         self.assertIn("failed", notify.call_args_list[-1].args[0])
 
 
+class TestCheckoutFailureAnnouncesToo(Env):
+    """The GitError arm of run_once() must behave like every other failure
+    arm: notify the user and refresh state, not just log and return.
+
+    Before this, a checkout failure logged and returned 1 with no notify()
+    call at all — leaving the pre-apply "Updating to X…" ping as the last
+    thing the user ever heard about it.
+    """
+
+    def drive(self):
+        plan = update.UpdatePlan(action=update.UPDATE, target_ref="v9.9.9",
+                                 target_version="9.9.9", reason="test")
+        repo = mock.Mock(head="a" * 40, branch="main", version="9.9.8",
+                         dirty=False)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patches = [
+            mock.patch.object(update_runner, "CACHE_DIR", tmp.name),
+            mock.patch.object(update_runner, "LOG_FILE",
+                              os.path.join(tmp.name, "update.log")),
+            mock.patch.object(update_runner.logging, "basicConfig"),
+            mock.patch.object(update_runner, "load_state", return_value={}),
+            mock.patch.object(update_runner, "save_state"),
+            mock.patch.object(update_runner.portable, "lock",
+                              return_value=mock.Mock()),
+            mock.patch.object(update_runner.update_git, "fetch"),
+            mock.patch.object(update_runner.update_git, "repo_state",
+                              return_value=repo),
+            mock.patch.object(
+                update_runner.update_git, "checkout",
+                side_effect=update_runner.update_git.GitError("ff-only failed")),
+            mock.patch.object(update_runner.update_git, "version_in_checkout",
+                              return_value="9.9.8"),
+            mock.patch.object(update_runner, "_plan", return_value=plan),
+            mock.patch.object(update_runner, "present_installers",
+                              return_value={"macos_swift": True}),
+            mock.patch.object(update_runner, "backup_bundle", return_value=True),
+            mock.patch.object(update_runner, "notify"),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        code = update_runner.run_once()
+        return code, update_runner.notify
+
+    def test_a_failed_checkout_is_announced(self):
+        code, notify = self.drive()
+        self.assertEqual(code, 1)
+        # One ping before the checkout attempt, one for the failure.
+        self.assertEqual(notify.call_count, 2)
+        self.assertIn("failed", notify.call_args_list[-1].args[0])
+
+
 @unittest.skipIf(sys.platform == "win32",
                  "kickstart() returns before the subprocess on win32, and "
                  "os.getuid() does not exist there; the win32 arm has its "
@@ -227,6 +280,26 @@ class TestNotifiersSurviveAHang(Env):
                 side_effect=subprocess.TimeoutExpired("notify-send", 10)) as run:
             warmup_runner.notify_failure("title", "body")
         run.assert_called_once()
+
+
+@unittest.skipIf(sys.platform != "darwin",
+                 "exercises notify()'s osascript branch specifically")
+class TestNotifyEscapesBackslashesBeforeQuotes(Env):
+    """A body/title ending in "\\" must not escape our own closing quote.
+
+    Escaping `"` before `\\` left a trailing backslash free to swallow the
+    quote that follows it, splicing whatever comes next into the AppleScript
+    string instead of keeping it a literal character.
+    """
+
+    def test_a_trailing_backslash_does_not_escape_the_closing_quote(self):
+        with mock.patch.object(update_runner.subprocess, "run") as run:
+            update_runner.notify("title", "a bad path C:\\")
+        script = run.call_args.args[0][2]
+        # The string argument to `display notification` must close before
+        # ` with title `, not swallow it as part of the notification body.
+        self.assertIn('display notification "a bad path C:\\\\" with title',
+                      script)
 
 
 class TestTheChannelSurvivesTheProcessBoundary(Env):
