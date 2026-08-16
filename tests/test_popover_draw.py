@@ -26,6 +26,63 @@ def _demo():
 
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
+class TestFitTruncationMode(unittest.TestCase):
+    """popover_draw._fit's two modes, mirroring SwiftUI's two truncation
+    behaviours — see Label.mode's comment in popover_theme.py for which
+    Text uses which. Both must actually fit the text they return, or a
+    "successful" truncation could still overflow its column."""
+
+    def _ctx(self):
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 400, 100)
+        ctx = cairo.Context(surface)
+        ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
+                             cairo.FONT_WEIGHT_BOLD)
+        ctx.set_font_size(t.SIZE_ROW_LABEL)
+        return ctx
+
+    def test_tail_is_the_default_and_drops_the_end(self):
+        # Exactly how many characters survive is a font-metrics question —
+        # CI's default sans-serif isn't macOS's, so this pins the BEHAVIOUR
+        # (an ellipsis replacing a real suffix, keeping a real prefix)
+        # rather than an exact character count.
+        from smartbar.paint import popover_draw
+        ctx = self._ctx()
+        fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W)
+        self.assertTrue(fitted.endswith("…"))
+        self.assertTrue("Bengalfox".startswith(fitted[:-1]))
+        self.assertLess(len(fitted), len("Bengalfox"))
+
+    def test_text_that_already_fits_is_returned_unchanged(self):
+        from smartbar.paint import popover_draw
+        ctx = self._ctx()
+        for mode in ("tail", "middle"):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    popover_draw._fit(ctx, "7d", t.LABEL_W, mode), "7d")
+
+    def test_middle_mode_keeps_head_and_tail(self):
+        # Same font-metrics caveat as above: assert the SHAPE (a real
+        # prefix, an ellipsis, a real suffix) rather than exact characters.
+        from smartbar.paint import popover_draw
+        ctx = self._ctx()
+        fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W, "middle")
+        head, sep, tail = fitted.partition("…")
+        self.assertEqual(sep, "…")
+        self.assertTrue(head, "middle mode should keep a real prefix")
+        self.assertTrue(tail, "middle mode should keep a real suffix")
+        self.assertTrue("Bengalfox".startswith(head))
+        self.assertTrue("Bengalfox".endswith(tail))
+
+    def test_every_fitted_result_actually_fits(self):
+        from smartbar.paint import popover_draw
+        ctx = self._ctx()
+        for mode in ("tail", "middle"):
+            fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W, mode)
+            self.assertLessEqual(ctx.text_extents(fitted).x_advance,
+                                 t.LABEL_W)
+
+
+@unittest.skipIf(cairo is None, "pycairo not installed")
 class TestPopoverPainter(unittest.TestCase):
     def render(self, built):
         from smartbar.paint import popover_draw

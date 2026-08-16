@@ -369,7 +369,8 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     shapes.append(t.Label(inner_l + t.DOT_R * 2 + 7, head_cy,
                           model.account_address(account),
                           size=t.SIZE_EMAIL, bold=True, color=s.text,
-                          max_width=label_r - (inner_l + t.DOT_R * 2 + 7)))
+                          max_width=label_r - (inner_l + t.DOT_R * 2 + 7),
+                          mode="middle"))
 
     _card_body(shapes, s, account, top, now, inner_l, inner_r)
     return height

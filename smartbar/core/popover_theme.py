@@ -381,8 +381,16 @@ class Label:
     bold: bool = False
     mono: bool = False
     anchor: str = "left"
-    max_width: float = 0.0   # 0 = unlimited; else middle-truncated with "…"
+    max_width: float = 0.0   # 0 = unlimited; else truncated with "…"
     max_lines: int = 1       # >1 word-wraps, like SwiftUI's .lineLimit(2)
+    # "tail" is SwiftUI's own default for a plain .lineLimit(1) Text, which
+    # covers every truncatable Label except one. "middle" exists only for
+    # the account-address line (popover_layout._card), the sole Text in the
+    # whole Swift tree that opts into .truncationMode(.middle)
+    # (AccountCardView.swift's cardHeader) — see FINDING 1/2 in
+    # test_popover_layout.py for why every other label wraps or reserves
+    # width instead of falling into this.
+    mode: str = "tail"
 
 
 @dataclass
