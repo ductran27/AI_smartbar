@@ -37,9 +37,10 @@ def tier_label(rate_limit_tier=None, organization_type=None,
                subscription_type=None) -> str:
     """Anthropic tier strings -> short badge; "" means show nothing.
 
-    "default_claude_max_20x" -> "20x" is the primary path; pro/free/team
-    are recognised in either the tier or the org type; subscriptionType
-    ("max"/"pro"/"free", from credential blobs) is the coarse fallback.
+    "default_claude_max_20x" -> "20x" is the primary path; pro/free/team/
+    enterprise are recognised in either the tier or the org type;
+    subscriptionType ("max"/"pro"/"free", from credential blobs) is the
+    coarse fallback.
     """
     tier = (rate_limit_tier or "").strip().lower()
     match = _MULT.search(tier)
@@ -49,7 +50,9 @@ def tier_label(rate_limit_tier=None, organization_type=None,
     for hay in (tier, org):
         if not hay:
             continue
-        if "enterprise" in hay or "team" in hay:
+        if "enterprise" in hay:
+            return "Enterprise"
+        if "team" in hay:
             return "Team"
         if "pro" in hay:
             return "Pro"

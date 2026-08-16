@@ -17,11 +17,11 @@ class TestTierLabel(unittest.TestCase):
         self.assertEqual(plan.tier_label("default_claude_max_5x"), "5x")
         self.assertEqual(plan.tier_label("default_claude_max_1x"), "1x")
 
-    def test_pro_free_team_come_from_tier_or_org_type(self):
+    def test_pro_free_team_enterprise_come_from_tier_or_org_type(self):
         self.assertEqual(plan.tier_label("default_claude_pro"), "Pro")
         self.assertEqual(plan.tier_label(None, "claude_pro"), "Pro")
         self.assertEqual(plan.tier_label("", "claude_free"), "Free")
-        self.assertEqual(plan.tier_label(None, "claude_enterprise"), "Team")
+        self.assertEqual(plan.tier_label(None, "claude_enterprise"), "Enterprise")
         self.assertEqual(plan.tier_label("team_something", None), "Team")
 
     def test_subscription_type_is_the_coarse_fallback(self):
