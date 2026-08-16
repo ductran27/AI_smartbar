@@ -100,32 +100,20 @@ class TestRailParity(SwiftPresent):
 
 class TestBadgeChipParity(SwiftPresent):
     """accountBadge's composition, read as source text and cross-checked
-    against model.account_badge for the same matrix of (plan, devices)
+    against model.account_badge for the same matrix of plans —
     TestAccountBadge/TestAccountLabelComposition already cover in
     tests/test_model.py — not just a value that happens to agree today."""
 
-    def test_the_guard_and_ternary_are_present_verbatim(self):
+    def test_the_badge_is_just_the_plan(self):
         text = _read(CARD_SOURCE)
-        self.assertIn("guard devices > 0 else { return plan }", text)
-        self.assertIn(
-            'return plan.isEmpty ? "(\\(devices))" : "\\(plan) (\\(devices))"',
-            text)
-
-    def _swift_badge(self, plan: str, devices: int) -> str:
-        """Executes the exact algorithm pinned above, in Python, so a value
-        drifting between the two languages fails here rather than only at
-        runtime on a Mac neither CI nor this sandbox can build."""
-        if devices <= 0:
-            return plan
-        return f"({devices})" if not plan else f"{plan} ({devices})"
+        self.assertIn("private var accountBadge: String { accountPlan }", text)
 
     def test_swift_badge_matches_model_account_badge(self):
-        for plan, devices in (("", 0), ("Pro", 0), ("", 2), ("20x", 2)):
-            with self.subTest(plan=plan, devices=devices):
+        for plan in ("", "Pro", "20x"):
+            with self.subTest(plan=plan):
                 acct = model.Account(number=1, email="a@x.com")
-                acct.plan, acct.devices = plan, devices
-                self.assertEqual(self._swift_badge(plan, devices),
-                                 model.account_badge(acct))
+                acct.plan = plan
+                self.assertEqual(plan, model.account_badge(acct))
 
     def test_the_chip_sits_before_the_active_chip_and_make_active_button(self):
         text = _read(CARD_SOURCE)
