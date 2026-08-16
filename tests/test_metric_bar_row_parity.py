@@ -70,6 +70,20 @@ class TestRowGeometryParity(SwiftPresent):
         self.assertIsNotNone(width, "could not find the label's column")
         self.assertEqual(float(width.group(1)), theme.LABEL_W)
 
+    def test_the_label_has_no_middle_truncation_override(self):
+        """Text(metric.label) relies on SwiftUI's own default (.tail) — it
+        is not the account-address line, the one Text in the app that opts
+        into .truncationMode(.middle) (AccountCardView.swift). The painted
+        front ends default Label.mode to "tail" to match; if this Text ever
+        grows a .truncationMode(.middle) override, a long scoped name like
+        "Bengalfox" would render "Be…ox" on macOS but keep "Beng…" on the
+        painted platforms unless popover_layout.py's call site is updated
+        to match — this test is the tripwire for that drift."""
+        text = _read(ROW_SOURCE)
+        block = text[text.index("Text(metric.label)"):
+                     text.index(".frame(width: 40")]
+        self.assertNotIn("truncationMode", block)
+
     def test_both_gaps_on_the_label_line_match_bar_gap(self):
         """One number, used twice: a FIXED gap after the label column (the
         caption's leading padding) and the same value as the FLOOR before
