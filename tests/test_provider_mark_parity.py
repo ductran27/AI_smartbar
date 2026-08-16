@@ -1,13 +1,12 @@
 """Stage 04's icon language exists twice, in two languages. Pin them
 together.
 
-ProviderMark.swift is the Swift twin of popover_draw.py's five new drawing
-functions (claude/openai/clock/pause/warn), and three call sites —
-PopoverView.tabButton, MetricBarRow's countdown, AccountCardView's blocked
-state line — each duplicate a "glyph beside a line of text" size as a
-SwiftUI frame/spacing literal: TAB_MARK/TAB_MARK_GAP for the tab marks,
-COUNTDOWN_ICON/COUNTDOWN_ICON_GAP (shared by the clock and warn marks) for
-the other two. Same approach as test_metric_bar_row_parity.py and
+ProviderMark.swift is the Swift twin of popover_draw.py's four drawing
+functions (claude/openai/pause/warn), and two call sites —
+PopoverView.tabButton and AccountCardView's blocked state line — each
+duplicate a "glyph beside a line of text" size as a SwiftUI frame/spacing
+literal: TAB_MARK/TAB_MARK_GAP for the tab marks, INLINE_ICON/
+INLINE_ICON_GAP for the other. Same approach as test_metric_bar_row_parity.py and
 test_account_card_parity.py: read the Swift as SOURCE TEXT, so a value
 drifting on one side fails the ordinary unit suite with no Swift toolchain
 and no Xcode required.
@@ -28,11 +27,13 @@ POPOVER_SOURCE = os.path.join(SWIFT_DIR, "PopoverView.swift")
 ROW_SOURCE = os.path.join(SWIFT_DIR, "MetricBarRow.swift")
 CARD_SOURCE = os.path.join(SWIFT_DIR, "AccountCardView.swift")
 
-# The five kinds stage 04 added on the Python side (see
+# The kinds stage 04 added on the Python side (see
 # popover_draw._GLYPH_DRAWERS) that have no SF Symbol equivalent and so get
 # a drawn Swift twin. "refresh"/"close"/"power"/"quit" stay SF-Symbol-driven
-# on macOS — they are not part of this parity claim.
-NEW_KINDS = {"claude", "openai", "clock", "pause", "warn"}
+# on macOS — they are not part of this parity claim. "clock" was one of
+# these until the metric row's countdown became words ("resets in 1h 37m"),
+# which say what a clock glyph beside them would only repeat.
+NEW_KINDS = {"claude", "openai", "pause", "warn"}
 
 
 def _read(path: str) -> str:
@@ -98,39 +99,42 @@ class TestTabMarkParity(SwiftPresent):
         self.assertEqual(float(match.group(1)), theme.TAB_MARK_GAP)
 
 
-class TestCountdownIconParity(SwiftPresent):
-    """MetricBarRow's clock mark: COUNTDOWN_ICON/COUNTDOWN_ICON_GAP as a
-    frame/spacing literal pair."""
+class TestTheMetricRowWearsNoGlyph(SwiftPresent):
+    """The countdown used to carry a clock mark. It says "resets in 1h 37m"
+    now, which is the same claim in words — so the glyph would be repeating
+    its own caption, and the row draws none at all. Pinned because the
+    obvious "improvement" to a bare-looking caption is to put an icon back
+    in front of it."""
 
-    def test_the_clocks_frame_and_gap_match_countdown_icon_constants(self):
-        match = re.search(
-            r'HStack\(spacing: ([\d.]+)\) \{\s+'
-            r'if !countdown\.isEmpty \{\s+'
-            r'ProviderMark\(kind: "clock"\)\s+\.frame\(width: ([\d.]+), '
-            r'height: ([\d.]+)\)', _read(ROW_SOURCE))
-        self.assertIsNotNone(match, "could not find the countdown's clock mark")
-        gap, width, height = (float(v) for v in match.groups())
-        self.assertEqual(gap, theme.COUNTDOWN_ICON_GAP)
-        self.assertEqual(width, theme.COUNTDOWN_ICON)
-        self.assertEqual(height, theme.COUNTDOWN_ICON)
+    def test_the_row_draws_no_provider_mark(self):
+        self.assertNotIn("ProviderMark", _read(ROW_SOURCE))
+
+    def test_the_clock_is_gone_from_both_painters(self):
+        # A kind nothing emits still draws when asked, so it survives as
+        # code no test covers; both sides retire it together or neither.
+        from smartbar.paint import popover_draw
+
+        self.assertNotIn("clock", popover_draw._GLYPH_DRAWERS)
+        self.assertNotIn('case "clock"', _read(MARK_SOURCE))
 
 
 class TestBlockedWarnParity(SwiftPresent):
-    """AccountCardView's blocked state line: the same COUNTDOWN_ICON/
-    COUNTDOWN_ICON_GAP pair, reused rather than given its own constants,
-    prefixing a warn mark instead of the "person.crop.circle.badge.
-    exclamationmark" SF Symbol the blocked branch used before stage 04."""
+    """AccountCardView's blocked state line: the INLINE_ICON/
+    INLINE_ICON_GAP pair, shared with the footer's pause mark rather than
+    given its own constants, prefixing a warn mark instead of the
+    "person.crop.circle.badge.exclamationmark" SF Symbol the blocked branch
+    used before stage 04."""
 
-    def test_the_warn_marks_frame_and_gap_match_countdown_icon_constants(self):
+    def test_the_warn_marks_frame_and_gap_match_inline_icon_constants(self):
         match = re.search(
             r'HStack\(alignment: \.top, spacing: ([\d.]+)\) \{\s+'
             r'ProviderMark\(kind: "warn"\)\s+\.frame\(width: ([\d.]+), '
             r'height: ([\d.]+)\)', _read(CARD_SOURCE))
         self.assertIsNotNone(match, "could not find the blocked line's warn mark")
         gap, width, height = (float(v) for v in match.groups())
-        self.assertEqual(gap, theme.COUNTDOWN_ICON_GAP)
-        self.assertEqual(width, theme.COUNTDOWN_ICON)
-        self.assertEqual(height, theme.COUNTDOWN_ICON)
+        self.assertEqual(gap, theme.INLINE_ICON_GAP)
+        self.assertEqual(width, theme.INLINE_ICON)
+        self.assertEqual(height, theme.INLINE_ICON)
 
     def test_the_old_sf_symbol_no_longer_backs_the_blocked_branch(self):
         # Regression guard: this exact string used to be the systemImage

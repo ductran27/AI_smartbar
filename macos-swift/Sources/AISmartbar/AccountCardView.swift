@@ -103,8 +103,8 @@ struct AccountCardView: View {
                     // painter can reproduce the exact same shape (see its
                     // file header), which "person.crop.circle.badge.
                     // exclamationmark" cannot. Same icon/gap as the
-                    // countdown's clock mark (COUNTDOWN_ICON/
-                    // COUNTDOWN_ICON_GAP in the shared theme).
+                    // footer's "update held" pause mark (INLINE_ICON/
+                    // INLINE_ICON_GAP in the shared theme).
                     HStack(alignment: .top, spacing: 3) {
                         ProviderMark(kind: "warn")
                             .frame(width: 9, height: 9)
@@ -131,12 +131,11 @@ struct AccountCardView: View {
         .padding(.vertical, 9)
         .padding(.horizontal, 11)
         .background(
-            // A solid ground rather than `.thinMaterial`. The pace notch is
-            // the card's own colour cut through a bar (see MetricBarRow),
-            // which only lands exactly if that colour is known rather than
-            // whatever a blur resolves to over the desktop behind it — and
-            // it retires the one deliberate divergence the cairo painter
-            // could never reproduce. CARD_BG in the shared theme.
+            // A solid ground rather than `.thinMaterial`, whose blur has no
+            // portable cairo equivalent: it retires the one deliberate
+            // divergence the painted front-ends could never reproduce, so a
+            // card is the same object on every platform rather than a blur
+            // and two imitations of one. CARD_BG in the shared theme.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(palette.cardBG)
         )

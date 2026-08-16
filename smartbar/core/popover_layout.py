@@ -114,15 +114,15 @@ def state_lines(account) -> int:
     (SwiftUI wraps at 2 via .lineLimit(2)).
 
     A blocked account's line makes room for a warn glyph in front of it
-    (see _card_body), narrower by the same COUNTDOWN_ICON/
-    COUNTDOWN_ICON_GAP the glyph and its gap reserve there — otherwise this
+    (see _card_body), narrower by the same INLINE_ICON/
+    INLINE_ICON_GAP the glyph and its gap reserve there — otherwise this
     could estimate one line for text that, indented past the glyph, wraps
     to two, silently overflowing the card height reserved for it.
     """
     text = model.state_text(account) or "No usage data"
     room = t.WIDTH - 2 * t.PAD - 2 * t.CARD_PAD_H
     if model.switch_blocked(account):
-        room -= t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+        room -= t.INLINE_ICON + t.INLINE_ICON_GAP
     return _lines_for_width(text, room)
 
 
@@ -215,14 +215,18 @@ def _bar(shapes, s, x, y, w, metric, now):
         shapes.append(t.Box(x, y, max(t.BAR_H, w * fraction), t.BAR_H,
                             radius=t.BAR_H / 2,
                             fill=s.status_rgba(model.color(metric.pct))))
-    # See Scheme.pace's own comment (popover_theme.py) for why "how far
-    # through the window" has to be a second MARK rather than a second
-    # colour on the fill.
+    # See PACE_W's own comment (popover_theme.py) for why "how far through
+    # the window" has to be a second MARK rather than a second colour on
+    # the fill, and why that mark hangs UNDER the bar instead of cutting
+    # it. The x maths is unchanged from the notch it replaces: still
+    # centred on the pace position, still clamped so a window that has only
+    # just opened (or is about to close) keeps its tick under the bar
+    # rather than half a hairline outside it.
     pace = model.pace_fraction(metric, now)
     if pace is not None:
         half = t.PACE_W / 2
         center = min(max(x + w * pace, x + half), x + w - half)
-        shapes.append(t.Box(center - half, y, t.PACE_W, t.BAR_H,
+        shapes.append(t.Box(center - half, y + t.BAR_H, t.PACE_W, t.PACE_H,
                             radius=0.0, fill=s.pace))
 
 
@@ -373,9 +377,11 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
     """Metric rows, or the explanatory line on a data-less card — shared by
     the normal header and the (possibly taller) remove-confirm header.
 
-    A metric row is two stacked lines: label/pct/countdown, then the bar.
-    See ROW_LABEL_H's comment in popover_theme for why the readout stayed on
-    the label's line rather than moving under the bar.
+    A metric row is two stacked lines: window name, "resets in …", and the
+    percentage on the first; the bar on the second. See ROW_LABEL_H's
+    comment in popover_theme for why the readout stayed on the label's line
+    rather than moving under the bar, and LABEL_W's for why the countdown
+    sits beside the name rather than over the bar's end.
     """
     body_top = top + t.CARD_PAD_V + header_h + t.CARD_INNER_GAP
     if not account.metrics:
@@ -390,10 +396,10 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
             # account's usual shade, not "you need to act". Same
             # icon/gap the countdown's clock uses, reused rather than
             # giving this its own pair of constants for the same job.
-            shapes.append(t.Glyph("warn", inner_l + t.COUNTDOWN_ICON / 2,
-                                  body_top + block_h / 2, t.COUNTDOWN_ICON,
+            shapes.append(t.Glyph("warn", inner_l + t.INLINE_ICON / 2,
+                                  body_top + block_h / 2, t.INLINE_ICON,
                                   color))
-            text_l = inner_l + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+            text_l = inner_l + t.INLINE_ICON + t.INLINE_ICON_GAP
         shapes.append(t.Label(text_l, body_top + block_h / 2,
                               model.state_text(account) or "No usage data",
                               size=t.SIZE_CAPTION, color=color,
@@ -401,7 +407,11 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
         return
 
     bar_l, bar_w = inner_l, inner_r - inner_l
-    pct_r = inner_r - t.VALUE_COUNTDOWN_W
+    # The reset caption starts one gap past the label column and truncates
+    # one gap before the percentage's, so a long countdown can never reach
+    # the number over the bar.
+    reset_l = inner_l + t.LABEL_W + t.BAR_GAP
+    reset_w = (inner_r - t.VALUE_PCT_W - t.BAR_GAP) - reset_l
     for index, metric in enumerate(account.metrics):
         row_top = body_top + index * (t.ROW_H + t.ROW_GAP)
         label_cy = row_top + t.ROW_LABEL_H / 2
@@ -411,40 +421,28 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
         # Countdown recomputed from the absolute reset time so an old
         # snapshot still shows a live wait (mirror of Metric.liveCountdown).
         countdown = remaining_text(metric.resets_at, now) or metric.countdown
-        # One ink for the whole readout: percentage and countdown are one
-        # fact read left to right, so a step between them would imply a
-        # hierarchy the row does not have. It comes from the scheme rather
-        # than the ink-with-alpha literal it used to be, because that
-        # literal was white and a white readout is invisible on a light card.
-        color = s.text_spent if metric.pct >= 100 else s.text
-        # Percentage and countdown are two INDEPENDENTLY right-anchored
-        # labels, not one concatenated string right-anchored at inner_r —
-        # a single string makes the percentage slide sideways every time
-        # the countdown's length changes (e.g. "1h 0m" -> "59m"), which is
-        # exactly what FINDING 3 measured (a 19pt swing on the "·").
-        shapes.append(t.Label(pct_r, label_cy, f"{round(metric.pct)}%",
-                              size=t.SIZE_ROW_VALUE, mono=True,
-                              anchor="right", color=color))
         if countdown:
-            # The leading " · " is gone: a clock glyph fills the space
-            # that space used to reserve, so "· 🕐 2h 5m" never doubles up
-            # the separator.
-            countdown_text = f" {countdown}"
-            shapes.append(t.Label(inner_r, label_cy, countdown_text,
-                                  size=t.SIZE_ROW_VALUE, mono=True,
-                                  anchor="right", color=color))
-            # The clock sits immediately left of wherever the countdown
-            # text actually STARTS, not the reserved column's nominal edge
-            # (inner_r - VALUE_COUNTDOWN_W) — that column is sized for the
-            # widest realistic countdown ("23h 59m"), so anchoring there
-            # would leave a visible gap before a short one like "9m". The
-            # layout has no font engine, so t.text_width is the same
-            # estimate the countdown label itself is measured by.
-            text_w = t.text_width(countdown_text, t.SIZE_ROW_VALUE, mono=True)
-            clock_cx = (inner_r - text_w - t.COUNTDOWN_ICON_GAP
-                        - t.COUNTDOWN_ICON / 2)
-            shapes.append(t.Glyph("clock", clock_cx, label_cy,
-                                  t.COUNTDOWN_ICON, color))
+            # Worded, not a bare duration beside a clock glyph. "1d 12h"
+            # sitting next to "80%" is read by some people as budget left
+            # rather than time left — the most expensive misreading this
+            # panel can produce, and the reason the caption says what it
+            # measures out loud. Secondary ink and regular weight put it
+            # below the two facts it sits between; it qualifies the window
+            # name, it is not a third number to compare.
+            shapes.append(t.Label(reset_l, label_cy, f"resets in {countdown}",
+                                  size=t.SIZE_ROW_VALUE,
+                                  color=s.text_secondary,
+                                  max_width=reset_w))
+        # The bar's own readout, and the only value over the bar. Bold and
+        # right-anchored flush with the track's end, so "how full is this"
+        # and "what number is that" line up instead of being separated by a
+        # countdown. The spent ink comes from the scheme rather than the
+        # ink-with-alpha literal it used to be, because that literal was
+        # white and a white readout is invisible on a light card.
+        color = s.text_spent if metric.pct >= 100 else s.text
+        shapes.append(t.Label(inner_r, label_cy, f"{round(metric.pct)}%",
+                              size=t.SIZE_ROW_VALUE, bold=True, mono=True,
+                              anchor="right", color=color))
 
         bar_top = row_top + t.ROW_LABEL_H + t.ROW_LABEL_GAP
         _bar(shapes, s, bar_l, bar_top, bar_w, metric, now)
@@ -647,9 +645,9 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
             # and a blocked card's warn triangle use, reused rather than
             # a fourth pair of constants for the same "glyph beside a line
             # of text" job.
-            shapes.append(t.Glyph("pause", t.PAD + t.COUNTDOWN_ICON / 2,
-                                  foot_cy, t.COUNTDOWN_ICON, s.text_tertiary))
-            label_x = t.PAD + t.COUNTDOWN_ICON + t.COUNTDOWN_ICON_GAP
+            shapes.append(t.Glyph("pause", t.PAD + t.INLINE_ICON / 2,
+                                  foot_cy, t.INLINE_ICON, s.text_tertiary))
+            label_x = t.PAD + t.INLINE_ICON + t.INLINE_ICON_GAP
         shapes.append(t.Label(label_x, foot_cy, label, size=t.SIZE_CAPTION,
                               color=s.text_tertiary))
         if blocked_reason:

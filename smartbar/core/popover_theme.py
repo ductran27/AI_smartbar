@@ -9,10 +9,9 @@ this module imports a graphics library, so it is unit-testable anywhere.
 Values mirror PopoverView.swift / AccountCardView.swift / MetricBarRow.swift
 1:1. macOS cards used to be `.thinMaterial`, whose blur has no portable cairo
 equivalent, leaving `card_bg` as the solid shade it happened to resolve to;
-they are now that solid colour on every platform. The pace notch is what
-settled it — it is drawn as the card's own ground showing through the bar
-(see PACE_W), which only lands exactly if that ground is a known colour
-rather than whatever a blur resolves to over the desktop behind it.
+they are now that solid colour on every platform, so a card is the same
+object on macOS, Linux and Windows rather than a blur and two imitations of
+one.
 
 Geometry is module-level and shared; COLOUR is per-appearance and lives in a
 Scheme (DARK / LIGHT). The split is the point: the panel follows the system
@@ -37,7 +36,7 @@ CARD_PAD_V = 9.0
 CARD_PAD_H = 11.0
 CARD_HEADER_H = 20.0
 CARD_INNER_GAP = 7.0
-# A row is two stacked lines: the label/pct/countdown line, then a bar that
+# A row is two stacked lines: the label/reset/pct line, then a bar that
 # gets the card's FULL inner width instead of splitting it with a label
 # column (see popover_layout._card_body). ROW_H is their sum
 # (12 + 2 + 6 = 20), so card_height's row-counting arithmetic needs no
@@ -49,7 +48,7 @@ CARD_INNER_GAP = 7.0
 # tall, so a card that used to be glanceable became something to scroll,
 # and the whole point of a menu-bar panel is that it answers a question
 # before you have finished opening it. Density IS the feature here.
-ROW_LABEL_H = 12.0        # the label/pct/countdown line
+ROW_LABEL_H = 12.0        # the label/reset/pct line
 ROW_LABEL_GAP = 2.0       # gap between that line and the bar under it
 ROW_H = 20.0
 ROW_GAP = 7.0
@@ -63,28 +62,37 @@ CONFIRM_MAX_LINES = 2
 CONFIRM_LINE_H = 15.0
 DOT_R = 3.5                # 7pt circle
 DOT_STROKE = 1.5
-# MetricBarRow's label/pct/countdown line has a label column and two value
-# sub-columns — only the BAR sits on its own line below (see
-# popover_layout._card_body). LABEL_W caps the label's truncation width;
-# VALUE_PCT_W/VALUE_COUNTDOWN_W split the value into two independently
-# right-anchored sub-columns — percentage, then countdown — instead of one
-# right-anchored string (a single string jitters sideways every time the
-# countdown's length changes, FINDING 3). Sized from real cairo metrics for
-# the widest realistic value ("100%" / " · 23h 59m"), each with a few points
-# of margin for other platforms' default mono fonts.
+# MetricBarRow's first line reads left to right as: which window, when it
+# refills, how much is spent — only the BAR sits on the line below (see
+# popover_layout._card_body). LABEL_W caps the window name's truncation
+# width; VALUE_PCT_W is the percentage's right-anchored column, sized from
+# real cairo metrics for "100%" with a few points of margin for other
+# platforms' default mono fonts.
+#
+# The countdown used to be a second right-anchored column here, sitting
+# directly above the bar's right END. That is what made people read the bar
+# as a clock: whatever number is anchored over the end of a bar looks like
+# the thing the bar is counting towards. It is now the "resets in …" caption
+# beside the LABEL, left-anchored in secondary ink, because the window it
+# belongs to is the label — and the percentage is left as the only value
+# over the bar, which is correct: it IS the bar's readout.
 LABEL_W = 40.0             # MetricBarRow label column
 VALUE_PCT_W = 28.0
-VALUE_COUNTDOWN_W = 66.0
 BAR_H = 6.0
-# Gap between the label and the value area on the label line — the bar on
-# the line below it has no such gap; it spans the card's full inner width.
+# Gap after the label column on the label line: it separates the window name
+# from the "resets in …" caption that follows it, and is reused as the FLOOR
+# on the gap before the right-anchored percentage, so the caption truncates
+# rather than colliding with it. The bar on the line below has no such gap —
+# it spans the card's full inner width.
 BAR_GAP = 9.0              # Spacer(minLength: 9) in MetricBarRow's label line
 # One "small glyph beside a line of text" size shared by every spot that
-# needs it — the countdown's clock, a blocked account's warn triangle, and
-# the footer's pause mark — rather than three near-identical pairs of
-# constants for what is visually the same job three times.
-COUNTDOWN_ICON = 9.0
-COUNTDOWN_ICON_GAP = 3.0
+# needs it — a blocked account's warn triangle and the footer's pause mark —
+# rather than a near-identical pair of constants for what is visually the
+# same job twice. Named for the countdown because that is where it started:
+# the countdown wore a clock mark until the countdown became words ("resets
+# in 1h 37m"), which say what a clock glyph next to them would only repeat.
+INLINE_ICON = 9.0
+INLINE_ICON_GAP = 3.0
 # The pace caret marks "how far through this window are we" independently
 # of the fill, which marks "how much is spent" — two different questions a
 # single bar cannot answer. It never joins the status ramp, so it cannot
@@ -93,18 +101,22 @@ COUNTDOWN_ICON_GAP = 3.0
 # giving them related colours would blur both answers into a bar even a
 # burn-rate expert can't parse quickly.
 #
-# It is drawn as a NOTCH — the card's own ground, cut through the bar —
-# rather than as a translucent hairline over it. A hairline has to be
-# legible against two different backgrounds at once (bare track AND
-# saturated fill) and was washing out over both; a notch is a hole, so it
-# contrasts with whatever it interrupts, automatically. It also gets
-# sharper exactly as the fill grows past it, which is when "am I ahead of
-# schedule" starts to matter.
+# It hangs UNDER the bar, flush with its bottom edge. It used to be a notch
+# — the card's own ground cut through the bar — which is legible for the
+# same reason a hole always is, and which was also the whole problem: a
+# fill interrupted at 72% while the readout says 79% reads as a bar that
+# ENDS at 72%. People asked what the extra segment meant. Nothing may cut
+# the fill, because the fill's end is the one thing on this row that has to
+# be unambiguous; a mark below the bar is an annotation pointing AT a
+# position instead, and it costs no height — ROW_GAP already leaves 7pt
+# between one row's bar and the next row's label.
 #
-# It stays a HAIRLINE's width: an opaque notch earns its legibility from
-# being a hole rather than from being wide, and widening it starts to read
-# as a bar cut into two segments rather than one bar with a mark on it.
+# Being outside the bar, it is now real ink (Scheme.pace) rather than the
+# card's ground: a hole in nothing is invisible. It stays a HAIRLINE's
+# width, and short — it is a tick under a bar, and anything taller starts
+# to read as a second, empty bar of its own.
 PACE_W = 1.5
+PACE_H = 3.0
 BUTTON_H = 18.0
 TAB_H = 20.0               # provider tab row (Claude | OpenAI), shown only
                            # when both providers actually have accounts
@@ -217,24 +229,25 @@ class Scheme:
 # ground sits at, and naming it once is what keeps the two ramps a system
 # rather than two hand-tuned lists.
 _SLATE = (0.361, 0.400, 0.447, 1.0)
-# The pace notch is the card's own ground showing through the bar, so it is
-# named once per scheme and used for BOTH `card_bg` and `pace` — the two
-# cannot be allowed to drift, or the notch stops being a hole and becomes a
-# faint grey stripe that happens to sit near the card colour.
-_DARK_CARD = (0.090, 0.110, 0.133, 1.0)
-_LIGHT_CARD = (1.0, 1.0, 1.0, 1.0)
+_HAZE = (0.545, 0.588, 0.639, 1.0)
+# The pace tick is the quietest ink in its scheme — `text_tertiary`, named
+# once and used for both, so the two cannot drift. It has to be quiet: it
+# annotates the bar, and any louder and it would compete with the fill for
+# the first glance (see PACE_W). It has to be INK, though, and not the
+# card's ground: it hangs below the bar now, where a ground-coloured mark
+# would simply be invisible.
 
 DARK = Scheme(
     name="dark",
     window_bg=(0.059, 0.071, 0.086, 1.0),
-    card_bg=_DARK_CARD,
+    card_bg=(0.090, 0.110, 0.133, 1.0),
     card_border=(1.0, 1.0, 1.0, 0.06),      # hairline, same on every card
     text=(0.914, 0.929, 0.949, 1.0),             # "chalk"
     text_secondary=(0.596, 0.639, 0.690, 1.0),   # "mist"
     text_tertiary=_SLATE,                        # "dim"
     text_spent=(0.725, 0.757, 0.796, 1.0),       # a 100%-used readout
     bar_track=(1.0, 1.0, 1.0, 0.09),
-    pace=_DARK_CARD,
+    pace=_SLATE,
     button_bg=(1.0, 1.0, 1.0, 0.12),
     button_bg_hover=(1.0, 1.0, 1.0, 0.20),
     button_border=(1.0, 1.0, 1.0, 0.18),
@@ -260,14 +273,14 @@ LIGHT = Scheme(
     # it. On dark the two grounds are close and the hairline does the
     # separating; on light the value gap does it, so the hairline can be
     # quieter than a naive inversion of the dark one.
-    card_bg=_LIGHT_CARD,
+    card_bg=(1.0, 1.0, 1.0, 1.0),
     card_border=(0.0, 0.0, 0.0, 0.07),
     text=(0.086, 0.106, 0.133, 1.0),             # "ink"
     text_secondary=_SLATE,
-    text_tertiary=(0.545, 0.588, 0.639, 1.0),    # "haze"
+    text_tertiary=_HAZE,
     text_spent=(0.263, 0.294, 0.341, 1.0),
     bar_track=(0.0, 0.0, 0.0, 0.08),
-    pace=_LIGHT_CARD,
+    pace=_HAZE,
     button_bg=(0.0, 0.0, 0.0, 0.06),
     button_bg_hover=(0.0, 0.0, 0.0, 0.11),
     button_border=(0.0, 0.0, 0.0, 0.14),
@@ -366,9 +379,9 @@ class Glyph:
     rather than typeset. `kind` is one of: "refresh", "close", "power",
     "quit" (the header's Quit button — the same power-ring shape as
     "power", under its own name because its Hit is also named "quit"),
-    "claude", "openai" (the provider marks beside a tab's label), "clock"
-    (a metric row's countdown), "pause" (the footer's "update held") and
-    "warn" (a blocked account's state line).
+    "claude", "openai" (the provider marks beside a tab's label), "pause"
+    (the footer's "update held") and "warn" (a blocked account's state
+    line).
     """
     kind: str
     cx: float

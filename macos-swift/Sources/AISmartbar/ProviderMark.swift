@@ -1,4 +1,4 @@
-// Five small marks — claude, openai, clock, pause, warn — drawn
+// Four small marks — claude, openai, pause, warn — drawn
 // from Path geometry rather than SF Symbols. SF Symbols exist only on
 // macOS, and every one of these marks also has to run through Linux's
 // cairo painter (popover_draw._draw_glyph, one drawing function per kind);
@@ -33,7 +33,6 @@ struct ProviderMark: View {
     private func strokedPath(size: CGFloat) -> Path {
         switch kind {
         case "openai": return openAIPath(size: size)
-        case "clock": return clockPath(size: size)
         case "warn": return warnOutlinePath(size: size)
         default: return Path()
         }
@@ -123,21 +122,6 @@ struct ProviderMark: View {
             if k == 0 { path.move(to: point) } else { path.addLine(to: point) }
         }
         path.closeSubpath()
-        return path
-    }
-
-    // MARK: - clock — a stroked circle with hour/minute hands, sitting
-    // immediately left of a countdown (mirror of popover_draw._draw_clock).
-
-    private func clockPath(size: CGFloat) -> Path {
-        var path = Path()
-        let cx = size / 2, cy = size / 2
-        let r = size * 0.42
-        path.addEllipse(in: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-        path.move(to: CGPoint(x: cx, y: cy))
-        path.addLine(to: CGPoint(x: cx, y: cy - r * 0.55))          // hour hand
-        path.move(to: CGPoint(x: cx, y: cy))
-        path.addLine(to: CGPoint(x: cx + r * 0.6, y: cy - r * 0.1)) // minute hand
         return path
     }
 
