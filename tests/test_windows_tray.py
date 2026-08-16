@@ -752,6 +752,39 @@ class TestNotify(GuiStubbedTestCase):
         tray.notify(alert, "critical")   # must not raise
 
 
+class TestOpenPanelHotkey(GuiStubbedTestCase):
+    """The open-panel hotkey's Windows half (Ctrl+Alt+A). The actual
+    RegisterHotKey/GetMessageW pump in _run_hotkey_loop needs real
+    ctypes.windll, which does not exist off win32 at all -- unlike this
+    file's tkinter/PIL/pystray fakes, ctypes itself is not faked anywhere
+    in this suite, so that loop genuinely cannot run here (see the module
+    docstring's own note on this split). What IS pinned: the seam a
+    WM_HOTKEY message is handed to, and that the Win32 constants this
+    port sends RegisterHotKey are the real documented values rather than
+    a typo that would silently register the wrong combination (or none
+    at all).
+    """
+
+    def test_a_hotkey_message_reaches_the_exact_same_open_action(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(tray, "_on_open") as on_open:
+            mod._on_hotkey_message(tray)
+        on_open.assert_called_once_with()
+
+    def test_the_registered_combination_is_ctrl_alt_a_with_norepeat(self):
+        # Real Win32 values (winuser.h): MOD_ALT=0x0001, MOD_CONTROL=0x0002,
+        # MOD_NOREPEAT=0x4000, VK_A=0x41. A typo here would either fail to
+        # register at all or silently claim a different key combination
+        # than the one documented to the user.
+        mod = _reimport("smartbar.windows.tray")
+        self.assertEqual(mod.MOD_ALT, 0x0001)
+        self.assertEqual(mod.MOD_CONTROL, 0x0002)
+        self.assertEqual(mod.MOD_NOREPEAT, 0x4000)
+        self.assertEqual(mod.VK_A, 0x41)
+        self.assertEqual(mod.WM_HOTKEY, 0x0312)
+
+
 class TestCheckUpdateArgv(GuiStubbedTestCase):
     def test_returns_sys_executable_prefixed_launcher_check_update_json(self):
         mod = _reimport("smartbar.windows.tray")

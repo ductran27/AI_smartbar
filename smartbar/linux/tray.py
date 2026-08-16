@@ -19,6 +19,15 @@ pending-menu-until-hide swap dance, the popover window itself, and the
 optimistic-switch flip's own repaint (supplied to TrayController.on_switch
 as a callable, per the design's own divergence note on why that step cannot
 be shared).
+
+Also owns the open-panel hotkey's Linux half: no cross-desktop system-wide
+hotkey API exists here without a new dependency this repo doesn't carry, so
+`main()` writes this process's PID to PID_FILE and answers SIGUSR1 (via
+GLib.unix_signal_add, not a raw signal.signal handler — see
+_on_open_panel_signal's own docstring for why) by opening the panel exactly
+as a click would. `bin/ai-smartbar --open-panel` is the sender; the actual
+key binding lives in the user's own desktop environment's keyboard
+settings. See docs/superpowers/specs/2026-08-16-open-panel-hotkey-design.md.
 """
 # Must stay the first statement after the docstring — above even the
 # gi.require_version dance below, which is what Python requires of any
@@ -50,6 +59,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 
 import logging
+import signal
 import subprocess
 import time
 
@@ -69,8 +79,38 @@ LOG_FILE = os.path.join(CACHE_DIR, "tray.log")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 LAUNCHER = os.path.join(REPO_ROOT, "bin", "ai-smartbar")
+# See paths.tray_pid_file()'s own docstring for why this lives under
+# CACHE_DIR and what reads it (bin/ai-smartbar's --open-panel, the CLI half
+# of the open-panel hotkey feature — GNOME/KDE/etc. have no portable
+# system-wide hotkey API this repo can hook without a new dependency, so the
+# actual key binding is the user's own DE keyboard settings running this
+# command; see the README's Linux panel section and the design doc).
+PID_FILE = paths.tray_pid_file()
 
 log = logging.getLogger("ai-smartbar")
+
+
+def _write_pid_file():
+    """Best-effort: lets `ai-smartbar --open-panel` find this process.
+
+    Never fatal — a tray that can't write its PID still works from the
+    tray icon itself, it just can't be reached by the CLI hotkey helper.
+    """
+    try:
+        with open(PID_FILE, "w") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
+        log.exception("could not write PID file at %s", PID_FILE)
+
+
+def _remove_pid_file():
+    """Undo _write_pid_file() on a clean quit, so --open-panel fails loudly
+    ("no running tray") instead of signalling a PID a new, unrelated
+    process might have been assigned in the meantime."""
+    try:
+        os.remove(PID_FILE)
+    except OSError:
+        pass
 
 
 class Tray:
@@ -170,6 +210,23 @@ class Tray:
         # current (cswap's store paces the real network traffic).
         if time.monotonic() - self.controller.last_fetch_at > 10:
             self.controller._start_fetch()
+
+    def _on_open_panel_signal(self):
+        """GLib.unix_signal_add callback for SIGUSR1 — the open-panel
+        hotkey's CLI half (see bin/ai-smartbar's open_panel() and PID_FILE
+        above). Unlike a raw `signal.signal` handler, GLib dispatches this
+        on the main loop itself rather than inside actual POSIX signal
+        context, so calling straight into _on_open (same action a menu
+        click or middle-click reaches) is exactly as safe as any other GTK
+        callback in this file — nothing async-signal-unsafe here.
+
+        Must return True: a GLib source callback that returns False is
+        REMOVED, so returning anything falsy would make this fire once and
+        then silently stop working for the rest of the process's life.
+        """
+        log.info("SIGUSR1 received: showing the panel")
+        self._on_open(None)
+        return True
 
     def _init_notify(self):
         self._libnotify = None
@@ -383,6 +440,7 @@ class Tray:
     def _quit(self):
         """Deliberate quit: stop being counted before going away."""
         presence_client.leave()
+        _remove_pid_file()
         Gtk.main_quit()
 
     def _on_quit(self, _item):
@@ -435,8 +493,17 @@ def main():
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
              os.environ.get("SMARTBAR_INTERVAL", "60"))
     tray = Tray()
+    _write_pid_file()
     tray.controller._start_fetch()
     GLib.timeout_add_seconds(tray.interval, tray.controller._tick)
     if presence.enabled():
         GLib.timeout_add_seconds(int(presence.interval()), tray._presence_tick)
+    # GLib.unix_signal_add, not signal.signal: the latter only runs its
+    # handler between bytecode instructions on the MAIN thread and would
+    # have to somehow poke the GTK loop awake itself; unix_signal_add
+    # integrates the signal into the same main loop everything else here
+    # already runs on (self-pipe under the hood), which is also why the
+    # handler above is safe to touch GTK/self.popover directly.
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1,
+                         tray._on_open_panel_signal)
     Gtk.main()
