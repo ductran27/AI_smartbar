@@ -24,27 +24,99 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# The arithmetic the whole file is shaped around: Actions minutes are
+# multiplied by runner — Linux 1x, Windows 2x, macOS 10x — and every job
+# rounds UP to a whole minute. So one macOS job costs ten minutes however
+# briefly it runs, which made it ~75% of this repo's entire Actions bill (480
+# of 641 billable minutes in Aug 2026) while the other three jobs together
+# came to four minutes a run. Nothing about that is fixed by making jobs
+# faster. The only lever is running the macOS job LESS OFTEN, and there are
+# two independent places to pull it, because the spend splits in two:
+#
+#   - PR runs (18 in Aug) are trimmed to the ubuntu leg by the matrix
+#     expression below.
+#   - push runs on main (39 in Aug — the bigger half, and the ones the
+#     release gate actually reads) keep Windows, and reach macOS only when
+#     `macos-swift/` genuinely changed, via the `changes` job.
+#
+# Neither trim subsumes the other: the first leaves every main push paying
+# full freight, the second leaves every PR doing so.
 jobs:
+  # Whether this change can possibly break the Swift front-end, decided once
+  # so the `swift` job below can be skipped OUTRIGHT rather than started and
+  # short-circuited. That distinction is the entire point: GitHub bills a job
+  # that starts and immediately skips its steps exactly like one that does the
+  # work, so an `if:` on the steps would save nothing. One extra Linux minute
+  # to skip ten macOS ones.
+  #
+  # Not on pull_request: PRs do not run the macOS leg at all (see the matrix
+  # comment below), so there would be nothing for this verdict to gate.
+  changes:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      swift: ${{ steps.filter.outputs.swift }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The diff below needs both endpoints present, and a shallow clone
+          # has neither for anything but the newest commit.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BASE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # Fails SAFE, in every direction: a missing base, the all-zero SHA
+          # git reports for a branch's first push, a base this clone does not
+          # have, or a manual dispatch (which has no "before" at all and is
+          # asked for precisely when someone wants the full verdict) all
+          # answer "run it". Skipping the Swift build wrongly lets a broken
+          # front-end reach a tag; running it wrongly costs ten minutes.
+          # Those are not the same size of mistake, so every case this cannot
+          # decide resolves toward coverage.
+          if [[ -z "${BASE}" || "${BASE}" =~ ^0+$ ]] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Three-dot: compare against the MERGE BASE, so a merge commit is
+          # judged on what it brought in rather than on everything main
+          # gained underneath the branch while it sat open.
+          if git diff --name-only "${BASE}...${GITHUB_SHA}" | grep -q '^macos-swift/'; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "swift=false" >> "$GITHUB_OUTPUT"
+          fi
+
   unittest:
     strategy:
       fail-fast: false
-      # PRs run the ubuntu leg only; push (main) and workflow_dispatch run all
-      # three OSes. This is a billing decision, not a coverage one: GitHub
-      # rounds every job UP to a whole minute and multiplies macOS ×10 and
-      # Windows ×2, so the ~50 s macOS leg bills 10 min and a full-matrix PR
-      # round-trip (PR run + merge push run) cost ~28 billed minutes for ~5
-      # real ones — that alone burned a third of the account's 2,000-min month
-      # in Aug 2026. What the trim actually risks: a PR touching the win32
-      # branches or macos-swift/ can go green here and only fail on the push
-      # run after merge. That is acceptable because the thing this workflow
-      # ultimately protects is the RELEASE, and install/release.sh's tag gate
-      # reads only push runs on main (`--event push --branch main --commit
-      # <sha>`), which still get the full matrix — a cross-OS break caught
-      # post-merge blocks the tag exactly as before, it just surfaces one step
-      # later. For pre-merge cross-OS confidence, dispatch the workflow on the
-      # PR branch by hand (see the `on:` comment above).
+      # PRs run the ubuntu leg only; push (main) and workflow_dispatch add
+      # Windows. This is a billing decision, not a coverage one — see the
+      # arithmetic above. What the trim actually risks: a PR touching the
+      # win32 branches can go green here and only fail on the push run after
+      # merge. That is acceptable because the thing this workflow ultimately
+      # protects is the RELEASE, and install/release.sh's tag gate reads only
+      # push runs on main (`--event push --branch main --commit <sha>`),
+      # which still get the wider matrix — a cross-OS break caught post-merge
+      # blocks the tag exactly as before, it just surfaces one step later. For
+      # pre-merge cross-OS confidence, dispatch the workflow on the PR branch
+      # by hand (see the `on:` comment above).
+      #
+      # macOS is not a leg here on ANY event any more. It was never earning
+      # its ten-minute multiplier as a test leg: the suite is stdlib
+      # unittest, the win32 branches are exercised by FAKING sys.platform
+      # (see smartbar/core/portable.py and update_runner.py, both of which
+      # say so), and the only thing that genuinely needed a real Mac was the
+      # `plutil` test in tests/test_device_config.py — one test, guarded by
+      # skipUnless, and re-run on a real Mac by install/release.sh's own
+      # local suite before any tag is cut. What macOS uniquely verified was
+      # the Swift build, which now has its own job below and runs only when
+      # there is Swift to build.
       matrix:
-        os: ${{ (github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]')) || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+        os: ${{ (github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]')) || fromJSON('["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -67,7 +139,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Linux/macOS build pycairo from its sdist and therefore need cairo's
+      # Linux builds pycairo from its sdist and therefore needs cairo's
       # headers plus pkg-config. Windows receives PyPI's cp312 win_amd64
       # wheel and needs no system SDK. Keep GTK/PyGObject absent: the portable
       # painter deliberately has no GTK dependency, while importing cairo is
@@ -75,10 +147,6 @@ jobs:
       - name: Install Cairo build dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config
-
-      - name: Install Cairo build dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install cairo pkg-config
 
       - name: Install pinned pycairo
         run: python -m pip install --disable-pip-version-check pycairo==1.29.0
@@ -117,11 +185,39 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: ruff check .
 
-      # Compile the Swift front-end so a macOS-breaking change cannot land
-      # green. There is no Swift test target: the state policy Swift mirrors
-      # is pinned from the Python side by the source-scraping parity tests.
+  # Compile the Swift front-end so a macOS-breaking change cannot land green.
+  # There is no Swift test target: the state policy Swift mirrors is pinned
+  # from the Python side by the source-scraping parity tests, which run on
+  # every leg of `unittest` above and therefore on every single run — a colour
+  # or geometry number drifting between the two languages fails there, on
+  # Linux, without this job.
+  #
+  # Which is what makes skipping this one safe when macos-swift/ is untouched:
+  # a change that leaves the Swift sources byte-identical cannot alter whether
+  # they compile, and the one class of Python-side change that CAN invalidate
+  # them — drifting away from what the Swift declares — is caught by those
+  # parity tests instead.
+  #
+  # The release gate keeps working for free. install/release.sh bumps
+  # macos-swift/Sources/AISmartbar/Version.swift as part of the release commit
+  # itself, so every commit that ever gets tagged touches macos-swift/ by
+  # construction and therefore always arrives here — verified against all six
+  # release commits in this repo's history. A skipped job still concludes the
+  # run `success`, so the ordinary main pushes in between cost nothing and
+  # still satisfy the gate.
+  #
+  # No Python on this leg: it does not run the suite any more, so it needs
+  # neither cairo nor an interpreter, which is most of what used to keep this
+  # job hovering either side of the 60-second line that decides whether macOS
+  # bills ten minutes or twenty.
+  swift:
+    needs: changes
+    if: needs.changes.outputs.swift == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
       - name: Build the Swift front-end
-        if: runner.os == 'macOS'
         run: swift build -c release --package-path macos-swift
 
   # The e2e suites used to run ONLY from install/release.sh, on whichever
