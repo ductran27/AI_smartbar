@@ -124,6 +124,12 @@ The panel — the same layout on macOS, Linux and Windows:
   Nothing shows for an account only one device is on. Cross-platform
   detail, including `--presence-status` on every OS, lives in
   [Device presence](#device-presence-how-many-devices-share-an-account).
+- **Tray-icon hover summary.** Point at the menu-bar/tray icon itself —
+  before opening anything — and a tooltip gives the one-line active
+  account and usage summary. Not the card-header tooltip above (that one
+  lives inside the open popover and shows a device count); this is the
+  icon in the bar. Linux and Windows already show this natively
+  (`AppIndicator`/`pystray` tooltips); macOS now does too.
 - **Plan badge per account.** A small chip beside the address names which
   subscription the account is on (`20x` / `5x` / `Pro` / `Team` /
   `Enterprise` / `Free`), read from claude-swap's local per-slot config

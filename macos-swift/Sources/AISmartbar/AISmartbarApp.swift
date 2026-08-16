@@ -23,13 +23,24 @@ struct AISmartbarApp: App {
         } label: {
             // A waiting release badges the icon itself, so a device announces
             // an update without the user opening anything.
+            let summary = updates.pendingVersion.isEmpty
+                ? store.accessibilitySummary
+                : "\(store.accessibilitySummary). Update to "
+                  + "\(updates.pendingVersion) available"
             Image(nsImage: updates.pendingVersion.isEmpty
                   ? store.icon
                   : MenuBarIcon.badged(store.icon))
-                .accessibilityLabel(updates.pendingVersion.isEmpty
-                    ? store.accessibilitySummary
-                    : "\(store.accessibilitySummary). Update to "
-                      + "\(updates.pendingVersion) available")
+                .accessibilityLabel(summary)
+                // .help() is the sighted-user counterpart to the
+                // accessibilityLabel above: VoiceOver already spoke this
+                // text, but before this a sighted user hovering the icon
+                // saw nothing (Linux's AppIndicator.set_title and
+                // Windows' pystray icon.title both already show a native
+                // hover tooltip here — see tray_controller.py's
+                // set_title calls — so macOS was the one platform
+                // without one). Same string as the VoiceOver label so
+                // the two can't drift apart.
+                .help(summary)
         }
         .menuBarExtraStyle(.window)
     }
