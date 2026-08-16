@@ -24,7 +24,7 @@ The panel — the same layout on macOS, Linux and Windows:
   │ ██████████████────────────────────────── │
   └──────────────────────────────────────────┘
  ▌┌──────────────────────────────────────────┐
- ▌│ ● other@account          (2)    [ACTIVE] │
+ ▌│ ● other@account           5x    [ACTIVE] │
  ▌│ 5h   resets in 1h 02m                62% │
  ▌│ █████████████████████████─────────────── │
  ▌│                   ╷                      │
@@ -37,7 +37,8 @@ The panel — the same layout on macOS, Linux and Windows:
   the only number over the bar is the bar's own; ╷ = the pace tick under
   the bar, how far through that window you are — past the fill means you
   are under budget, before it means you are burning faster; one chip
-  carries the plan and the device count; [✳ Claude] ❁ OpenAI = provider
+  carries the plan badge (hover a macOS card for its device count); [✳
+  Claude] ❁ OpenAI = provider
   tabs, each with its provider's mark, the selected pill bright and the
   other faded, row only
   present when both providers have accounts; follows the system's
@@ -117,16 +118,17 @@ The panel — the same layout on macOS, Linux and Windows:
   v2), and identical snapshots skip all UI work. Tracks `/usage` within
   claude-swap's per-account poll plan without ever exceeding the usage
   API's per-token request budget (see [Data freshness](#data-freshness)).
-- **Device count per account.** A `(2)` chip beside the address means two
-  of your devices have that account active right now — and are therefore
-  spending the same 5-hour and weekly budget. No chip means nobody else is
-  on it. See [Device presence](#device-presence-the-n-next-to-an-address).
-- **Plan badge per account.** The same chip names which subscription the
-  account is on (`20x` / `5x` / `Pro` / `Free`), read from claude-swap's
-  local per-slot config backups; no network, no credential fields
-  touched. Plan and device count share one chip (`20x (2)`) so the
-  address line stays just the address. Unknown plans show no badge.
-  Disable with `SMARTBAR_PLANS=off`.
+- **Device count on hover (macOS).** Point at a card's header and a
+  tooltip says how many of your devices have that account active right
+  now — and are therefore spending the same 5-hour and weekly budget.
+  Nothing shows for an account only one device is on. Cross-platform
+  detail, including `--presence-status` on every OS, lives in
+  [Device presence](#device-presence-how-many-devices-share-an-account).
+- **Plan badge per account.** A small chip beside the address names which
+  subscription the account is on (`20x` / `5x` / `Pro` / `Team` /
+  `Enterprise` / `Free`), read from claude-swap's local per-slot config
+  backups; no network, no credential fields touched. Unknown plans show
+  no badge. Disable with `SMARTBAR_PLANS=off`.
 - **OpenAI/ChatGPT tab.** Sign in to Codex CLI (or the ChatGPT desktop
   app) and within ~2 min an **OpenAI** tab appears next to Claude — one
   card per ChatGPT account (`you@…` with a `Pro` chip, same 5h / 7d /
@@ -326,14 +328,16 @@ Anything unusable is named at install time rather than silently dropped:
 warning: ~/.config/ai-smartbar/config.env: line 3: 'PATH' is not a SMARTBAR_* setting
 ```
 
-## Device presence: the `(N)` next to an address
+## Device presence: how many devices share an account
 
-`syu3cs@virginia.edu (2)` means **two of your devices have that account
-active right now**, so they are spending the same 5-hour and weekly budget.
-That is usually the answer to "why is this window burning so fast?". No
-badge means nobody else is on that account — the badge never shows `(0)`.
+Hovering a card's header on macOS says **how many of your devices have
+that account active right now**, so they are spending the same 5-hour and
+weekly budget — usually the answer to "why is this window burning so
+fast?". Nothing shows for an account only one device is on. The Linux and
+Windows panels don't surface this in the card itself; `--presence-status`
+below works on every platform.
 
-Exactly one account is active per device, so the badges across all cards
+Exactly one account is active per device, so the counts across all cards
 add up to your number of live devices. That is the quickest way to check
 the number is right.
 
@@ -386,8 +390,8 @@ will be — there is no Anthropic API that reports sessions.
 or immediately when you quit the app. Clock disagreement between machines
 cannot hide a device: a beacon that looks expired still counts while we
 have watched its ref change on our own clock. If the remote cannot be
-reached at all, the last good answer stands briefly and then every badge
-disappears — the app will not claim `(1)` when it cannot see the others.
+reached at all, the last good answer stands briefly and then every count
+disappears — the app will not claim `1` when it cannot see the others.
 
 `SMARTBAR_PRESENCE=off` opts a device out completely: it publishes nothing
 and shows no counts.
