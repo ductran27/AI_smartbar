@@ -142,18 +142,23 @@ class TestChromeParity(SwiftPresent):
                            field))
 
 
-class TestThePaceNotchIsTheCardsOwnGround(SwiftPresent):
-    """The caret is drawn as a hole in the bar, so it has to BE the card
-    colour. A near-miss would read as a faint grey stripe rather than as a
-    notch, in a way no colour-by-colour comparison would flag."""
+class TestThePaceTickIsTheQuietestInk(SwiftPresent):
+    """The caret hangs under the bar rather than cutting a notch through
+    it, so it is ink now — and specifically the scheme's TERTIARY ink, the
+    quietest one it has. Anything louder competes with the fill for the
+    first glance, which is the one thing PACE_W's comment forbids; and
+    anything that is not ink at all (the card ground it used to be) is
+    simply invisible outside the bar. Neither failure is something a
+    colour-by-colour comparison would flag."""
 
-    def test_pace_equals_card_bg_in_both_schemes_and_languages(self):
+    def test_pace_equals_text_tertiary_in_both_schemes_and_languages(self):
         for scheme_name, scheme in (("dark", theme.DARK),
                                     ("light", theme.LIGHT)):
             with self.subTest(scheme=scheme_name):
-                self.assertEqual(scheme.pace, scheme.card_bg)
+                self.assertEqual(scheme.pace, scheme.text_tertiary)
+                self.assertNotEqual(scheme.pace, scheme.card_bg)
                 swift = swift_palette(scheme_name)
-                self.assertEqual(swift["pace"], swift["cardBG"])
+                self.assertEqual(swift["pace"], swift["textTertiary"])
 
 
 if __name__ == "__main__":

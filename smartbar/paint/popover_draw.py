@@ -214,19 +214,6 @@ def _draw_openai(ctx, glyph) -> None:
     ctx.stroke()
 
 
-def _draw_clock(ctx, glyph) -> None:
-    """A stroked circle with hour and minute hands — sits immediately left
-    of a countdown, marking "this number is a duration"."""
-    r = glyph.size * 0.42
-    ctx.arc(glyph.cx, glyph.cy, r, 0, TAU)
-    ctx.stroke()
-    ctx.move_to(glyph.cx, glyph.cy)
-    ctx.line_to(glyph.cx, glyph.cy - r * 0.55)          # hour hand
-    ctx.move_to(glyph.cx, glyph.cy)
-    ctx.line_to(glyph.cx + r * 0.6, glyph.cy - r * 0.1)  # minute hand
-    ctx.stroke()
-
-
 def _draw_pause(ctx, glyph) -> None:
     """Two rounded vertical bars, filled — prefixes the footer's "update
     held" label."""
@@ -269,7 +256,6 @@ _GLYPH_DRAWERS = {
                            # "power" under its own name (see t.Glyph).
     "claude": _draw_claude,
     "openai": _draw_openai,
-    "clock": _draw_clock,
     "pause": _draw_pause,
     "warn": _draw_warn,
 }
