@@ -190,8 +190,14 @@ def notify(title: str, body: str) -> None:
         return
     try:
         if sys.platform == "darwin":
+            # Backslashes must be escaped BEFORE quotes: escaping quotes
+            # first leaves a trailing "\" in the body/title free to escape
+            # our own closing quote instead of staying a literal character,
+            # breaking out of the AppleScript string.
+            def _applescript_escape(text: str) -> str:
+                return text.replace("\\", "\\\\").replace('"', '\\"')
             script = ('display notification "{}" with title "{}"'
-                      .format(body.replace('"', '\\"'), title.replace('"', '\\"')))
+                      .format(_applescript_escape(body), _applescript_escape(title)))
             subprocess.run(["/usr/bin/osascript", "-e", script],
                            timeout=10, check=False)
         elif sys.platform == "win32":
@@ -572,9 +578,14 @@ def run_once(*, reset: bool = False, force: bool = False,
         rescue = update_git.checkout(plan, reset=reset)
     except update_git.GitError as exc:
         streak = update.record_failure(state, plan.target_ref)
+        state.update(update.ui_state(plan, update_git.version_in_checkout(),
+                                     channel=channel))
         save_state(state)
         log.error("checkout of %s failed (attempt %s): %s",
                   plan.target_ref, streak, exc)
+        notify("AI smartbar update failed",
+               f"{plan.target_ref}: could not check out — {str(exc)[:110]} "
+               f"(attempt {streak} of {update.MAX_REF_FAILURES})")
         return 1
     if rescue:
         log.warning("local work parked — recover with: git stash apply %s", rescue)
