@@ -36,6 +36,9 @@ CARD_PAD_V = 9.0
 CARD_PAD_H = 11.0
 CARD_HEADER_H = 20.0
 CARD_INNER_GAP = 7.0
+RAIL_W = 2.5                # active-card leading rail width
+RAIL_INSET = 3.0            # vertical inset so the rail reads as a mark,
+                            # not a second border
 # A row is two stacked lines: the label/reset/pct line, then a bar that
 # gets the card's FULL inner width instead of splitting it with a label
 # column (see popover_layout._card_body). ROW_H is their sum
@@ -195,6 +198,7 @@ class Scheme:
     text_secondary: tuple
     text_tertiary: tuple
     text_spent: tuple
+    rail: tuple
     bar_track: tuple
     pace: tuple
     button_bg: tuple
@@ -223,6 +227,15 @@ class Scheme:
         return (red, green, blue, alpha)
 
 
+# The active card is told apart by a leading rail down its left edge. The
+# rail borrows the scheme's own `text` rather than joining the status ramp:
+# colour here is reserved for how much budget is left, and tinting "this is
+# the active account" would make it compete with that signal instead of just
+# marking presence. That reasoning is appearance-independent, which is why
+# both schemes below point `rail` at their own `text` — named once each so
+# the two cannot drift apart.
+_CHALK = (0.914, 0.929, 0.949, 1.0)
+_INK = (0.086, 0.106, 0.133, 1.0)
 # One cool grey doing two jobs: it is the SECONDARY ink on light and the
 # TERTIARY ink on dark. Not a copy-paste — the middle of a single grey
 # scale genuinely lands in different places depending on which end the
@@ -242,10 +255,11 @@ DARK = Scheme(
     window_bg=(0.059, 0.071, 0.086, 1.0),
     card_bg=(0.090, 0.110, 0.133, 1.0),
     card_border=(1.0, 1.0, 1.0, 0.06),      # hairline, same on every card
-    text=(0.914, 0.929, 0.949, 1.0),             # "chalk"
+    text=_CHALK,
     text_secondary=(0.596, 0.639, 0.690, 1.0),   # "mist"
     text_tertiary=_SLATE,                        # "dim"
     text_spent=(0.725, 0.757, 0.796, 1.0),       # a 100%-used readout
+    rail=_CHALK,
     bar_track=(1.0, 1.0, 1.0, 0.09),
     pace=_SLATE,
     button_bg=(1.0, 1.0, 1.0, 0.12),
@@ -275,10 +289,11 @@ LIGHT = Scheme(
     # quieter than a naive inversion of the dark one.
     card_bg=(1.0, 1.0, 1.0, 1.0),
     card_border=(0.0, 0.0, 0.0, 0.07),
-    text=(0.086, 0.106, 0.133, 1.0),             # "ink"
+    text=_INK,
     text_secondary=_SLATE,
     text_tertiary=_HAZE,
     text_spent=(0.263, 0.294, 0.341, 1.0),
+    rail=_INK,
     bar_track=(0.0, 0.0, 0.0, 0.08),
     pace=_HAZE,
     button_bg=(0.0, 0.0, 0.0, 0.06),
