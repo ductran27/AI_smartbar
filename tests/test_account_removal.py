@@ -133,8 +133,8 @@ class TestRemovalParity(unittest.TestCase):
         header had, so an ordinary address was middle-truncated to
         "Remove duc.d…r@gmail.com?" — the identity elided at exactly the
         moment the user has to be certain what they are deleting. Both
-        sides now ask with the full account label (address · plan ·
-        devices), which is also what tells two similar addresses apart.
+        sides now ask with the full account label (address · plan), which
+        is also what tells two similar addresses apart.
         """
         self.assertIn('Remove \\(accountLabel)?', self.card)
         # accountLabel must be the plain-string twin of model.account_label,

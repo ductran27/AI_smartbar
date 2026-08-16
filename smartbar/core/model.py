@@ -124,11 +124,11 @@ class Account:
     # other devices could not be seen. cswap never reports it.
     devices: int = 0
     # Subscription plan badge ("20x", "5x", "Pro", "Free") — stamped by
-    # core/plan.apply_plans from local label files; "" means unknown and
-    # renders NO badge, same convention as devices == 0.
+    # core/plan.apply_plans from local label files; "" means unknown tier
+    # and renders no badge.
     plan: str = ""
     # "claude" (cswap slots) or "openai" (core/codex.py). Cards branch on
-    # it — an OpenAI account has no switch button and no device badge.
+    # it — an OpenAI account has no switch button.
     provider: str = "claude"
     # cswap's usageFetchedAt for THIS account: when its usage was actually
     # measured at the API. Per-account on purpose — cswap refreshes each
@@ -358,31 +358,21 @@ def metrics_text(account) -> str:
 
 
 def account_address(account) -> str:
-    """The bare email, with no plan badge or device count riding on it."""
+    """The bare email, with no plan badge riding on it."""
     return account.email
 
 
 def account_badge(account) -> str:
-    """The plan/device suffix alone: "20x (2)", "Pro", "(2)", or "" when
-    there is nothing to say.
-
-    A count of 0 contributes nothing: an absent badge reads as "nobody is
-    on it", whereas "(0)" on four idle cards is noise that also lies
-    whenever the other devices simply could not be reached — see
-    core/presence.py. An empty plan likewise contributes nothing (unknown
-    tier, managed API-key account, or SMARTBAR_PLANS=off — see
-    core/plan.py). account_label composes this with account_address, so
-    the two representations can never drift apart.
+    """The plan suffix alone: "20x", "Pro", or "" when there is nothing to
+    say (unknown tier, managed API-key account, or SMARTBAR_PLANS=off — see
+    core/plan.py). account_label composes this with account_address, so the
+    two representations can never drift apart.
     """
-    badge = getattr(account, "plan", "") or ""
-    count = getattr(account, "devices", 0) or 0
-    if count > 0:
-        badge = f"{badge} ({count})" if badge else f"({count})"
-    return badge
+    return getattr(account, "plan", "") or ""
 
 
 def account_label(account) -> str:
-    """The address, plan badge, and device count: "a@b.com · 20x (2)".
+    """The address and plan badge: "a@b.com · 20x".
 
     Every UI names an account through here so the badges appear in all of
     them at once (mirrored by the Swift card header — pinned by
@@ -391,18 +381,12 @@ def account_label(account) -> str:
     about the same account.
 
     Appending rather than prefixing is deliberate: both the cairo painter
-    and SwiftUI truncate a long address in the MIDDLE, so the badges
-    survive even on a card too narrow to show the address itself. A badge
-    that is only a device count ("(2)") sits directly after the address —
-    no " · ", because there is no plan word for the dot to separate it
-    from; a badge that starts with a plan word gets the " · ".
+    and SwiftUI truncate a long address in the MIDDLE, so the badge
+    survives even on a card too narrow to show the address itself.
     """
     address = account_address(account)
     badge = account_badge(account)
-    if not badge:
-        return address
-    separator = " " if badge.startswith("(") else " · "
-    return f"{address}{separator}{badge}"
+    return f"{address} · {badge}" if badge else address
 
 
 def title_line(account) -> str:
