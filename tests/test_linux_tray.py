@@ -84,6 +84,8 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import os
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -581,6 +583,84 @@ class TestQuit(GuiStubbedTestCase):
                                side_effect=lambda: calls.append("quit")):
             mod.Tray._quit(tray)
         self.assertEqual(calls, ["leave", "quit"])
+
+    def test_removes_the_pid_file_so_a_stale_pid_is_never_signalled(self):
+        # Regression target: --open-panel reads PID_FILE and signals
+        # whatever PID it names. Leaving it behind after a clean quit would
+        # eventually point at some unrelated process the OS recycled that
+        # PID onto.
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(mod, "_remove_pid_file") as remove, \
+             mock.patch.object(mod.presence_client, "leave"), \
+             mock.patch.object(mod.Gtk, "main_quit"):
+            mod.Tray._quit(tray)
+        remove.assert_called_once_with()
+
+
+class TestOpenPanelSignal(GuiStubbedTestCase):
+    """SIGUSR1 (via GLib.unix_signal_add, wired in main()) is the CLI hotkey
+    helper's (bin/ai-smartbar --open-panel) way into an already-running
+    tray -- see PID_FILE's own comment and the design doc. What matters
+    here: the handler reaches the exact same _on_open a menu click or
+    middle-click does (not a parallel, drifting code path), and it never
+    stops GLib from calling it again."""
+
+    def test_delegates_to_on_open_and_keeps_watching(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        with mock.patch.object(tray, "_on_open") as on_open:
+            result = mod.Tray._on_open_panel_signal(tray)
+        on_open.assert_called_once_with(None)
+        self.assertTrue(result, "returning a falsy value tells GLib to "
+                        "stop watching for SIGUSR1 after the first one")
+
+    def test_a_missing_popover_does_not_crash_the_handler(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.popover = None
+        result = mod.Tray._on_open_panel_signal(tray)   # must not raise
+        self.assertTrue(result)
+
+
+class TestPidFile(GuiStubbedTestCase):
+    """_write_pid_file/_remove_pid_file: the on-disk half of the open-panel
+    hotkey's Linux CLI path. Both are best-effort (never fatal — a tray
+    that can't manage its PID file still works from the icon itself), so
+    what is worth pinning is the happy path's actual content and the
+    quiet-degrade-on-OSError shape, not any GTK/AppIndicator behaviour."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_write_then_remove_round_trips_this_processes_pid(self):
+        mod = _reimport("smartbar.linux.tray")
+        pid_path = os.path.join(self.tmp.name, "tray.pid")
+        with mock.patch.object(mod, "PID_FILE", pid_path):
+            mod._write_pid_file()
+            with open(pid_path) as handle:
+                self.assertEqual(handle.read(), str(mod.os.getpid()))
+            mod._remove_pid_file()
+            self.assertFalse(os.path.exists(pid_path))
+
+    def test_remove_without_a_prior_write_does_not_raise(self):
+        mod = _reimport("smartbar.linux.tray")
+        pid_path = os.path.join(self.tmp.name, "never-written.pid")
+        with mock.patch.object(mod, "PID_FILE", pid_path):
+            mod._remove_pid_file()   # must not raise
+
+    def test_write_failure_is_logged_not_raised(self):
+        # An unwritable CACHE_DIR (permissions, read-only filesystem, a
+        # race with a directory that vanished) must degrade the CLI hotkey
+        # helper, not the tray itself.
+        mod = _reimport("smartbar.linux.tray")
+        bogus_path = os.path.join(self.tmp.name, "no-such-dir", "tray.pid")
+        with mock.patch.object(mod, "PID_FILE", bogus_path), \
+             mock.patch.object(mod.log, "exception") as fake_exception:
+            mod._write_pid_file()   # must not raise
+        fake_exception.assert_called_once()
 
 
 class TestPanelTooltips(GuiStubbedTestCase):

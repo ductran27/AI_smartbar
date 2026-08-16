@@ -95,6 +95,13 @@ items on whatever monitor(s) you have; if you can change scaling
     a `cswap` subprocess call or an update check. Fail: any visible flash,
     however brief — it means a subprocess was spawned without
     `smartbar.core.portable.no_window()`.
+13. **Ctrl+Alt+A opens the panel without touching the tray icon.** With the
+    tray running and keyboard focus in some other application, press
+    Ctrl+Alt+A. Pass: the panel opens exactly as it does on a left-click of
+    the tray icon, within about a second. Fail: nothing happens (check
+    `tray.log` for a `RegisterHotKey` failure — most likely another
+    application already owns that combination), or a different action
+    fires.
 
 ## Known-unresolved issues
 
@@ -193,21 +200,21 @@ so you can see what it says.
 
 Run these in order, on top of the panel checklist above.
 
-13. **Fresh install on a machine with no prior task.** Pass: completes and
+14. **Fresh install on a machine with no prior task.** Pass: completes and
     prints `ai-smartbar is running.` Fail: any abort before the shortcut is
     written — the fresh-install path is where `install/linux.sh:48-53` shipped
     a real bug, and this script's equivalent guard has never run.
-14. **Second run is idempotent.** Re-run with no arguments. Pass: still exactly
+15. **Second run is idempotent.** Re-run with no arguments. Pass: still exactly
     one tray, task still registered once, no error. Fail: a duplicate tray, or
     `Register-ScheduledTask` throwing because the task exists.
-15. **Channel read-back survives a re-run.** `.\install\windows.ps1 -Channel main`,
+16. **Channel read-back survives a re-run.** `.\install\windows.ps1 -Channel main`,
     then re-run with **no** `-Channel`. Pass: `Update task registered
     (channel=main, …)`. Fail: it says `release` — that is the silent
     channel-flip this read-back exists to prevent, and it would quietly move a
     development box onto the release line.
-16. **A path with a space.** Clone to `C:\Program Files\...` or any path with a
+17. **A path with a space.** Clone to `C:\Program Files\...` or any path with a
     space and install from there. Pass: everything works. Fail: anything at
     all — this is the single likeliest defect class in the whole script.
-17. **`-Uninstall` is complete.** Pass: tray stopped, task gone from Task
+18. **`-Uninstall` is complete.** Pass: tray stopped, task gone from Task
     Scheduler, shortcut gone from `shell:startup`, `%LOCALAPPDATA%\ai-smartbar`
     gone, checkout untouched.
