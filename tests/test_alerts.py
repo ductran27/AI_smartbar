@@ -64,6 +64,14 @@ class TestAlerts(unittest.TestCase):
         alerts = self.mgr.check(snap(92))
         self.assertIn("No other account", alerts[0].body)
 
+    def test_no_other_account_escalates_title(self):
+        alerts = self.mgr.check(snap(92))
+        self.assertIn("no accounts left", alerts[0].title)
+
+    def test_suggestion_available_does_not_escalate_title(self):
+        alerts = self.mgr.check(snap(92, other_pct=34))
+        self.assertNotIn("no accounts left", alerts[0].title)
+
     def test_countdown_recomputed_live_from_resets_at(self):
         # A parseable resetsAt wins over the frozen fetch-time countdown.
         from datetime import datetime, timedelta, timezone

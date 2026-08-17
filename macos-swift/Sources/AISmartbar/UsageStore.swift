@@ -297,13 +297,14 @@ final class UsageStore: ObservableObject {
                 if fired[key] == metric.resetsAt { continue }  // held for this window
                 fired[key] = metric.resetsAt
                 var body = metric.countdown.isEmpty ? "" : "Resets in \(metric.countdown). "
+                var title = "Claude: \(metric.label) — \(metric.usedPct)% used"
                 if let best = snap.bestSwitch {
                     body += "Best switch: #\(best.number) \(best.email) (\(best.worstUsedPct)% used)"
                 } else {
-                    body += "No other account available."
+                    title += " — no accounts left"
+                    body += "No other account available — you're on your own until this resets."
                 }
-                Self.notify(title: "Claude: \(metric.label) — \(metric.usedPct)% used",
-                            body: body)
+                Self.notify(title: title, body: body)
             } else {
                 fired.removeValue(forKey: key)  // re-arm after reset
             }
