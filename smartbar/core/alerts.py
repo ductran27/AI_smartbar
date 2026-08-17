@@ -39,16 +39,18 @@ class AlertManager:
         return alerts
 
     def _build(self, snapshot, metric):
+        suggestion = best_switch(snapshot)
         title = f"Claude: {metric.label} — {round(metric.pct)}% used"
+        if suggestion is None:
+            title += " — no accounts left"
         lines = []
         countdown = remaining_text(metric.resets_at) or metric.countdown
         if countdown:
             lines.append(f"Resets in {countdown}.")
-        suggestion = best_switch(snapshot)
         if suggestion is not None:
             w = worst(suggestion)
             lines.append(f"Best switch: #{suggestion.number} {suggestion.email} "
                          f"({round(w.pct)}% used)")
         else:
-            lines.append("No other account available.")
+            lines.append("No other account available — you're on your own until this resets.")
         return Alert(title=title, body="\n".join(lines))
