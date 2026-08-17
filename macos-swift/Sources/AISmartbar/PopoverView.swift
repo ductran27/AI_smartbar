@@ -14,7 +14,7 @@ struct PopoverView: View {
     private var palette: Palette { Palette.of(colorScheme) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             header
             if showsTabs {
                 providerTabs
@@ -46,10 +46,10 @@ struct PopoverView: View {
             }
             footer
         }
-        .padding(.horizontal, 11)
-        .padding(.bottom, 11)
-        .padding(.top, 5)
-        .frame(width: 330)
+        .padding(.horizontal, 12.5)
+        .padding(.bottom, 12.5)
+        .padding(.top, 5.5)
+        .frame(width: 380)
         // WINDOW_BG in the shared theme. Painted explicitly rather than left
         // to the MenuBarExtra's own chrome so the Mac and the cairo painters
         // agree on the ground every other colour was tuned against — the
@@ -96,7 +96,7 @@ struct PopoverView: View {
     }
 
     private var providerTabs: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             ForEach(Self.tabIDs, id: \.self) { id in
                 tabButton(tabTitle(for: id), id: id)
             }
@@ -123,15 +123,15 @@ struct PopoverView: View {
         let selected = selectedProvider == id
         let color = selected ? palette.text : palette.textTertiary
         return Button { providerTab = id } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 ProviderMark(kind: id)
-                    .frame(width: 11, height: 11)
+                    .frame(width: 12.5, height: 12.5)
                 Text(title)
                     .font(.caption.weight(selected ? .semibold : .regular))
             }
             .foregroundStyle(color)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 9.5)
+            .padding(.vertical, 4.5)
             .background(Capsule()
                 .fill(selected ? palette.tabBGSelected : palette.tabBG))
         }
@@ -141,18 +141,18 @@ struct PopoverView: View {
     /// How tall the card list may grow before it starts scrolling, and how
     /// many cards are worth wrapping in a ScrollView at all.
     ///
-    /// A three-metric card is ~110pt (18 padding + 20 header + 7 gap + 3x20
-    /// rows + 2x7 row gaps), so 440 is four of them — the point past which
-    /// the panel would be taller than it is useful. These are named rather
+    /// A three-metric card is ~139pt (21 padding + 23 header + 8 gap + 3x23.5
+    /// rows + 2x8 row gaps), so 505 is roughly four of them — the point past
+    /// which the panel would be taller than it is useful. These are named rather
     /// than repeated at both call sites below, which is the one thing the
     /// three-line-row experiment left behind: the pair has to move together,
     /// and it did not when the cards got taller.
-    private static let listMaxHeight: CGFloat = 440
+    private static let listMaxHeight: CGFloat = 505
     private static let listScrollsPast = 4
 
     @ViewBuilder
     private var openAIList: some View {
-        let cards = VStack(spacing: 7) {
+        let cards = VStack(spacing: 8) {
             ForEach(openai.accounts) { account in
                 AccountCardView(account: account)
             }
@@ -171,7 +171,7 @@ struct PopoverView: View {
     @ViewBuilder
     private var footer: some View {
         if showsFooter {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 // A failed launch outranks a policy hold: it is the one the
                 // user just caused, and the only one they can retry from here.
                 if !updates.launchError.isEmpty {
@@ -228,7 +228,7 @@ struct PopoverView: View {
 
     @ViewBuilder
     private func accountList(_ snapshot: Snapshot) -> some View {
-        let cards = VStack(spacing: 7) {
+        let cards = VStack(spacing: 8) {
             ForEach(snapshot.accounts) { account in
                 AccountCardView(account: account)
             }
@@ -242,7 +242,7 @@ struct PopoverView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 9) {
             Text("AI smartbar")
                 .font(.headline)
                 .foregroundStyle(palette.text)
@@ -254,7 +254,7 @@ struct PopoverView: View {
             }
             if store.isStale {
                 Image(systemName: "wifi.slash")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(palette.warning)
                     .help(store.lastError ?? "last refresh failed; showing old data")
             }
@@ -265,12 +265,12 @@ struct PopoverView: View {
                 // Header chrome sits a step back from the cards it frames —
                 // they are what you opened the panel to read.
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(palette.textSecondary)
-                    // 28pt keeps a comfortable pointer target without the
+                    // 32pt keeps a comfortable pointer target without the
                     // 44pt frame padding the whole header row out — the gap
                     // between the title and the cards/tabs was mostly this.
-                    .frame(width: 28, height: 28)
+                    .frame(width: 32, height: 32)
             }
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)

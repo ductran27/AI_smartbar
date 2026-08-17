@@ -24,15 +24,15 @@ struct MetricBarRow: View {
     }
 
     var body: some View {
-        // 12pt label line + 2pt gap + 6pt bar = ROW_LABEL_H + ROW_LABEL_GAP
-        // + BAR_H in the shared theme (20pt total row height).
-        VStack(alignment: .leading, spacing: 2) {
+        // 14pt label line + 2.5pt gap + 7pt bar = ROW_LABEL_H + ROW_LABEL_GAP
+        // + BAR_H in the shared theme (23.5pt total row height).
+        VStack(alignment: .leading, spacing: 2.5) {
             HStack(spacing: 0) {
                 Text(metric.label)
-                    .font(.system(size: 10.5, weight: .bold))
+                    .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(palette.text)
                     .lineLimit(1)
-                    .frame(width: 40, alignment: .leading)
+                    .frame(width: 46, alignment: .leading)
                 // The countdown ticks live from the absolute reset time
                 // while the popover is open instead of freezing at fetch
                 // time.
@@ -43,8 +43,8 @@ struct MetricBarRow: View {
                 // label column, then the same number as a FLOOR before the
                 // percentage. The caption truncates into that floor rather
                 // than pushing the percentage off its own column.
-                .padding(.leading, 9)
-                Spacer(minLength: 9)
+                .padding(.leading, 10.5)
+                Spacer(minLength: 10.5)
                 Text("\(metric.usedPct)%")
                     // Tabular figures via a font FEATURE
                     // (.monospacedDigit()) rather than the monospaced
@@ -53,7 +53,7 @@ struct MetricBarRow: View {
                     // nothing to request and keep stopping digit-jitter the
                     // way they always have — fixed-width right anchoring
                     // alone. SIZE_ROW_VALUE in the shared theme.
-                    .font(.system(size: 10.5, weight: .bold).monospacedDigit())
+                    .font(.system(size: 12, weight: .bold).monospacedDigit())
                     // A spent limit is a deliberate signal (purple bar), not
                     // a disabled row — keep its number readable, just
                     // distinguishable. Both inks come from the palette
@@ -63,7 +63,7 @@ struct MetricBarRow: View {
                                                        : palette.text)
                     .lineLimit(1)
                     // VALUE_PCT_W in the shared theme.
-                    .frame(width: 28, alignment: .trailing)
+                    .frame(width: 32, alignment: .trailing)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -71,7 +71,7 @@ struct MetricBarRow: View {
                     if fraction > 0 {
                         Capsule()
                             .fill(metric.status.color(in: colorScheme))
-                            .frame(width: max(6, geo.size.width * fraction))
+                            .frame(width: max(7, geo.size.width * fraction))
                     }
                     // The pace caret marks how far through the reset window
                     // "now" sits, independent of how much is spent (the
@@ -83,24 +83,24 @@ struct MetricBarRow: View {
                     // resetsAt) means no caret at all rather than a guessed
                     // one.
                     if let pace = metric.paceFraction() {
-                        let half: CGFloat = 0.75   // PACE_W / 2
+                        let half: CGFloat = 0.875   // PACE_W / 2
                         let center = min(max(geo.size.width * CGFloat(pace), half),
                                         geo.size.width - half)
                         Rectangle()
                             .fill(palette.pace)
                             // PACE_W x PACE_H in the shared theme.
-                            .frame(width: 1.5, height: 3)
+                            .frame(width: 1.75, height: 3.5)
                             // BAR_H / 2 + PACE_H / 2: the ZStack centres its
                             // children on the bar, so this drops the tick to
-                            // sit flush under it. It draws into the 7pt
+                            // sit flush under it. It draws into the 8pt
                             // ROW_GAP below (AccountCardView's VStack
                             // spacing), which is why the row still measures
                             // ROW_H exactly.
-                            .offset(x: center - half, y: 4.5)
+                            .offset(x: center - half, y: 5.25)
                     }
                 }
             }
-            .frame(height: 6)
+            .frame(height: 7)
             .animation(.easeOut(duration: 0.6), value: metric.pct)
         }
     }
@@ -116,7 +116,7 @@ struct MetricBarRow: View {
     private func resetText(now: Date) -> some View {
         let countdown = metric.liveCountdown(now: now)
         return Text(countdown.isEmpty ? "" : "resets in \(countdown)")
-            .font(.system(size: 10.5))
+            .font(.system(size: 12))
             .foregroundStyle(palette.textSecondary)
             .lineLimit(1)
     }
