@@ -155,7 +155,9 @@ The panel — the same layout on macOS, Linux and Windows:
   [The OpenAI tab](#the-openai-tab-chatgptcodex-accounts).
 - **Switch alert.** At ≥90% used on any metric of the active account you
   get one desktop notification naming the best account to switch to; it
-  re-arms when the window resets.
+  re-arms when the window resets. If every account is at/above the
+  threshold, the title calls that out ("— no accounts left") instead of
+  reading like an ordinary switch suggestion.
 - **Auto-registration.** Sign in to Claude Code with a new account and
   within ≤60 s (instantly on popover open) the bar runs cswap's
   non-interactive `add` — the account appears with bars, switching and
