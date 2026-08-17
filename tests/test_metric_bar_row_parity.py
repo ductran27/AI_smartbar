@@ -81,7 +81,7 @@ class TestRowGeometryParity(SwiftPresent):
         to match — this test is the tripwire for that drift."""
         text = _read(ROW_SOURCE)
         block = text[text.index("Text(metric.label)"):
-                     text.index(".frame(width: 40")]
+                     text.index(".frame(width: 46")]
         self.assertNotIn("truncationMode", block)
 
     def test_both_gaps_on_the_label_line_match_bar_gap(self):

@@ -662,19 +662,20 @@ class TestMacOptionsMenu(unittest.TestCase):
         options = self.source(SWIFT_OPTIONS)
         self.assertIn('Label("More options", systemImage: "ellipsis.circle")',
                       options)
-        # 28pt (was 44): user-requested — the 44pt frames padded the whole
-        # header row out, leaving dead space between the title and the
-        # provider tabs. Still a comfortable macOS pointer target.
-        self.assertIn(".frame(width: 28, height: 28)", options)
+        # 32pt (was 44, then 28pt, then scaled ~15% for retina legibility):
+        # the 44pt frames padded the whole header row out, leaving dead
+        # space between the title and the provider tabs. Still a
+        # comfortable macOS pointer target.
+        self.assertIn(".frame(width: 32, height: 32)", options)
         self.assertIn(".menuIndicator(.hidden)", options)
         self.assertIn('.accessibilityLabel("More options")', options)
 
     def test_popover_has_a_compact_top_inset_and_balanced_outer_margins(self):
         popover = self.source(SWIFT_POPOVER)
-        self.assertIn(".padding(.horizontal, 11)", popover)
-        self.assertIn(".padding(.bottom, 11)", popover)
-        self.assertIn(".padding(.top, 5)", popover)
-        self.assertNotIn(".padding(11)", popover)
+        self.assertIn(".padding(.horizontal, 12.5)", popover)
+        self.assertIn(".padding(.bottom, 12.5)", popover)
+        self.assertIn(".padding(.top, 5.5)", popover)
+        self.assertNotIn(".padding(12.5)", popover)
 
 
 class TestScheduledInterval(unittest.TestCase):

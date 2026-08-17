@@ -84,7 +84,7 @@ struct AccountCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             if confirmToken == removalToken && !account.active {
                 confirmHeader
             } else {
@@ -100,9 +100,9 @@ struct AccountCardView: View {
                     // exclamationmark" cannot. Same icon/gap as the
                     // footer's "update held" pause mark (INLINE_ICON/
                     // INLINE_ICON_GAP in the shared theme).
-                    HStack(alignment: .top, spacing: 3) {
+                    HStack(alignment: .top, spacing: 3.5) {
                         ProviderMark(kind: "warn")
-                            .frame(width: 9, height: 9)
+                            .frame(width: 10.5, height: 10.5)
                         Text(account.stateText)
                             .lineLimit(2)
                     }
@@ -116,22 +116,22 @@ struct AccountCardView: View {
                 }
             } else {
                 // ROW_GAP in the shared theme.
-                VStack(spacing: 7) {
+                VStack(spacing: 8) {
                     ForEach(account.metrics) { metric in
                         MetricBarRow(metric: metric)
                     }
                 }
             }
         }
-        .padding(.vertical, 9)
-        .padding(.horizontal, 11)
+        .padding(.vertical, 10.5)
+        .padding(.horizontal, 12.5)
         .background(
             // A solid ground rather than `.thinMaterial`, whose blur has no
             // portable cairo equivalent: it retires the one deliberate
             // divergence the painted front-ends could never reproduce, so a
             // card is the same object on every platform rather than a blur
             // and two imitations of one. CARD_BG in the shared theme.
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(palette.cardBG)
         )
         .overlay(
@@ -139,7 +139,7 @@ struct AccountCardView: View {
             // used to wear a 1.5pt pure-white outline instead, the loudest
             // mark on the panel for information the ACTIVE chip already
             // carries. CARD_BORDER in the shared theme.
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(palette.cardBorder, lineWidth: 1)
         )
         .overlay(alignment: .leading) {
@@ -149,17 +149,17 @@ struct AccountCardView: View {
                 // this panel is reserved for how much budget is left —
                 // see Scheme.rail's comment in the shared theme. RAIL_W/
                 // RAIL_INSET there.
-                RoundedRectangle(cornerRadius: 1.25, style: .continuous)
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                     .fill(palette.rail)
-                    .frame(width: 2.5)
-                    .padding(.vertical, 3)
+                    .frame(width: 3)
+                    .padding(.vertical, 3.5)
             }
         }
         .onHover { hovering = $0 }
     }
 
     private var cardHeader: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             statusDot
             // Just the address now — the plan/device badge moved into its
             // own micro-chip (planBadge, below) so this line never has to
@@ -170,7 +170,7 @@ struct AccountCardView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(headerHelp)
-            Spacer(minLength: 8)
+            Spacer(minLength: 9)
             // The remove ✕'s HIT TARGET and TAP only exist while the
             // pointer is on a non-active card (mirror of the shared
             // layout's `on_card` guard on its remove hit) — the live
@@ -183,10 +183,10 @@ struct AccountCardView: View {
             if !account.active {
                 Button { confirmToken = removalToken } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(palette.textTertiary)
                         // REMOVE_HIT in the shared theme
-                        .frame(width: 18, height: 18)
+                        .frame(width: 21, height: 21)
                         .opacity(hovering ? 1 : 0)
                 }
                 .buttonStyle(.plain)
@@ -199,10 +199,10 @@ struct AccountCardView: View {
             }
             if account.active {
                 Text("ACTIVE")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(palette.accentText)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
                     .background(Capsule()
                         .fill(Status.green.color(in: colorScheme)))
             } else if account.provider == "openai" {
@@ -232,12 +232,12 @@ struct AccountCardView: View {
     /// trades that for a one-time card-height growth on an explicit user
     /// action, same trade-off the shared layout made.
     private var confirmHeader: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Remove \(accountLabel)?")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(2)
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 Button("Remove") {
                     confirmToken = nil
@@ -275,10 +275,10 @@ struct AccountCardView: View {
     /// SIZE_CHIP in the shared theme) rather than an accent.
     private var planBadge: some View {
         Text(accountBadge)
-            .font(.system(size: 9))
+            .font(.system(size: 10.5))
             .foregroundStyle(palette.textSecondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3.5)
             .background(Capsule().fill(palette.buttonDisabled))
     }
 
@@ -290,13 +290,13 @@ struct AccountCardView: View {
         if account.dotHollow {
             Circle()
                 .strokeBorder(account.worstStatus.color(in: colorScheme),
-                              lineWidth: 1.5)
-                .frame(width: 7, height: 7)
+                              lineWidth: 1.75)
+                .frame(width: 8, height: 8)
                 .accessibilityLabel("no usage data")
         } else {
             Circle()
                 .fill(account.worstStatus.color(in: colorScheme))
-                .frame(width: 7, height: 7)
+                .frame(width: 8, height: 8)
         }
     }
 }
