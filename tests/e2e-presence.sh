@@ -28,7 +28,7 @@ WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 MINE="jsmith@campus.example"
-OTHER="ios8build@gmail.com"
+OTHER="abuilder@mail.example"
 
 GIT=(git -c user.name=e2e -c user.email=e2e@localhost -c commit.gpgsign=false \
          -c init.defaultBranch=main -c advice.detachedHead=false)
