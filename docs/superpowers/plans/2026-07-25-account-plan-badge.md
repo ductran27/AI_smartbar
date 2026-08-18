@@ -740,11 +740,11 @@ Expected: `Build complete!`
 - [ ] **Step 3: Live data check (this Mac)**
 
 Run: `bin/ai-smartbar --plans --json`
-Expected: `{"plans": {"duc.dut.wr2@gmail.com": "20x", "duc.dut.wr@gmail.com": "20x", "ios8build@gmail.com": "20x", "syu3cs@virginia.edu": "5x"}}` (key order may differ).
+Expected: `{"plans": {"duc.dut.wr2@gmail.com": "20x", "duc.dut.wr@gmail.com": "20x", "ios8build@gmail.com": "20x", "jsmith@campus.example": "5x"}}` (key order may differ).
 
 - [ ] **Step 4: Live UI check (optional but recommended)**
 
-Run: `install/macos-swift.sh` (rebuilds the bundle and restarts the app; channel read-back is safe since e2e scenario G). Open the popover — each card shows `email · 20x/5x (n)`; syu3cs shows `5x`.
+Run: `install/macos-swift.sh` (rebuilds the bundle and restarts the app; channel read-back is safe since e2e scenario G). Open the popover — each card shows `email · 20x/5x (n)`; jsmith shows `5x`.
 
 - [ ] **Step 5: Do NOT push.** Commits stay local until the user says otherwise; cutting v0.6.4 via `install/release.sh` is a separate, user-approved step.
 

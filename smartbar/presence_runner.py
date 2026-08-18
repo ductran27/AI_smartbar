@@ -92,7 +92,7 @@ def device_id() -> str:
 def device_label() -> str:
     """Short name shown by --presence-status, so "(3)" can be checked.
 
-    Platform first, then the hostname: `mac-ducs-mbp`, `linux-thinkpad`. A
+    Platform first, then the hostname: `mac-laptop`, `linux-thinkpad`. A
     beacon otherwise carries no hint of what a machine IS, so "which of my
     devices is that, and is my Linux box even in the loop?" could not be
     answered from the count at all — including by me, when checking whether

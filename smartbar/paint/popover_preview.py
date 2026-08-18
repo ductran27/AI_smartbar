@@ -48,11 +48,11 @@ def demo_snapshot():
                 model.Metric(key="scoped:Fable", label="Fable", short="F",
                              pct=fable, countdown="1d 23h")]
     snapshot = model.Snapshot(accounts=[
-        model.Account(number=1, email="ios8build@gmail.com",
+        model.Account(number=1, email="abuilder@mail.example",
                       metrics=rows(0.0, 79.0, 100.0)),
-        model.Account(number=2, email="syu3cs@virginia.edu", active=True,
+        model.Account(number=2, email="jsmith@campus.example", active=True,
                       metrics=rows(49.0, 10.0, 0.0), devices=2),
-        model.Account(number=3, email="duc.dut.wr@gmail.com",
+        model.Account(number=3, email="dev@mail.example",
                       metrics=rows(3.0, 93.0, 89.0)),
         model.Account(number=4, email="an.old.account@gmail.com", ok=False,
                       status="relogin_required", metrics=[]),

@@ -8,7 +8,7 @@ remote: publish → replace → withdraw → re-join.
 
 > "if user using many devices so tracking how many devices using that
 > account would be useful too, which we can format in the bar like:
-> syu3cs@virginia.edu (1)"
+> jsmith@campus.example (1)"
 
 Chosen semantics (user's call): **N = devices that have this account as
 their live cswap slot**, i.e. "currently using". A nice property falls out
