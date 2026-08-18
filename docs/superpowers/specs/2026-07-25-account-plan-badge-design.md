@@ -1,6 +1,6 @@
 # Account plan badge — design note (2026-07-25)
 
-Show each account's subscription plan on its card: `● ios8build@gmail.com · 20x (2)`.
+Show each account's subscription plan on its card: `● abuilder@mail.example · 20x (2)`.
 Labels: `20x` / `5x` / `Pro` / `Free` (+ `Team` for enterprise orgs). Dim gray, after
 the email, before the device count. User-approved placement + wording.
 
@@ -15,8 +15,8 @@ Tier is already on disk, per account, in **cswap's per-slot config backups**:
       .oauthAccount.subscriptionType (absent here; keychain blob has it)
 ```
 
-Observed: ios8build=`default_claude_max_20x`, jsmith=`default_claude_max_5x`,
-duc.dut.wr=`_20x`, duc.dut.wr2=`_20x`. Live `~/.claude.json` `.oauthAccount`
+Observed: abuilder=`default_claude_max_20x`, jsmith=`default_claude_max_5x`,
+dev=`_20x`, dev2=`_20x`. Live `~/.claude.json` `.oauthAccount`
 carries the same keys for the ACTIVE login (freshest right after a plan change +
 /login; overlays the backup copy for that email).
 

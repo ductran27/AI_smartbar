@@ -287,7 +287,7 @@ class TestObserve(unittest.TestCase):
 
 class TestCounts(unittest.TestCase):
     MINE = "jsmith@campus.example"
-    OTHER = "ios8build@gmail.com"
+    OTHER = "abuilder@mail.example"
 
     def counts(self, live, self_active, self_device="me"):
         return presence.device_counts(live, [self.MINE, self.OTHER],

@@ -116,5 +116,5 @@ def rate_limits(home=None, cutoff="", now=None):
 
 - [ ] README: feature bullet ("OpenAI/ChatGPT tab…"), env rows `SMARTBAR_OPENAI`, `SMARTBAR_CODEX_HOME`, honest-freshness note; Development test counts refreshed.
 - [ ] e2e-autoadd.sh: export `SMARTBAR_OPENAI=off` next to the presence fence (rule: every route past cswap is fenced).
-- [ ] Full gate: unit suite, `./tests/e2e-autoadd.sh`, `swift build -c release`; live `ai-smartbar --openai --json` (expect duc.dut.wr@gmail.com / Pro Lite / 7d ≈25%); restart app, screenshot popover with both tabs; `--preview-popover` PNG for the Linux panel path.
+- [ ] Full gate: unit suite, `./tests/e2e-autoadd.sh`, `swift build -c release`; live `ai-smartbar --openai --json` (expect dev@mail.example / Pro Lite / 7d ≈25%); restart app, screenshot popover with both tabs; `--preview-popover` PNG for the Linux panel path.
 - [ ] Commit `docs: openai provider docs + e2e fence`. Ask the user about release.
