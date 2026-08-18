@@ -3,7 +3,7 @@
 Catch ChatGPT logins the way Claude logins are caught, and show them under a
 second tab. Popover/panel grows a `Claude | OpenAI` tab row **only when both
 providers have accounts** (a single-provider machine looks exactly like
-today); each OpenAI account is a card `● duc.dut.wr@gmail.com · Pro Lite`
+today); each OpenAI account is a card `● dev@mail.example · Pro Lite`
 with the same 5h / 7d / per-model %-used bars. User-approved: hide-when-one,
 remember signed-out accounts, passive freshness.
 
@@ -11,7 +11,7 @@ remember signed-out accounts, passive freshness.
 
 1. **Who is signed in + plan:** `~/.codex/auth.json` → the id_token's JWT
    *payload claims* `email` and `https://api.openai.com/auth.chatgpt_plan_type`
-   (observed: duc.dut.wr@gmail.com / `prolite`). Decoded in-memory
+   (observed: dev@mail.example / `prolite`). Decoded in-memory
    (base64url, unverified); ONLY those label claims are extracted. The token
    strings themselves are never returned, stored, logged or printed.
    `auth_mode: apikey` has no email → treated as "no ChatGPT login".
@@ -58,7 +58,7 @@ possible later opt-in, warmup-style); keychain (Codex keeps auth on disk).
 - `Account.provider: str = "claude"` (new field, default keeps every
   existing constructor working).
 - `Snapshot.openai: list = []` — a SEPARATE list, deliberately NOT merged
-  into `snapshot.accounts`: duc.dut.wr@gmail.com is both a Claude and a
+  into `snapshot.accounts`: dev@mail.example is both a Claude and a
   ChatGPT account, so a merged list would let plan.apply_plans stamp "20x"
   onto the OpenAI card, presence counts leak across, and a second
   active=True break active_account / needs_registration / best_switch /
@@ -129,7 +129,7 @@ possible later opt-in, warmup-style); keychain (Codex keeps auth on disk).
   policy markers in any Swift file ("chatgpt_plan_type", "id_token",
   "window_minutes", "rollout", "prolite"); OpenAIStatus
   refreshInterval pinned to 120; both Python UIs stamp `codex.accounts`.
-- Live verify: `--openai --json` on this Mac (expect duc.dut.wr / Pro
+- Live verify: `--openai --json` on this Mac (expect dev / Pro
   Lite / 7d 25%), popover screenshot with both tabs, `--preview-popover`
   for the Linux panel.
 

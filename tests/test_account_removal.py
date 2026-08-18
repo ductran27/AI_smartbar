@@ -129,9 +129,9 @@ class TestRemovalParity(unittest.TestCase):
 
         This assertion used to pin the bare `account.email`, which is the
         BUG it now guards against: at 12pt semibold "Remove
-        duc.dut.wr@gmail.com?" needs 189pt in the 182pt the one-row confirm
+        dev@mail.example?" needs 189pt in the 182pt the one-row confirm
         header had, so an ordinary address was middle-truncated to
-        "Remove duc.d…r@gmail.com?" — the identity elided at exactly the
+        "Remove dev@ma…example?" — the identity elided at exactly the
         moment the user has to be certain what they are deleting. Both
         sides now ask with the full account label (address · plan), which
         is also what tells two similar addresses apart.

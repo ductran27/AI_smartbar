@@ -5,7 +5,7 @@ cswap add smoke, warmup agent log). 122 unit tests + 2 e2e suites green.
 
 ## Problems reported
 
-1. First account (ios8build) "gone" after logging into other accounts —
+1. First account (abuilder) "gone" after logging into other accounts —
    popover showed bare "No usage data".
 2. Cross-machine numbers "not in sync".
 3. Wanted % USED shown (the /usage scale), not % left.
@@ -106,7 +106,7 @@ not warms.
 
 ## Unresolved
 
-- ios8build slot stays "Re-login required" until user runs `/login`
+- abuilder slot stays "Re-login required" until user runs `/login`
   as it once on this machine (then auto-heals). Cannot be automated —
   needs the account's own credential.
 - Linux tray still not re-run on a Linux box (mirrors core; unit-tested

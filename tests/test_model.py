@@ -214,14 +214,14 @@ class TestPillStates(Env):
 class TestFormatting(Env):
     def setUp(self):
         super().setUp()
-        self.acct = account(1, "ios8build@gmail.com", metrics=[
+        self.acct = account(1, "abuilder@mail.example", metrics=[
             metric("5h", 24.0), metric("7d", 20.0),
             metric("scoped:Fable", 28.4, short="F", label="Fable"),
         ])
 
     def test_title_line_shows_used(self):
         self.assertEqual(model.title_line(self.acct),
-                         "ios8build@gmail.com — 5h 24% · 7d 20% · F 28% used")
+                         "abuilder@mail.example — 5h 24% · 7d 20% · F 28% used")
 
     def test_title_line_no_account(self):
         self.assertEqual(model.title_line(None), "AI smartbar — no active account")
@@ -231,7 +231,7 @@ class TestFormatting(Env):
         self.assertIn("Re-login required", model.title_line(dead))
 
     def test_menu_row_active_and_inactive(self):
-        self.assertTrue(model.menu_row(self.acct).startswith("● 1 ios8build@gmail.com"))
+        self.assertTrue(model.menu_row(self.acct).startswith("● 1 abuilder@mail.example"))
         other = account(2, "b@x.com", active=False, metrics=[metric("5h", 62)])
         self.assertEqual(model.menu_row(other), "○ 2 b@x.com   5h 62%")
 

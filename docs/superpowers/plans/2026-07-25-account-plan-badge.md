@@ -703,7 +703,7 @@ git commit -m "test: pin plan badge parity between core and the Swift app"
 - [ ] **Step 1: Add the feature bullet.** Locate the `- **Device count per account.**` bullet in the Features section and insert directly after it:
 
 ```markdown
-- **Plan badge per account.** `ios8build@gmail.com · 20x` — which
+- **Plan badge per account.** `abuilder@mail.example · 20x` — which
   subscription each account is on (`20x` / `5x` / `Pro` / `Free`), read
   from claude-swap's local per-slot config backups; no network, no
   credential fields touched. Unknown plans show no badge. Disable with
@@ -740,7 +740,7 @@ Expected: `Build complete!`
 - [ ] **Step 3: Live data check (this Mac)**
 
 Run: `bin/ai-smartbar --plans --json`
-Expected: `{"plans": {"duc.dut.wr2@gmail.com": "20x", "duc.dut.wr@gmail.com": "20x", "ios8build@gmail.com": "20x", "jsmith@campus.example": "5x"}}` (key order may differ).
+Expected: `{"plans": {"dev2@mail.example": "20x", "dev@mail.example": "20x", "abuilder@mail.example": "20x", "jsmith@campus.example": "5x"}}` (key order may differ).
 
 - [ ] **Step 4: Live UI check (optional but recommended)**
 

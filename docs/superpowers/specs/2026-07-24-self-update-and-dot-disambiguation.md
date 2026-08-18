@@ -7,7 +7,7 @@ Info.plist (was hardcoded 0.1.0), popover footer screenshotted.
 
 ## Problems reported
 
-1. "Why did the first account get no green light?" — ios8build's dot was
+1. "Why did the first account get no green light?" — abuilder's dot was
    gray while the other two were green/red.
 2. "Make sure all devices that install this repo get auto update, reset and
    update when a newest version is released."
@@ -16,7 +16,7 @@ Info.plist (was hardcoded 0.1.0), popover footer screenshotted.
 
 `Account.worstStatus` (Models.swift) returns the status of the max-pct
 metric; `Thresholds.status(forUsedPct:)` maps `used >= 100` to `.gray`
-(mirror: `model.color`). Live cswap at the time: ios8build 5h 0%, 7d 79%,
+(mirror: `model.color`). Live cswap at the time: abuilder 5h 0%, 7d 79%,
 **Fable 100.0%**, `usageStatus: "ok"`. So the dot meant *a limit is
 exhausted* — not an error, and not the v3 dead-credential case (that slot
 had healed since v3; the older note saying it was left dead was stale).

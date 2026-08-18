@@ -124,8 +124,8 @@ or Anthropic endpoints itself.
   data, the one with the lowest worst-pct.
 - Formatting helpers produce every user-visible string (menu rows, title
   line, notification body) so both UIs render identical text:
-  - title line: `ios8build — 5h 24% · 7d 20% · F 28%`
-  - menu row:  `● 1 ios8build   5h 24% · 7d 20% · F 28%` (`●` active, `○` other)
+  - title line: `abuilder — 5h 24% · 7d 20% · F 28%`
+  - menu row:  `● 1 abuilder   5h 24% · 7d 20% · F 28%` (`●` active, `○` other)
   - icon text: `F28` (worst metric short + integer pct)
 
 ### `core/alerts.py`

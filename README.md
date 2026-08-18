@@ -13,7 +13,7 @@ The panel — the same layout on macOS, Linux and Windows:
  AI smartbar  Updated 9:56 PM              ⟳ ⏻
  [✳ Claude]  ❁ OpenAI
   ┌──────────────────────────────────────────┐
-  │ ● ios8build@gmail.com  20x [Make Active] │
+  │ ● abuilder@mail.example  20x [Make Active] │
   │ 5h   resets in 2h 43m                45% │
   │ ██████████████████────────────────────── │
   │                        ╷                 │
