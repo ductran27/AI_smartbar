@@ -29,7 +29,7 @@ cswap add smoke, warmup agent log). 122 unit tests + 2 e2e suites green.
   runner passed the claude BINARY PATH as the first post-`--` token, but
   cswap treats post-`--` as claude ARGUMENTS. E2E mock exec'd argv[4:]
   directly and masked both. Failed attempts also consumed the daily cap
-  (syu3cs: "daily cap (6) reached" = 6 failures) and notified every 30
+  (jsmith: "daily cap (6) reached" = 6 failures) and notified every 30
   min.
 - **Perf**: two Python process boots per 60s poll (primer + list),
   snapshot + NSImage republished every poll even when unchanged,

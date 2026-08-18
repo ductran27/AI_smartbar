@@ -15,7 +15,7 @@ Tier is already on disk, per account, in **cswap's per-slot config backups**:
       .oauthAccount.subscriptionType (absent here; keychain blob has it)
 ```
 
-Observed: ios8build=`default_claude_max_20x`, syu3cs=`default_claude_max_5x`,
+Observed: ios8build=`default_claude_max_20x`, jsmith=`default_claude_max_5x`,
 duc.dut.wr=`_20x`, duc.dut.wr2=`_20x`. Live `~/.claude.json` `.oauthAccount`
 carries the same keys for the ACTIVE login (freshest right after a plan change +
 /login; overlays the backup copy for that email).

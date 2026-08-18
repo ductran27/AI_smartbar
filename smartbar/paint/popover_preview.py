@@ -50,7 +50,7 @@ def demo_snapshot():
     snapshot = model.Snapshot(accounts=[
         model.Account(number=1, email="ios8build@gmail.com",
                       metrics=rows(0.0, 79.0, 100.0)),
-        model.Account(number=2, email="syu3cs@virginia.edu", active=True,
+        model.Account(number=2, email="jsmith@campus.example", active=True,
                       metrics=rows(49.0, 10.0, 0.0), devices=2),
         model.Account(number=3, email="duc.dut.wr@gmail.com",
                       metrics=rows(3.0, 93.0, 89.0)),

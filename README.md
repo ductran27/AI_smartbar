@@ -367,16 +367,16 @@ the number is right.
 `ai-smartbar --presence-status` names them:
 
 ```
-device    13ceb7630470 "mac-ducs-mbp"
+device    a1b2c3d4e5f6 "mac-laptop"
 remote    readable
 publish   ok
 cadence   beat 300s, counted for 900s after the last beat
 
-counts    syu3cs@virginia.edu (2)
+counts    jsmith@campus.example (2)
 
 live devices:
-  mac-ducs-mbp             syu3cs@virginia.edu                this device
-  linux-thinkpad           syu3cs@virginia.edu                42s ago
+  mac-laptop             jsmith@campus.example                this device
+  linux-thinkpad           jsmith@campus.example                42s ago
 ```
 
 Each name is `<platform>-<hostname>`, so you can tell *which* machine a count

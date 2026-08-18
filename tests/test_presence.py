@@ -27,8 +27,8 @@ def beacon(device="dev1", label="box", epoch=1000, active="a" * 16):
 
 class TestAccountKey(unittest.TestCase):
     def test_normalises_case_and_whitespace(self):
-        key = presence.account_key("Syu3cs@Virginia.EDU")
-        self.assertEqual(key, presence.account_key("  syu3cs@virginia.edu  "))
+        key = presence.account_key("Jsmith@Campus.Example")
+        self.assertEqual(key, presence.account_key("  jsmith@campus.example  "))
         self.assertEqual(len(key), presence.KEY_LEN)
         self.assertRegex(key, r"^[0-9a-f]+$")
 
@@ -41,8 +41,8 @@ class TestAccountKey(unittest.TestCase):
     def test_the_address_itself_never_appears(self):
         # The ref is published to a repo; the address must not ride along.
         ref = presence.encode_ref("dev1", "box", 1000,
-                                  presence.account_key("syu3cs@virginia.edu"))
-        self.assertNotIn("syu3cs", ref)
+                                  presence.account_key("jsmith@campus.example"))
+        self.assertNotIn("jsmith", ref)
         self.assertNotIn("@", ref)
 
 
@@ -286,7 +286,7 @@ class TestObserve(unittest.TestCase):
 
 
 class TestCounts(unittest.TestCase):
-    MINE = "syu3cs@virginia.edu"
+    MINE = "jsmith@campus.example"
     OTHER = "ios8build@gmail.com"
 
     def counts(self, live, self_active, self_device="me"):
