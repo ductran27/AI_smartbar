@@ -5,5 +5,6 @@ macos-swift/.build/
 .claude/
 .eh-claude-code/
 .serena/
+.codex/
 # Generated from assets/ai-smartbar.png by install/windows.ps1.
 assets/*.ico
