@@ -89,7 +89,15 @@ DOT_STROKE = 1.75
 # beside the LABEL, left-anchored in secondary ink, because the window it
 # belongs to is the label — and the percentage is left as the only value
 # over the bar, which is correct: it IS the bar's readout.
-LABEL_W = 46.0             # MetricBarRow label column
+#
+# 46 was sized for "5h"/"7d" only. A real Codex scoped rate-limit name
+# ("codex_bengalfox" -> "Bengalfox") measures ~58pt bold at SIZE_ROW_LABEL —
+# the first label that actually needed the truncation LABEL_W was built for
+# (see 5757ba0's tail/middle parity fix). The row has room to spare (its
+# "resets in …" caption already renders far short of reset_w), so widened
+# to fit that name and similar-length ones with a few points of margin
+# rather than truncating text that fits the row.
+LABEL_W = 66.0             # MetricBarRow label column
 VALUE_PCT_W = 32.0
 # BAR_H itself lives above, next to ROW_LABEL_H/ROW_LABEL_GAP — the three
 # together are what ROW_H sums.

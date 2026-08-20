@@ -326,17 +326,18 @@ class TestCardContent(unittest.TestCase):
         self.assertLessEqual(caption.x + caption.max_width,
                              inner_r - t.VALUE_PCT_W)
 
-    def test_a_scoped_label_too_long_for_the_column_truncates_from_the_tail(self):
+    def test_a_scoped_label_uses_tail_truncation_mode(self):
         # A real Codex scoped rate-limit name ("codex_bengalfox" ->
-        # "Bengalfox") is longer than LABEL_W was ever sized for — "5h"/
-        # "7d"/most scoped names ("Fable") fit, this one doesn't. The
-        # native MetricBarRow.swift Text(metric.label) has no
-        # .truncationMode override, so SwiftUI's own default (.tail)
-        # renders "Beng…". Before this test, the shared Label defaulted
-        # every truncation to "middle" (built for the one Text that opts
-        # into it, the account address), which would have painted "Be…ox"
-        # on this platform instead — silently disagreeing with what macOS
-        # actually shows for the exact same data.
+        # "Bengalfox") is what LABEL_W was widened to fit (see its comment
+        # in popover_theme.py) — it renders in full now, not truncated. The
+        # mode still has to be "tail": the native MetricBarRow.swift
+        # Text(metric.label) has no .truncationMode override, so SwiftUI's
+        # own default (.tail) is what any FUTURE name too long for the
+        # column would get. Before this test existed, the shared Label
+        # defaulted every truncation to "middle" (built for the one Text
+        # that opts into it, the account address), which would silently
+        # disagree with what macOS shows for a long label on this
+        # platform.
         built = layout.build(
             snap(account(metrics=[metric(key="scoped:Bengalfox",
                                          label="Bengalfox")])), now=NOW)

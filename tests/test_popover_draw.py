@@ -44,13 +44,17 @@ class TestFitTruncationMode(unittest.TestCase):
         # Exactly how many characters survive is a font-metrics question —
         # CI's default sans-serif isn't macOS's, so this pins the BEHAVIOUR
         # (an ellipsis replacing a real suffix, keeping a real prefix)
-        # rather than an exact character count.
+        # rather than an exact character count. Uses a string long enough to
+        # overflow LABEL_W regardless of its current value — "Bengalfox"
+        # itself now fits (see test_bengalfox_fits_without_truncation), so
+        # it can no longer exercise this path.
         from smartbar.paint import popover_draw
         ctx = self._ctx()
-        fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W)
+        text = "Supercalifragilisticexpialidocious"
+        fitted = popover_draw._fit(ctx, text, t.LABEL_W)
         self.assertTrue(fitted.endswith("…"))
-        self.assertTrue("Bengalfox".startswith(fitted[:-1]))
-        self.assertLess(len(fitted), len("Bengalfox"))
+        self.assertTrue(text.startswith(fitted[:-1]))
+        self.assertLess(len(fitted), len(text))
 
     def test_text_that_already_fits_is_returned_unchanged(self):
         from smartbar.paint import popover_draw
@@ -60,24 +64,35 @@ class TestFitTruncationMode(unittest.TestCase):
                 self.assertEqual(
                     popover_draw._fit(ctx, "7d", t.LABEL_W, mode), "7d")
 
+    def test_bengalfox_fits_without_truncation(self):
+        # The real Codex scoped rate-limit name that motivated LABEL_W's
+        # widening (see its comment in popover_theme.py) — the row has
+        # spare width, so this renders in full rather than as "Beng…".
+        from smartbar.paint import popover_draw
+        ctx = self._ctx()
+        self.assertEqual(popover_draw._fit(ctx, "Bengalfox", t.LABEL_W),
+                         "Bengalfox")
+
     def test_middle_mode_keeps_head_and_tail(self):
         # Same font-metrics caveat as above: assert the SHAPE (a real
         # prefix, an ellipsis, a real suffix) rather than exact characters.
         from smartbar.paint import popover_draw
         ctx = self._ctx()
-        fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W, "middle")
+        text = "Supercalifragilisticexpialidocious"
+        fitted = popover_draw._fit(ctx, text, t.LABEL_W, "middle")
         head, sep, tail = fitted.partition("…")
         self.assertEqual(sep, "…")
         self.assertTrue(head, "middle mode should keep a real prefix")
         self.assertTrue(tail, "middle mode should keep a real suffix")
-        self.assertTrue("Bengalfox".startswith(head))
-        self.assertTrue("Bengalfox".endswith(tail))
+        self.assertTrue(text.startswith(head))
+        self.assertTrue(text.endswith(tail))
 
     def test_every_fitted_result_actually_fits(self):
         from smartbar.paint import popover_draw
         ctx = self._ctx()
+        text = "Supercalifragilisticexpialidocious"
         for mode in ("tail", "middle"):
-            fitted = popover_draw._fit(ctx, "Bengalfox", t.LABEL_W, mode)
+            fitted = popover_draw._fit(ctx, text, t.LABEL_W, mode)
             self.assertLessEqual(ctx.text_extents(fitted).x_advance,
                                  t.LABEL_W)
 
