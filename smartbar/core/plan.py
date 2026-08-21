@@ -16,6 +16,15 @@ DEFAULT_BACKUP_DIR = "~/.claude-swap-backup"
 DEFAULT_CLAUDE_JSON = "~/.claude.json"
 
 _MULT = re.compile(r"_(\d+)x$")
+_BADGES = (("enterprise", "Enterprise"), ("team", "Team"),
+           ("pro", "Pro"), ("free", "Free"))
+
+
+def _tokens(value: str) -> frozenset:
+    """Split on non-alphanumerics so "claude_nonprofit" (contains "pro" as
+    a substring, not a word) doesn't collide with the "pro" badge — the
+    general form of the bug ab575fd fixed one string at a time."""
+    return frozenset(t for t in re.split(r"[^a-z0-9]+", value) if t)
 
 
 def enabled() -> bool:
@@ -38,9 +47,10 @@ def tier_label(rate_limit_tier=None, organization_type=None,
     """Anthropic tier strings -> short badge; "" means show nothing.
 
     "default_claude_max_20x" -> "20x" is the primary path; pro/free/team/
-    enterprise are recognised in either the tier or the org type;
-    subscriptionType ("max"/"pro"/"free", from credential blobs) is the
-    coarse fallback.
+    enterprise are recognised as a whole WORD in either the tier or the
+    org type (not a bare substring, so "claude_nonprofit" doesn't read as
+    "Pro"); subscriptionType ("max"/"pro"/"free", from credential blobs)
+    is the coarse fallback.
     """
     tier = (rate_limit_tier or "").strip().lower()
     match = _MULT.search(tier)
@@ -48,16 +58,10 @@ def tier_label(rate_limit_tier=None, organization_type=None,
         return f"{match.group(1)}x"
     org = (organization_type or "").strip().lower()
     for hay in (tier, org):
-        if not hay:
-            continue
-        if "enterprise" in hay:
-            return "Enterprise"
-        if "team" in hay:
-            return "Team"
-        if "pro" in hay:
-            return "Pro"
-        if "free" in hay:
-            return "Free"
+        tokens = _tokens(hay)
+        for word, label in _BADGES:
+            if word in tokens:
+                return label
     sub = (subscription_type or "").strip()
     return sub.title() if sub else ""
 
