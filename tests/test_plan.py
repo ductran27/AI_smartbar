@@ -32,6 +32,15 @@ class TestTierLabel(unittest.TestCase):
         self.assertEqual(plan.tier_label("", "", ""), "")
         self.assertEqual(plan.tier_label("mystery_tier_x", "org?", ""), "")
 
+    def test_a_badge_word_inside_another_word_does_not_match(self):
+        # "nonprofit" contains "pro" as a substring, not a word — a future
+        # Anthropic org type like this must not be misread as the Pro plan.
+        # This is the general form of the bug ab575fd fixed for one string
+        # (enterprise colliding with team) at a time.
+        self.assertEqual(plan.tier_label(None, "claude_nonprofit"), "")
+        self.assertEqual(plan.tier_label(None, "claude_nonprofit", "max"),
+                         "Max")
+
 
 def _write_config(directory: Path, n: int, email: str, tier: str) -> Path:
     path = directory / "configs" / f".claude-config-{n}-{email}.json"
