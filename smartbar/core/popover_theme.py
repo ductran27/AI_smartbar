@@ -107,11 +107,25 @@ DOT_STROKE = 2.0
 #
 # This is the ONE constant in the table that is sized to a specific STRING
 # rather than to its neighbours, so it does not survive a blind snap to the
-# nearest 0.5pt: "Bengalfox" measures 78.3pt bold at SIZE_ROW_LABEL, and
-# rounding down to 79.0 would have cut the margin from 1.2pt to 0.7pt.
-# Rounded UP for that reason. Re-measure it, don't just scale it, if the
-# table moves again.
-LABEL_W = 79.5             # MetricBarRow label column
+# nearest 0.5pt — and text_width() is NOT the thing that will judge it.
+# That estimator (len x size x factor) is only used to reserve height; the
+# painted platforms truncate against real cairo metrics, and CI's
+# default sans is WIDER than macOS's, so this value has to be sized for the
+# widest renderer rather than the one on the machine making the change.
+#
+# The bound comes from CI's own history rather than a guess: LABEL_W = 66
+# passed there at SIZE_ROW_LABEL = 12, so cairo's "Bengalfox" is at most
+# 66pt at 12pt type; advances scale linearly with font size, so at 14.5pt
+# it is at most 66 * 14.5/12 = 79.75pt. 79.5 was a quarter-point short and
+# CI truncated it to "Bengalf…" while macOS rendered it in full. 81 clears
+# that bound with ~1.25pt to spare, which is more headroom than the old 66
+# actually had.
+#
+# The row can afford it: the label line spends LABEL_W + BAR_GAP + caption
+# + BAR_GAP + VALUE_PCT_W out of a 396pt inner width, so it is ~190pt short
+# of tight. Re-measure this against a Linux run, don't just scale it, if
+# the table moves again.
+LABEL_W = 81.0             # MetricBarRow label column
 VALUE_PCT_W = 38.5
 # BAR_H itself lives above, next to ROW_LABEL_H/ROW_LABEL_GAP — the three
 # together are what ROW_H sums.

@@ -32,7 +32,7 @@ struct MetricBarRow: View {
                     .font(.system(size: 14.5, weight: .bold))
                     .foregroundStyle(palette.text)
                     .lineLimit(1)
-                    .frame(width: 79.5, alignment: .leading)
+                    .frame(width: 81, alignment: .leading)
                 // The countdown ticks live from the absolute reset time
                 // while the popover is open instead of freezing at fetch
                 // time.
