@@ -9,6 +9,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from smartbar.core import model, update
+from smartbar.core import popover_theme as theme
 
 NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
 # A real-shaped sha: the short-ref rule only fires on 40 hex characters, so
@@ -662,20 +663,26 @@ class TestMacOptionsMenu(unittest.TestCase):
         options = self.source(SWIFT_OPTIONS)
         self.assertIn('Label("More options", systemImage: "ellipsis.circle")',
                       options)
-        # 32pt (was 44, then 28pt, then scaled ~15% for retina legibility):
-        # the 44pt frames padded the whole header row out, leaving dead
-        # space between the title and the provider tabs. Still a
-        # comfortable macOS pointer target.
-        self.assertIn(".frame(width: 32, height: 32)", options)
+        # 38.5pt (was 44, then 28pt, then scaled ~15%, then a further 20%
+        # for retina legibility): the 44pt frames padded the whole header
+        # row out, leaving dead space between the title and the provider
+        # tabs. Still a comfortable macOS pointer target.
+        self.assertIn(".frame(width: 38.5, height: 38.5)", options)
         self.assertIn(".menuIndicator(.hidden)", options)
         self.assertIn('.accessibilityLabel("More options")', options)
 
     def test_popover_has_a_compact_top_inset_and_balanced_outer_margins(self):
+        # The horizontal and bottom margins ARE the shared theme's PAD, so
+        # they are spelled from it rather than hardcoded — a scale-up of
+        # the whole table should not have to come back and edit a test
+        # about margin BALANCE. The top inset is deliberately tighter than
+        # PAD and has no constant of its own, so it stays a literal.
         popover = self.source(SWIFT_POPOVER)
-        self.assertIn(".padding(.horizontal, 12.5)", popover)
-        self.assertIn(".padding(.bottom, 12.5)", popover)
-        self.assertIn(".padding(.top, 5.5)", popover)
-        self.assertNotIn(".padding(12.5)", popover)
+        pad = f"{theme.PAD:g}"
+        self.assertIn(f".padding(.horizontal, {pad})", popover)
+        self.assertIn(f".padding(.bottom, {pad})", popover)
+        self.assertIn(".padding(.top, 6.5)", popover)
+        self.assertNotIn(f".padding({pad})", popover)
 
 
 class TestScheduledInterval(unittest.TestCase):

@@ -285,7 +285,7 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
             "Codex brings it back" if provider == "openai" else
             f"Deletes claude-swap's stored credential backup for slot "
             f"{account.number}. Signing in as this account re-registers it")
-        _button(shapes, hits, s, f"confirm-remove:{pid}", keep_l - 7,
+        _button(shapes, hits, s, f"confirm-remove:{pid}", keep_l - 8,
                 button_cy, "Remove", hover=hover, danger=True,
                 tooltip=confirm_tip)
         header_h = question_h + t.CARD_INNER_GAP + t.BUTTON_H
@@ -299,7 +299,7 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
                         hollow=model.dot_style(account) == "hollow"))
 
     if account.active:
-        chip_w = t.text_width("ACTIVE", t.SIZE_CHIP, bold=True) + 16
+        chip_w = t.text_width("ACTIVE", t.SIZE_CHIP, bold=True) + 19
         chip_x = inner_r - chip_w
         shapes.append(t.Box(chip_x, head_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
                             radius=t.CHIP_H / 2,
@@ -333,8 +333,8 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # it is a fact about the account, not something to press.
     badge = model.account_badge(account)
     if badge:
-        badge_w = t.text_width(badge, t.SIZE_CHIP) + 16
-        badge_x = control_l - 7 - badge_w
+        badge_w = t.text_width(badge, t.SIZE_CHIP) + 19
+        badge_x = control_l - 8 - badge_w
         shapes.append(t.Box(badge_x, head_cy - t.CHIP_H / 2, badge_w,
                             t.CHIP_H, radius=t.CHIP_H / 2,
                             fill=s.button_disabled))
@@ -351,11 +351,11 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # the full width, then re-truncate the instant the pointer arrived
     # (FINDING 4).
     removable = not account.active
-    label_r = control_l - 9 - (t.REMOVE_HIT + 7 if removable else 0)
+    label_r = control_l - 11 - (t.REMOVE_HIT + 8 if removable else 0)
     on_card = hover in (f"card:{pid}", f"remove:{pid}",
                         f"switch:{account.number}")
     if removable and on_card:
-        cx = control_l - 9 - t.REMOVE_HIT / 2
+        cx = control_l - 11 - t.REMOVE_HIT / 2
         shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
                               s.text if hover == f"remove:{pid}"
                               else s.text_tertiary))
@@ -366,10 +366,15 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
                           t.REMOVE_HIT, t.REMOVE_HIT,
                           tooltip=f"Remove {account.email} from AI smartbar"))
 
-    shapes.append(t.Label(inner_l + t.DOT_R * 2 + 8, head_cy,
+    # One local, used twice: where the address starts and what it may
+    # occupy have to agree. Written out twice they did not survive the last
+    # scale-up — the start moved and the width it was measured against did
+    # not, quietly granting the label 1pt more room than the row had.
+    label_l = inner_l + t.DOT_R * 2 + 10
+    shapes.append(t.Label(label_l, head_cy,
                           model.account_address(account),
                           size=t.SIZE_EMAIL, bold=True, color=s.text,
-                          max_width=label_r - (inner_l + t.DOT_R * 2 + 7),
+                          max_width=label_r - label_l,
                           mode="middle"))
 
     _card_body(shapes, s, account, top, now, inner_l, inner_r)
@@ -591,7 +596,7 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         # One error line for whichever card action failed most recently —
         # mirrors PopoverView.body's `switchError ?? removeError`, in
         # the same spot: under the header/tabs, above the account list.
-        gutter = t.REMOVE_HIT + 7   # dismiss "x", same math as a card's ✕
+        gutter = t.REMOVE_HIT + 8   # dismiss "x", same math as a card's ✕
         text_w = right - t.PAD - gutter
         lines = _lines_for_width(action_error, text_w)
         block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H

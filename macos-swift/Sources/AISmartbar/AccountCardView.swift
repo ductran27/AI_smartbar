@@ -3,7 +3,9 @@
 // per-model). Every card wears the same quiet hairline; the active one is
 // told apart by a leading rail instead of a loud outline. Accounts whose
 // stored credential is dead say so and cannot be switched to. Colours come
-// from the appearance's Palette — the panel follows the system now.
+// from the appearance's Palette — the panel follows the system now. Type
+// sizes come from the shared theme rather than SwiftUI's semantic styles;
+// see PopoverView.swift's header for why that changed.
 import SwiftUI
 
 struct AccountCardView: View {
@@ -84,7 +86,7 @@ struct AccountCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9.5) {
             if confirmToken == removalToken && !account.active {
                 confirmHeader
             } else {
@@ -100,38 +102,38 @@ struct AccountCardView: View {
                     // exclamationmark" cannot. Same icon/gap as the
                     // footer's "update held" pause mark (INLINE_ICON/
                     // INLINE_ICON_GAP in the shared theme).
-                    HStack(alignment: .top, spacing: 3.5) {
+                    HStack(alignment: .top, spacing: 4) {
                         ProviderMark(kind: "warn")
-                            .frame(width: 10.5, height: 10.5)
+                            .frame(width: 12.5, height: 12.5)
                         Text(account.stateText)
                             .lineLimit(2)
                     }
-                    .font(.caption)
+                    .font(.system(size: 13.5))
                     .foregroundStyle(palette.warning)
                 } else {
                     Label(account.stateText, systemImage: "hourglass")
-                        .font(.caption)
+                        .font(.system(size: 13.5))
                         .foregroundStyle(palette.textSecondary)
                         .lineLimit(2)
                 }
             } else {
                 // ROW_GAP in the shared theme.
-                VStack(spacing: 8) {
+                VStack(spacing: 9.5) {
                     ForEach(account.metrics) { metric in
                         MetricBarRow(metric: metric)
                     }
                 }
             }
         }
-        .padding(.vertical, 10.5)
-        .padding(.horizontal, 12.5)
+        .padding(.vertical, 12.5)
+        .padding(.horizontal, 15)
         .background(
             // A solid ground rather than `.thinMaterial`, whose blur has no
             // portable cairo equivalent: it retires the one deliberate
             // divergence the painted front-ends could never reproduce, so a
             // card is the same object on every platform rather than a blur
             // and two imitations of one. CARD_BG in the shared theme.
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .fill(palette.cardBG)
         )
         .overlay(
@@ -139,7 +141,7 @@ struct AccountCardView: View {
             // used to wear a 1.5pt pure-white outline instead, the loudest
             // mark on the panel for information the ACTIVE chip already
             // carries. CARD_BORDER in the shared theme.
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .strokeBorder(palette.cardBorder, lineWidth: 1)
         )
         .overlay(alignment: .leading) {
@@ -149,33 +151,33 @@ struct AccountCardView: View {
                 // this panel is reserved for how much budget is left —
                 // see Scheme.rail's comment in the shared theme. RAIL_W/
                 // RAIL_INSET there.
-                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                RoundedRectangle(cornerRadius: 1.75, style: .continuous)
                     .fill(palette.rail)
-                    .frame(width: 3)
-                    .padding(.vertical, 3.5)
+                    .frame(width: 3.5)
+                    .padding(.vertical, 4)
             }
         }
         .onHover { hovering = $0 }
     }
 
     private var cardHeader: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 9.5) {
             statusDot
             // Just the address now — the plan/device badge moved into its
             // own micro-chip (planBadge, below) so this line never has to
             // make room for it.
             Text(account.email)
-                .font(.callout.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(headerHelp)
-            Spacer(minLength: 9)
+            Spacer(minLength: 11)
             // The remove ✕'s HIT TARGET and TAP only exist while the
             // pointer is on a non-active card (mirror of the shared
             // layout's `on_card` guard on its remove hit) — the live
             // login would just be re-registered, so it never offers
-            // removal. Its 18pt WIDTH, though, is reserved unconditionally
+            // removal. Its 25pt WIDTH, though, is reserved unconditionally
             // whenever the card is removable, not only while hovering:
             // reserving it only on hover let the header expand into that
             // space when idle, then re-truncate the instant the pointer
@@ -183,10 +185,10 @@ struct AccountCardView: View {
             if !account.active {
                 Button { confirmToken = removalToken } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(palette.textTertiary)
                         // REMOVE_HIT in the shared theme
-                        .frame(width: 21, height: 21)
+                        .frame(width: 25, height: 25)
                         .opacity(hovering ? 1 : 0)
                 }
                 .buttonStyle(.plain)
@@ -199,10 +201,10 @@ struct AccountCardView: View {
             }
             if account.active {
                 Text("ACTIVE")
-                    .font(.system(size: 10.5, weight: .bold))
+                    .font(.system(size: 12.5, weight: .bold))
                     .foregroundStyle(palette.accentText)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3.5)
+                    .padding(.horizontal, 9.5)
+                    .padding(.vertical, 4)
                     .background(Capsule()
                         .fill(Status.green.color(in: colorScheme)))
             } else if account.provider == "openai" {
@@ -232,12 +234,12 @@ struct AccountCardView: View {
     /// trades that for a one-time card-height growth on an explicit user
     /// action, same trade-off the shared layout made.
     private var confirmHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9.5) {
             Text("Remove \(accountLabel)?")
-                .font(.callout.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(2)
-            HStack(spacing: 8) {
+            HStack(spacing: 9.5) {
                 Spacer(minLength: 0)
                 Button("Remove") {
                     confirmToken = nil
@@ -275,10 +277,10 @@ struct AccountCardView: View {
     /// SIZE_CHIP in the shared theme) rather than an accent.
     private var planBadge: some View {
         Text(accountBadge)
-            .font(.system(size: 10.5))
+            .font(.system(size: 12.5))
             .foregroundStyle(palette.textSecondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3.5)
+            .padding(.horizontal, 9.5)
+            .padding(.vertical, 4)
             .background(Capsule().fill(palette.buttonDisabled))
     }
 
@@ -290,13 +292,13 @@ struct AccountCardView: View {
         if account.dotHollow {
             Circle()
                 .strokeBorder(account.worstStatus.color(in: colorScheme),
-                              lineWidth: 1.75)
-                .frame(width: 8, height: 8)
+                              lineWidth: 2)
+                .frame(width: 10, height: 10)
                 .accessibilityLabel("no usage data")
         } else {
             Circle()
                 .fill(account.worstStatus.color(in: colorScheme))
-                .frame(width: 8, height: 8)
+                .frame(width: 10, height: 10)
         }
     }
 }

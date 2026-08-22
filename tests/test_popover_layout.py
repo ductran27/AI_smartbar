@@ -148,7 +148,10 @@ class TestRestoreOrigin(unittest.TestCase):
 class TestStructure(unittest.TestCase):
     def test_width_is_the_shared_design_width(self):
         built = layout.build(snap(account()), now=NOW)
-        self.assertEqual(built.width, t.WIDTH)   # same 330 as the macOS popover
+        # That WIDTH is also what the macOS panel frames itself to is
+        # pinned by tests/test_popover_view_parity.py — naming the number
+        # here just left a comment to go stale on every scale-up.
+        self.assertEqual(built.width, t.WIDTH)
 
     def test_height_grows_by_exactly_one_card_per_account(self):
         # Two accounts vs three, not one vs two: both sides of THIS
