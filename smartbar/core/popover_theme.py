@@ -26,29 +26,37 @@ from dataclasses import dataclass, field
 from smartbar.core.model import RGB, RGB_LIGHT
 
 # --- geometry (points; mirrors the SwiftUI frames) -------------------------
-# Every number below is ~15% larger than its original — a deliberate,
-# uniform scale-up (not a redesign) so the panel reads comfortably on a
-# retina MacBook Pro without changing any proportion or layout formula.
+# Every number below has been scaled up twice from the original table —
+# ~15%, then a further 20% — as deliberate, uniform scale-ups (not
+# redesigns) so the panel reads comfortably on a retina display without
+# changing any proportion or layout formula.
 # Scale the WHOLE table together if it ever needs to move again; picking
 # just one constant back to its old size throws every relationship below
 # out of step with its Swift/cairo twin.
-WIDTH = 380.0
-PAD = 12.5                 # PopoverView .padding(12.5)
-SECTION_GAP = 9.0          # VStack(spacing: 9)
-HEADER_H = 25.0            # equal-size refresh/quit buttons
-CARD_GAP = 8.0             # VStack(spacing: 8)
-CARD_RADIUS = 14.0
-CARD_PAD_V = 10.5
-CARD_PAD_H = 12.5
-CARD_HEADER_H = 23.0
-CARD_INNER_GAP = 8.0
-RAIL_W = 3.0                # active-card leading rail width
-RAIL_INSET = 3.5            # vertical inset so the rail reads as a mark,
+#
+# Scaled values are SNAPPED to the nearest 0.5pt, which is why the ratios
+# are not all exactly 1.20: half-points land on retina half-pixel
+# boundaries and stay crisp, where a 12.6 or 13.8 does not. The hairlines
+# (PACE_W, DOT_STROKE, RAIL_INSET, PACE_H) deliberately grow LESS than the
+# rest — they are marks whose whole job is to stay hairline-thin, and a
+# caret scaled in proportion starts to read as a second, empty bar.
+WIDTH = 456.0
+PAD = 15.0                 # PopoverView .padding(15)
+SECTION_GAP = 11.0         # VStack(spacing: 11)
+HEADER_H = 30.0            # equal-size refresh/quit buttons
+CARD_GAP = 9.5             # VStack(spacing: 9.5)
+CARD_RADIUS = 17.0
+CARD_PAD_V = 12.5
+CARD_PAD_H = 15.0
+CARD_HEADER_H = 27.5
+CARD_INNER_GAP = 9.5
+RAIL_W = 3.5                # active-card leading rail width
+RAIL_INSET = 4.0            # vertical inset so the rail reads as a mark,
                             # not a second border
 # A row is two stacked lines: the label/reset/pct line, then a bar that
 # gets the card's FULL inner width instead of splitting it with a label
 # column (see popover_layout._card_body). ROW_H is COMPUTED as their sum
-# (14 + 2.5 + 7 = 23.5) rather than its own literal — it used to be a
+# (17 + 3 + 8.5 = 28.5) rather than its own literal — it used to be a
 # separate number that had to be hand-kept equal to this sum, with a unit
 # test as the only thing catching drift; deriving it removes the chance of
 # drift entirely. card_height's row-counting arithmetic still needs no
@@ -60,21 +68,21 @@ RAIL_INSET = 3.5            # vertical inset so the rail reads as a mark,
 # tall, so a card that used to be glanceable became something to scroll,
 # and the whole point of a menu-bar panel is that it answers a question
 # before you have finished opening it. Density IS the feature here.
-ROW_LABEL_H = 14.0         # the label/reset/pct line
-ROW_LABEL_GAP = 2.5        # gap between that line and the bar under it
-BAR_H = 7.0
+ROW_LABEL_H = 17.0         # the label/reset/pct line
+ROW_LABEL_GAP = 3.0        # gap between that line and the bar under it
+BAR_H = 8.5
 ROW_H = ROW_LABEL_H + ROW_LABEL_GAP + BAR_H
-ROW_GAP = 8.0
-STATE_ROW_H = 18.5         # "Re-login required…" line on a data-less card
-STATE_LINE_H = 15.0        # extra height per wrapped line (.lineLimit(2))
+ROW_GAP = 9.5
+STATE_ROW_H = 22.0         # "Re-login required…" line on a data-less card
+STATE_LINE_H = 18.0        # extra height per wrapped line (.lineLimit(2))
 STATE_MAX_LINES = 2
 # Remove-confirm header: "Remove <full label>?" (see popover_layout._card).
 # Wider and bolder than a caption, so it gets its own wrap cap and its own
 # per-line height rather than reusing STATE_MAX_LINES/STATE_LINE_H.
 CONFIRM_MAX_LINES = 2
-CONFIRM_LINE_H = 17.0
-DOT_R = 4.0                # 8pt circle
-DOT_STROKE = 1.75
+CONFIRM_LINE_H = 20.5
+DOT_R = 5.0                # 10pt circle
+DOT_STROKE = 2.0
 # MetricBarRow's first line reads left to right as: which window, when it
 # refills, how much is spent — only the BAR sits on the line below (see
 # popover_layout._card_body). LABEL_W caps the window name's truncation
@@ -91,14 +99,20 @@ DOT_STROKE = 1.75
 # over the bar, which is correct: it IS the bar's readout.
 #
 # 46 was sized for "5h"/"7d" only. A real Codex scoped rate-limit name
-# ("codex_bengalfox" -> "Bengalfox") measures ~58pt bold at SIZE_ROW_LABEL —
-# the first label that actually needed the truncation LABEL_W was built for
-# (see 5757ba0's tail/middle parity fix). The row has room to spare (its
-# "resets in …" caption already renders far short of reset_w), so widened
-# to fit that name and similar-length ones with a few points of margin
-# rather than truncating text that fits the row.
-LABEL_W = 66.0             # MetricBarRow label column
-VALUE_PCT_W = 32.0
+# ("codex_bengalfox" -> "Bengalfox") is the longest label that actually
+# needed the truncation LABEL_W was built for (see 5757ba0's tail/middle
+# parity fix). The row has room to spare (its "resets in …" caption already
+# renders far short of reset_w), so this fits that name and similar-length
+# ones with a little margin rather than truncating text that fits the row.
+#
+# This is the ONE constant in the table that is sized to a specific STRING
+# rather than to its neighbours, so it does not survive a blind snap to the
+# nearest 0.5pt: "Bengalfox" measures 78.3pt bold at SIZE_ROW_LABEL, and
+# rounding down to 79.0 would have cut the margin from 1.2pt to 0.7pt.
+# Rounded UP for that reason. Re-measure it, don't just scale it, if the
+# table moves again.
+LABEL_W = 79.5             # MetricBarRow label column
+VALUE_PCT_W = 38.5
 # BAR_H itself lives above, next to ROW_LABEL_H/ROW_LABEL_GAP — the three
 # together are what ROW_H sums.
 # Gap after the label column on the label line: it separates the window name
@@ -106,15 +120,15 @@ VALUE_PCT_W = 32.0
 # on the gap before the right-anchored percentage, so the caption truncates
 # rather than colliding with it. The bar on the line below has no such gap —
 # it spans the card's full inner width.
-BAR_GAP = 10.5             # Spacer(minLength: 10.5) in MetricBarRow's label line
+BAR_GAP = 12.5             # Spacer(minLength: 12.5) in MetricBarRow's label line
 # One "small glyph beside a line of text" size shared by every spot that
 # needs it — a blocked account's warn triangle and the footer's pause mark —
 # rather than a near-identical pair of constants for what is visually the
 # same job twice. Named for the countdown because that is where it started:
 # the countdown wore a clock mark until the countdown became words ("resets
 # in 1h 37m"), which say what a clock glyph next to them would only repeat.
-INLINE_ICON = 10.5
-INLINE_ICON_GAP = 3.5
+INLINE_ICON = 12.5
+INLINE_ICON_GAP = 4.0
 # The pace caret marks "how far through this window are we" independently
 # of the fill, which marks "how much is spent" — two different questions a
 # single bar cannot answer. It never joins the status ramp, so it cannot
@@ -130,20 +144,20 @@ INLINE_ICON_GAP = 3.5
 # ENDS at 72%. People asked what the extra segment meant. Nothing may cut
 # the fill, because the fill's end is the one thing on this row that has to
 # be unambiguous; a mark below the bar is an annotation pointing AT a
-# position instead, and it costs no height — ROW_GAP already leaves 8pt
+# position instead, and it costs no height — ROW_GAP already leaves 9.5pt
 # between one row's bar and the next row's label.
 #
 # Being outside the bar, it is now real ink (Scheme.pace) rather than the
 # card's ground: a hole in nothing is invisible. It stays a HAIRLINE's
 # width, and short — it is a tick under a bar, and anything taller starts
 # to read as a second, empty bar of its own.
-PACE_W = 1.75
-PACE_H = 3.5
-BUTTON_H = 21.0
-TAB_H = 23.0               # provider tab row (Claude | OpenAI), shown only
+PACE_W = 2.0
+PACE_H = 4.0
+BUTTON_H = 25.0
+TAB_H = 27.5               # provider tab row (Claude | OpenAI), shown only
                            # when both providers actually have accounts
-TAB_GAP = 7.0              # gap between adjacent tab pills
-TAB_TOP_GAP = 3.5          # tabs belong to the header, so they sit tighter
+TAB_GAP = 8.5              # gap between adjacent tab pills
+TAB_TOP_GAP = 4.0          # tabs belong to the header, so they sit tighter
                            # under it than the SECTION_GAP between sections
 # Each tab pill carries its provider's mark to the LEFT of its label, not
 # instead of it: the mark alone is not how most people tell Claude and
@@ -155,33 +169,40 @@ TAB_TOP_GAP = 3.5          # tabs belong to the header, so they sit tighter
 # three-line row: a tab row twice this tall is a lot of the panel's height
 # spent on a control that is only shown at all when two providers are
 # installed.
-TAB_MARK = 12.5
-TAB_MARK_GAP = 6.0
-CHIP_H = 17.0
-REMOVE_HIT = 21.0          # square hit target for the per-card remove ✕
-REMOVE_ICON = 11.5         # drawn size of the ✕ glyph inside that target
+TAB_MARK = 15.0
+TAB_MARK_GAP = 7.0
+CHIP_H = 20.5
+REMOVE_HIT = 25.0          # square hit target for the per-card remove ✕
+REMOVE_ICON = 14.0         # drawn size of the ✕ glyph inside that target
 # Gap after a header-row label, e.g. title -> "Updated ..." -> "stale".
 # popover_layout derives both offsets from this plus text_width() instead
 # of hardcoding an x position (see build()).
-HEADER_LABEL_GAP = 7.0
+HEADER_LABEL_GAP = 8.5
 
-BUTTON_PAD_H = 9.5
-FOOTER_H = 23.0
-ICON_BUTTON_W = 25.0
+BUTTON_PAD_H = 11.5
+FOOTER_H = 27.5
+ICON_BUTTON_W = 30.0
 
 # --- type sizes ------------------------------------------------------------
-SIZE_TITLE = 15.0          # .headline
-SIZE_EMAIL = 14.0          # .callout.weight(.semibold)
-SIZE_CAPTION = 11.5        # .caption2
+SIZE_TITLE = 18.0          # .headline
+SIZE_EMAIL = 17.0          # .callout.weight(.semibold)
+# Snapped DOWN, not up, for the same reason LABEL_W was snapped up: this
+# size is load-bearing for a specific STRING. The first-run "Current login
+# isn't registered…" line has to fit its full-width slot on ONE line
+# (tests/test_popover_layout.py::TestFirstRunMessage), and it used to clear
+# that slot by 0.8pt. Snapping 13.8 up to 14.0 while the slot grew exactly
+# 1.20x put it 5pt over and wrapped it to two — reserving height for a
+# second line that then renders empty.
+SIZE_CAPTION = 13.5        # .caption2
 # Label and value share one optical size on purpose: they sit on the SAME
 # line, and a size step between them would read as a hierarchy that isn't
 # there — they are one fact ("5h: 42% · 3h 12m"), not a heading over a body.
 # A parity test pins the equality, because it is the relationship the row
 # depends on rather than either number on its own.
-SIZE_ROW_LABEL = 12.0
-SIZE_ROW_VALUE = 12.0      # monospaced
-SIZE_CHIP = 10.5
-SIZE_ICON = 14.5
+SIZE_ROW_LABEL = 14.5
+SIZE_ROW_VALUE = 14.5      # monospaced
+SIZE_CHIP = 12.5
+SIZE_ICON = 17.5
 
 # --- colors (r, g, b, a in 0..1) -------------------------------------------
 # Colour lives in a Scheme, not in module constants, because the popover

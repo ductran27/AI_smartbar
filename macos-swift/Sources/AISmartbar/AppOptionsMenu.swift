@@ -38,8 +38,8 @@ struct AppOptionsMenu: View {
         } label: {
             Label("More options", systemImage: "ellipsis.circle")
                 .labelStyle(.iconOnly)
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 32, height: 32)   // matches the refresh button
+                .font(.system(size: 19.5, weight: .semibold))
+                .frame(width: 38.5, height: 38.5)   // matches the refresh button
                 .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)

@@ -80,8 +80,13 @@ class TestRowGeometryParity(SwiftPresent):
         painted platforms unless popover_layout.py's call site is updated
         to match — this test is the tripwire for that drift."""
         text = _read(ROW_SOURCE)
+        # The slice ends at the label's OWN frame, spelled from LABEL_W
+        # rather than hardcoded: this test is not about the column's width,
+        # and a literal here means every future scale-up breaks a
+        # truncation test for a reason that has nothing to do with
+        # truncation (it has, twice).
         block = text[text.index("Text(metric.label)"):
-                     text.index(".frame(width: 66")]
+                     text.index(f".frame(width: {theme.LABEL_W:g}")]
         self.assertNotIn("truncationMode", block)
 
     def test_both_gaps_on_the_label_line_match_bar_gap(self):
