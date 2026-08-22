@@ -86,7 +86,7 @@ struct AccountCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9.5) {
+        VStack(alignment: .leading, spacing: 9) {
             if confirmToken == removalToken && !account.active {
                 confirmHeader
             } else {
@@ -104,36 +104,36 @@ struct AccountCardView: View {
                     // INLINE_ICON_GAP in the shared theme).
                     HStack(alignment: .top, spacing: 4) {
                         ProviderMark(kind: "warn")
-                            .frame(width: 12.5, height: 12.5)
+                            .frame(width: 11.5, height: 11.5)
                         Text(account.stateText)
                             .lineLimit(2)
                     }
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(palette.warning)
                 } else {
                     Label(account.stateText, systemImage: "hourglass")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                         .lineLimit(2)
                 }
             } else {
                 // ROW_GAP in the shared theme.
-                VStack(spacing: 9.5) {
+                VStack(spacing: 9) {
                     ForEach(account.metrics) { metric in
                         MetricBarRow(metric: metric)
                     }
                 }
             }
         }
-        .padding(.vertical, 12.5)
-        .padding(.horizontal, 15)
+        .padding(.vertical, 11.5)
+        .padding(.horizontal, 14)
         .background(
             // A solid ground rather than `.thinMaterial`, whose blur has no
             // portable cairo equivalent: it retires the one deliberate
             // divergence the painted front-ends could never reproduce, so a
             // card is the same object on every platform rather than a blur
             // and two imitations of one. CARD_BG in the shared theme.
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
+            RoundedRectangle(cornerRadius: 15.5, style: .continuous)
                 .fill(palette.cardBG)
         )
         .overlay(
@@ -141,7 +141,7 @@ struct AccountCardView: View {
             // used to wear a 1.5pt pure-white outline instead, the loudest
             // mark on the panel for information the ACTIVE chip already
             // carries. CARD_BORDER in the shared theme.
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
+            RoundedRectangle(cornerRadius: 15.5, style: .continuous)
                 .strokeBorder(palette.cardBorder, lineWidth: 1)
         )
         .overlay(alignment: .leading) {
@@ -161,23 +161,23 @@ struct AccountCardView: View {
     }
 
     private var cardHeader: some View {
-        HStack(spacing: 9.5) {
+        HStack(spacing: 9) {
             statusDot
             // Just the address now — the plan/device badge moved into its
             // own micro-chip (planBadge, below) so this line never has to
             // make room for it.
             Text(account.email)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 15.5, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(headerHelp)
-            Spacer(minLength: 11)
+            Spacer(minLength: 10)
             // The remove ✕'s HIT TARGET and TAP only exist while the
             // pointer is on a non-active card (mirror of the shared
             // layout's `on_card` guard on its remove hit) — the live
             // login would just be re-registered, so it never offers
-            // removal. Its 25pt WIDTH, though, is reserved unconditionally
+            // removal. Its 23pt WIDTH, though, is reserved unconditionally
             // whenever the card is removable, not only while hovering:
             // reserving it only on hover let the header expand into that
             // space when idle, then re-truncate the instant the pointer
@@ -185,10 +185,10 @@ struct AccountCardView: View {
             if !account.active {
                 Button { confirmToken = removalToken } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(palette.textTertiary)
                         // REMOVE_HIT in the shared theme
-                        .frame(width: 25, height: 25)
+                        .frame(width: 23, height: 23)
                         .opacity(hovering ? 1 : 0)
                 }
                 .buttonStyle(.plain)
@@ -201,9 +201,9 @@ struct AccountCardView: View {
             }
             if account.active {
                 Text("ACTIVE")
-                    .font(.system(size: 12.5, weight: .bold))
+                    .font(.system(size: 11.5, weight: .bold))
                     .foregroundStyle(palette.accentText)
-                    .padding(.horizontal, 9.5)
+                    .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(Capsule()
                         .fill(Status.green.color(in: colorScheme)))
@@ -234,12 +234,12 @@ struct AccountCardView: View {
     /// trades that for a one-time card-height growth on an explicit user
     /// action, same trade-off the shared layout made.
     private var confirmHeader: some View {
-        VStack(alignment: .leading, spacing: 9.5) {
+        VStack(alignment: .leading, spacing: 9) {
             Text("Remove \(accountLabel)?")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 15.5, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(2)
-            HStack(spacing: 9.5) {
+            HStack(spacing: 9) {
                 Spacer(minLength: 0)
                 Button("Remove") {
                     confirmToken = nil
@@ -277,9 +277,9 @@ struct AccountCardView: View {
     /// SIZE_CHIP in the shared theme) rather than an accent.
     private var planBadge: some View {
         Text(accountBadge)
-            .font(.system(size: 12.5))
+            .font(.system(size: 11.5))
             .foregroundStyle(palette.textSecondary)
-            .padding(.horizontal, 9.5)
+            .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(Capsule().fill(palette.buttonDisabled))
     }
@@ -293,12 +293,12 @@ struct AccountCardView: View {
             Circle()
                 .strokeBorder(account.worstStatus.color(in: colorScheme),
                               lineWidth: 2)
-                .frame(width: 10, height: 10)
+                .frame(width: 9, height: 9)
                 .accessibilityLabel("no usage data")
         } else {
             Circle()
                 .fill(account.worstStatus.color(in: colorScheme))
-                .frame(width: 10, height: 10)
+                .frame(width: 9, height: 9)
         }
     }
 }

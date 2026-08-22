@@ -50,6 +50,26 @@ class TestPanelWidthParity(SwiftPresent):
         self.assertEqual(float(match.group(1)), theme.WIDTH)
 
 
+class TestCardGapParity(SwiftPresent):
+    def test_both_card_lists_are_spaced_by_card_gap(self):
+        """The gap BETWEEN account cards, in the two places it is spelled.
+
+        Found stale: the ~20% scale-up moved CARD_GAP in the shared theme
+        and left both of these at the pre-scale 8, so macOS stacked its
+        cards tighter than the cairo front-ends drew them and nothing
+        failed — the panel width and listMaxHeight had just been pinned,
+        this had not. It is asserted at BOTH call sites rather than once,
+        because the two lists (Claude and OpenAI) are separate literals and
+        only one of them being updated is the same silent drift again.
+        """
+        found = re.findall(r"let cards = VStack\(spacing: ([\d.]+)\)",
+                           _read(POPOVER_SOURCE))
+        self.assertEqual(len(found), 2,
+                         "expected one card list per provider")
+        for spacing in found:
+            self.assertEqual(float(spacing), theme.CARD_GAP)
+
+
 class TestListMaxHeightParity(SwiftPresent):
     """listMaxHeight has no constant of its own in the shared theme — the
     painted front-ends cap the panel against the real SCREEN instead (see
