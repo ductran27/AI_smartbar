@@ -8,11 +8,11 @@
 // the semantic styles (.headline / .callout / .caption / .caption2) this
 // view used to ask for. Those styles resolve to macOS's own sizes, which
 // meant the one platform whose frames the shared theme claims to mirror
-// was the one platform ignoring its type scale: the theme said 15pt for
-// the title and macOS drew ~13, and the gap widened every time the table
-// was scaled while the semantic sizes stood still. Cards grew, the
-// addresses inside them did not. Sizes come from the table now, so the
-// panel is the same instrument on every platform in type as well as in
+// was the one platform ignoring its type scale: the theme's title size and
+// the one macOS actually drew were points apart, and the gap widened every
+// time the table was scaled while the semantic sizes stood still. Cards
+// grew, the addresses inside them did not. Sizes come from the table now, so
+// the panel is the same instrument on every platform in type as well as in
 // geometry.
 import SwiftUI
 
@@ -26,7 +26,7 @@ struct PopoverView: View {
     private var palette: Palette { Palette.of(colorScheme) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 10) {
             header
             if showsTabs {
                 providerTabs
@@ -36,7 +36,7 @@ struct PopoverView: View {
             if let actionError = store.switchError ?? store.removeError
                     ?? openai.removeError {
                 Label(actionError, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(palette.warning)
                     .lineLimit(2)
             }
@@ -48,7 +48,7 @@ struct PopoverView: View {
                             ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
                             : "Current login isn't registered — adding it automatically",
                           systemImage: "person.crop.circle.badge.plus")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                         .lineLimit(2)
                 }
@@ -58,10 +58,10 @@ struct PopoverView: View {
             }
             footer
         }
-        .padding(.horizontal, 15)
-        .padding(.bottom, 15)
-        .padding(.top, 6.5)
-        .frame(width: 456)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 14)
+        .padding(.top, 6)
+        .frame(width: 418)
         // WINDOW_BG in the shared theme. Painted explicitly rather than left
         // to the MenuBarExtra's own chrome so the Mac and the cairo painters
         // agree on the ground every other colour was tuned against — the
@@ -108,7 +108,7 @@ struct PopoverView: View {
     }
 
     private var providerTabs: some View {
-        HStack(spacing: 8.5) {
+        HStack(spacing: 7.5) {
             ForEach(Self.tabIDs, id: \.self) { id in
                 tabButton(tabTitle(for: id), id: id)
             }
@@ -135,15 +135,15 @@ struct PopoverView: View {
         let selected = selectedProvider == id
         let color = selected ? palette.text : palette.textTertiary
         return Button { providerTab = id } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: 6.5) {
                 ProviderMark(kind: id)
-                    .frame(width: 15, height: 15)
+                    .frame(width: 14, height: 14)
                 Text(title)
-                    .font(.system(size: 13.5, weight: selected ? .semibold : .regular))
+                    .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
             }
             .foregroundStyle(color)
-            .padding(.horizontal, 11.5)
-            .padding(.vertical, 5.5)
+            .padding(.horizontal, 10.5)
+            .padding(.vertical, 5)
             .background(Capsule()
                 .fill(selected ? palette.tabBGSelected : palette.tabBG))
         }
@@ -153,18 +153,19 @@ struct PopoverView: View {
     /// How tall the card list may grow before it starts scrolling, and how
     /// many cards are worth wrapping in a ScrollView at all.
     ///
-    /// A three-metric card is ~166.5pt (25 padding + 27.5 header + 9.5 gap +
-    /// 3x28.5 rows + 2x9.5 row gaps), so 606 is roughly four of them — the point past
-    /// which the panel would be taller than it is useful. These are named rather
+    /// A three-metric card is ~153.5pt (23 padding + 25.5 header + 9 gap +
+    /// 3x26 rows + 2x9 row gaps), so 555 clears three of them and stops short of
+    /// a fourth — the point past which the panel would be taller than it is
+    /// useful. These are named rather
     /// than repeated at both call sites below, which is the one thing the
     /// three-line-row experiment left behind: the pair has to move together,
     /// and it did not when the cards got taller.
-    private static let listMaxHeight: CGFloat = 606
+    private static let listMaxHeight: CGFloat = 555
     private static let listScrollsPast = 4
 
     @ViewBuilder
     private var openAIList: some View {
-        let cards = VStack(spacing: 8) {
+        let cards = VStack(spacing: 9) {
             ForEach(openai.accounts) { account in
                 AccountCardView(account: account)
             }
@@ -183,27 +184,27 @@ struct PopoverView: View {
     @ViewBuilder
     private var footer: some View {
         if showsFooter {
-            HStack(spacing: 11) {
+            HStack(spacing: 10) {
                 // A failed launch outranks a policy hold: it is the one the
                 // user just caused, and the only one they can retry from here.
                 if !updates.launchError.isEmpty {
                     Label(updates.launchError,
                           systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.warning)
                         .lineLimit(1)
                 } else if !updates.blockedReason.isEmpty {
                     Label("Update held", systemImage: "pause.circle")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textTertiary)
                         .help("Update held back: \(updates.blockedReason)")
                 }
-                Spacer(minLength: 7)
+                Spacer(minLength: 6.5)
                 if updates.isUpdating {
                     ProgressView()
                         .controlSize(.small)
                     Text("Updating…")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                 } else if !updates.pendingVersion.isEmpty {
                     Button("Update to \(updates.pendingVersion)") {
@@ -217,11 +218,11 @@ struct PopoverView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text("Checking…")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                 } else if !updates.checkResult.isEmpty {
                     Text(updates.checkResult)
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                 }
             }
@@ -240,7 +241,7 @@ struct PopoverView: View {
 
     @ViewBuilder
     private func accountList(_ snapshot: Snapshot) -> some View {
-        let cards = VStack(spacing: 8) {
+        let cards = VStack(spacing: 9) {
             ForEach(snapshot.accounts) { account in
                 AccountCardView(account: account)
             }
@@ -254,19 +255,19 @@ struct PopoverView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 10) {
             Text("AI smartbar")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16.5, weight: .semibold))
                 .foregroundStyle(palette.text)
             if let updated = store.dataUpdated {
                 Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(palette.textTertiary)
                     .help(freshnessHelp)
             }
             if store.isStale {
                 Image(systemName: "wifi.slash")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(palette.warning)
                     .help(store.lastError ?? "last refresh failed; showing old data")
             }
@@ -277,12 +278,12 @@ struct PopoverView: View {
                 // Header chrome sits a step back from the cards it frames —
                 // they are what you opened the panel to read.
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 17.5, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(palette.textSecondary)
-                    // 38.5pt keeps a comfortable pointer target without the
+                    // 35pt keeps a comfortable pointer target without the
                     // 44pt frame padding the whole header row out — the gap
                     // between the title and the cards/tabs was mostly this.
-                    .frame(width: 38.5, height: 38.5)
+                    .frame(width: 35, height: 35)
             }
             .buttonStyle(.borderless)
             .disabled(store.isRefreshing)
@@ -307,15 +308,15 @@ struct PopoverView: View {
     private var loadingOrError: some View {
         if let error = store.lastError {
             Label(error, systemImage: "exclamationmark.triangle")
-                .font(.system(size: 13.5))
+                .font(.system(size: 12.5))
                 .foregroundStyle(palette.warning)
                 .lineLimit(3)
         } else {
-            HStack(spacing: 9.5) {
+            HStack(spacing: 9) {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading usage…")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(palette.textSecondary)
             }
         }

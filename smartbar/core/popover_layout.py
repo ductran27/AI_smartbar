@@ -299,7 +299,7 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
                         hollow=model.dot_style(account) == "hollow"))
 
     if account.active:
-        chip_w = t.text_width("ACTIVE", t.SIZE_CHIP, bold=True) + 19
+        chip_w = t.text_width("ACTIVE", t.SIZE_CHIP, bold=True) + 18
         chip_x = inner_r - chip_w
         shapes.append(t.Box(chip_x, head_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
                             radius=t.CHIP_H / 2,
@@ -333,7 +333,7 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # it is a fact about the account, not something to press.
     badge = model.account_badge(account)
     if badge:
-        badge_w = t.text_width(badge, t.SIZE_CHIP) + 19
+        badge_w = t.text_width(badge, t.SIZE_CHIP) + 18
         badge_x = control_l - 8 - badge_w
         shapes.append(t.Box(badge_x, head_cy - t.CHIP_H / 2, badge_w,
                             t.CHIP_H, radius=t.CHIP_H / 2,
@@ -351,11 +351,11 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # the full width, then re-truncate the instant the pointer arrived
     # (FINDING 4).
     removable = not account.active
-    label_r = control_l - 11 - (t.REMOVE_HIT + 8 if removable else 0)
+    label_r = control_l - 10 - (t.REMOVE_HIT + 8 if removable else 0)
     on_card = hover in (f"card:{pid}", f"remove:{pid}",
                         f"switch:{account.number}")
     if removable and on_card:
-        cx = control_l - 11 - t.REMOVE_HIT / 2
+        cx = control_l - 10 - t.REMOVE_HIT / 2
         shapes.append(t.Glyph("close", cx, head_cy, t.REMOVE_ICON,
                               s.text if hover == f"remove:{pid}"
                               else s.text_tertiary))
@@ -370,7 +370,7 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # occupy have to agree. Written out twice they did not survive the last
     # scale-up — the start moved and the width it was measured against did
     # not, quietly granting the label 1pt more room than the row had.
-    label_l = inner_l + t.DOT_R * 2 + 10
+    label_l = inner_l + t.DOT_R * 2 + 9
     shapes.append(t.Label(label_l, head_cy,
                           model.account_address(account),
                           size=t.SIZE_EMAIL, bold=True, color=s.text,

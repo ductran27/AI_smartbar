@@ -663,11 +663,11 @@ class TestMacOptionsMenu(unittest.TestCase):
         options = self.source(SWIFT_OPTIONS)
         self.assertIn('Label("More options", systemImage: "ellipsis.circle")',
                       options)
-        # 38.5pt (was 44, then 28pt, then scaled ~15%, then a further 20%
+        # 35pt (was 44, then 28pt, then scaled ~15%, then a further 10%
         # for retina legibility): the 44pt frames padded the whole header
         # row out, leaving dead space between the title and the provider
         # tabs. Still a comfortable macOS pointer target.
-        self.assertIn(".frame(width: 38.5, height: 38.5)", options)
+        self.assertIn(".frame(width: 35, height: 35)", options)
         self.assertIn(".menuIndicator(.hidden)", options)
         self.assertIn('.accessibilityLabel("More options")', options)
 
@@ -675,13 +675,25 @@ class TestMacOptionsMenu(unittest.TestCase):
         # The horizontal and bottom margins ARE the shared theme's PAD, so
         # they are spelled from it rather than hardcoded — a scale-up of
         # the whole table should not have to come back and edit a test
-        # about margin BALANCE. The top inset is deliberately tighter than
-        # PAD and has no constant of its own, so it stays a literal.
+        # about margin BALANCE.
+        #
+        # The top inset has no constant of its own, but "tighter than PAD"
+        # IS the claim this test is named for, so it is asserted as that
+        # relationship rather than as whatever literal it currently holds —
+        # a hardcoded number here fails on the next scale-up for a reason
+        # that has nothing to do with the inset being compact.
         popover = self.source(SWIFT_POPOVER)
         pad = f"{theme.PAD:g}"
         self.assertIn(f".padding(.horizontal, {pad})", popover)
         self.assertIn(f".padding(.bottom, {pad})", popover)
-        self.assertIn(".padding(.top, 6.5)", popover)
+        # Anchored to the bottom margin it sits beside: the footer has a
+        # `.padding(.top, 1)` of its own, and a bare search would find
+        # whichever came first in the file.
+        top = re.search(rf"\.padding\(\.bottom, {pad}\)\s*\n\s*"
+                        r"\.padding\(\.top, ([\d.]+)\)", popover)
+        self.assertIsNotNone(top, "could not find the popover's top inset")
+        self.assertLess(float(top.group(1)), theme.PAD)
+        self.assertGreater(float(top.group(1)), 0)
         self.assertNotIn(f".padding({pad})", popover)
 
 
