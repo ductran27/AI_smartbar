@@ -16,6 +16,7 @@ exactly this, so `_rule_for` matches `exe` against argv[0] and the optional
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -237,3 +238,242 @@ def validate_kill(token: str, table, my_uid: int, own_pids) -> tuple:
     if is_session_exe(proc.args):
         return False, "that is a live Claude/Codex session — close it there"
     return True, ""
+
+
+# --- display formatting ----------------------------------------------------
+
+MAX_CORE_COLUMNS = 32
+HISTORY_LEN = 60
+_DEV_KEYWORDS = ("serve-dist.mjs", "serve.mjs", "http.server", "live-server",
+                 "vite", "next", "webpack", "uvicorn", "flask")
+
+
+def format_age(seconds: int) -> str:
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} m"
+    if seconds < 86400:
+        return f"{seconds // 3600} h"
+    return f"{seconds // 86400} d"
+
+
+def _basename(path: str) -> str:
+    return path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _bundle_or_base(args: str) -> str:
+    """The Mac .app bundle name if the exe is bundled, else argv[0]'s base."""
+    exe = exe_token(args)
+    m = re.search(r"/([^/]+)\.app/", exe)
+    return m.group(1) if m else _basename(exe)
+
+
+def display_name(proc) -> str:
+    """A short, human name for a process row."""
+    args = proc.args
+    rule = _rule_for(args)
+    if rule is not None:
+        if rule.label == "headless Chrome (CDP)":
+            base = "Chromium" if "Chromium" in exe_token(args) else "Google Chrome"
+            return f"{base} (headless)"
+        if rule.label == "esbuild service":
+            return "esbuild --service"
+        if rule.label == "puppeteer Chrome for Testing":
+            return "Chrome for Testing"
+        if rule.label == "playwright browser":
+            return "playwright browser"
+        if rule.label == "Claude Code shell snapshot":
+            return "shell snapshot"
+        if rule.label == "dev server":
+            interp = _basename(exe_token(args).split(" ", 1)[0])
+            for keyword in _DEV_KEYWORDS:
+                if re.search(rf"\b{re.escape(keyword)}\b", args):
+                    return f"{interp} {_basename(keyword)}"
+            return interp
+    return _bundle_or_base(args)
+
+
+def display_sub(proc) -> str:
+    """A secondary identifier: the pid, plus a profile or port when there is
+    one worth naming."""
+    args = proc.args
+    m = re.search(r"/tmp/cdp-prof-(\d+)", args)
+    if m:
+        return f"pid {proc.pid} · cdp-prof-{m.group(1)}"
+    m = re.search(r"(?:--port[= ]|:)(\d{2,5})\b", args)
+    if m and _rule_for(args) is not None:
+        return f"pid {proc.pid} · :{m.group(1)}"
+    return f"pid {proc.pid}"
+
+
+def _mem_text(kb: int) -> str:
+    mb = kb / 1024
+    return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{round(mb)} MB"
+
+
+def _fold_cores(cores: list) -> list:
+    """Per-core percentages capped at MAX_CORE_COLUMNS, averaging adjacent
+    cores into a single column when there are more (a 64-core box shows 32
+    two-core columns, not 64 slivers)."""
+    values = [round(c) for c in cores]
+    if len(values) <= MAX_CORE_COLUMNS:
+        return values
+    size = math.ceil(len(values) / MAX_CORE_COLUMNS)
+    return [round(sum(values[i:i + size]) / len(values[i:i + size]))
+            for i in range(0, len(values), size)]
+
+
+# --- the display-ready payload ---------------------------------------------
+
+def _session_pids(procs, table) -> set:
+    """Every pid that is a claude/codex process OR a descendant of one — a
+    session's whole tree (MCP servers, shells, helpers) is off the kill path
+    and out of the leftover/idle buckets, which per-process classify() cannot
+    know on its own."""
+    out: set = set()
+    for proc in procs:
+        if is_session_exe(proc.args):
+            out |= tree_pids(proc.pid, table)
+    return out
+
+
+def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
+               history) -> dict:
+    """Turn one sample into the FINAL display payload the renderers draw and
+    Swift decodes verbatim. Every string is formed here; no consumer maps."""
+    table = {p.pid: p for p in procs}
+    sessions = _session_pids(procs, table)
+
+    kinds = {}
+    for proc in procs:
+        orphan = proc.ppid == 1
+        kind = classify(proc, orphan, proc.cpu, prev_cpu.get(proc.pid, 0.0),
+                        my_uid)
+        if proc.pid in sessions:
+            kind = "session"
+        kinds[proc.pid] = kind
+
+    # --- leftovers: one row per orphaned junk/idle ROOT (a whole tree) -----
+    leftover_members: set = set()
+    left_rows = []
+    hot = hot_threshold()
+    for proc in procs:
+        if kinds[proc.pid] not in ("junk", "idle"):
+            continue
+        leftover_members |= tree_pids(proc.pid, table)
+        cpu = tree_cpu(proc.pid, table)
+        burning = kinds[proc.pid] == "junk" and cpu >= hot
+        cpu_text = f"{int(cpu)}%" if cpu >= 1 else "idle"
+        left_rows.append({
+            "token": kill_token(proc),
+            "kind": kinds[proc.pid],
+            "name": display_name(proc),
+            "sub": display_sub(proc),
+            "meta": f"orphan · {format_age(proc.elapsed)} · {cpu_text}",
+            "burning": burning,
+            "cores": round(cpu / 100, 1),
+            "mem": tree_mem_mb(proc.pid, table),
+        })
+    left_rows.sort(key=lambda r: (not r["burning"], -r["cores"]))
+    burning_rows = [r for r in left_rows if r["burning"]]
+    if burning_rows:
+        chip = (f"{len(burning_rows)} burning · "
+                f"{sum(r['cores'] for r in burning_rows):.1f} cores")
+    elif left_rows:
+        chip = f"{len(left_rows)} idle"
+    else:
+        chip = ""
+    more = max(0, len(left_rows) - 8)
+    watched = sum(1 for k in kinds.values() if k == "watch")
+    foot = (f"Auto-kill {'on' if autokill_enabled() else 'off'} · "
+            f"junk rules: {len(JUNK_RULES)}")
+    if watched:
+        foot += f" · {watched} watched"
+
+    # --- busy: top folded processes (excludes leftover trees) --------------
+    folds = {}
+    for proc in procs:
+        if proc.pid in leftover_members:
+            continue
+        name = display_name(proc)
+        fold = folds.setdefault(name, {"cpu": 0.0, "mem": 0, "pids": [],
+                                       "kinds": set(), "procs": []})
+        fold["cpu"] += proc.cpu
+        fold["mem"] += proc.rss_kb
+        fold["pids"].append(proc.pid)
+        fold["kinds"].add(kinds[proc.pid])
+        fold["procs"].append(proc)
+    busy_rows = []
+    for name, fold in folds.items():
+        if fold["cpu"] < 1:
+            continue
+        if "session" in fold["kinds"]:
+            kind = "session"
+        elif fold["kinds"] == {"system"}:
+            kind = "system"
+        else:
+            kind = "hot"
+        killable = kind not in ("session", "system")
+        procs_sorted = sorted(fold["procs"], key=lambda p: -p.cpu)
+        if len(procs_sorted) == 1:
+            token = kill_token(procs_sorted[0])
+        else:
+            token = "group:" + ",".join(kill_token(p) for p in procs_sorted)
+        count = len(procs_sorted)
+        busy_rows.append({
+            "token": token,
+            "kind": kind,
+            "name": name,
+            "sub": f"×{count}" if count > 1 else "",
+            "count": count,
+            "cpu": round(fold["cpu"]),
+            "mem": round(fold["mem"] / 1024),
+            "meta": f"{round(fold['cpu'])}% · {_mem_text(fold['mem'])}",
+            "killable": killable,
+        })
+    busy_rows.sort(key=lambda r: -r["cpu"])
+    busy_rows = busy_rows[:6]
+
+    # --- vitals ------------------------------------------------------------
+    folded_cores = _fold_cores(cores)
+    cpu_pct = round(sum(cores) / len(cores)) if cores else 0
+    claude_n = sum(1 for p in procs if re.search(r"(^|/)claude$",
+                                                 exe_token(p.args)))
+    codex_n = sum(1 for p in procs if re.search(r"(^|/)codex$",
+                                                exe_token(p.args)))
+    caption_parts = []
+    if claude_n:
+        caption_parts.append(f"{claude_n} claude")
+    if codex_n:
+        caption_parts.append(f"{codex_n} codex")
+    caption_parts.append(f"{len(procs)} procs")
+    cpu_caption = " · ".join(caption_parts)
+
+    total_gb = mem.get("totalBytes", 0) / 2**30
+    used_gb = mem.get("usedBytes", 0) / 2**30
+    mem_caption = f"{used_gb:.1f} / {total_gb:.0f} GB"
+    comp = mem.get("compressedBytes")
+    if comp:
+        mem_caption += f" · {comp / 2**30:.1f} GB compressed"
+
+    hist = list(history)
+    present = [p for p in hist if p is not None]
+    peak = max(present) if present else 0
+    last = present[-1] if present else 0
+
+    load0, load1, load2 = (list(load) + [0, 0, 0])[:3]
+    machine_caption = (f"{len(cores)} cores · {total_gb:.0f} GB · "
+                       f"load {load0:.1f} · {load1:.1f} · {load2:.1f}")
+
+    return {
+        "sampledAt": now.strftime("%H:%M"),
+        "machine": {"caption": machine_caption},
+        "cpu": {"pct": cpu_pct, "cores": folded_cores, "caption": cpu_caption},
+        "history": {"pct": hist, "peakText": f"peak {peak}%", "lastPct": last},
+        "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption},
+        "leftovers": {"chip": chip, "rows": left_rows[:8], "more": more,
+                      "foot": foot},
+        "busy": {"caption": f"≥ {int(hot)}% CPU over two samples",
+                 "rows": busy_rows},
+    }

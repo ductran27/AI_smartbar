@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import datetime, timezone
 
 from smartbar.core import sysmon
 
@@ -236,6 +237,158 @@ class TestTreeAndKill(unittest.TestCase):
         ok, error = sysmon.validate_kill("nonsense", self.table(), my_uid=501,
                                          own_pids=set())
         self.assertFalse(ok)
+
+
+class TestDisplayHelpers(unittest.TestCase):
+    def test_format_age(self):
+        self.assertEqual(sysmon.format_age(30), "just now")
+        self.assertEqual(sysmon.format_age(90), "1 m")
+        self.assertEqual(sysmon.format_age(3600), "1 h")
+        self.assertEqual(sysmon.format_age(6 * 3600), "6 h")
+        self.assertEqual(sysmon.format_age(3 * 86400), "3 d")
+
+    def test_display_name_headless_chrome(self):
+        proc = sysmon.Proc(1, 1, 501, 0, 0, 0.0,
+                           "/Applications/Google Chrome.app/Contents/MacOS/"
+                           "Google Chrome --headless --user-data-dir=/tmp/"
+                           "cdp-prof-9603")
+        self.assertEqual(sysmon.display_name(proc), "Google Chrome (headless)")
+
+    def test_display_name_esbuild(self):
+        proc = sysmon.Proc(1, 1, 501, 0, 0, 0.0, "/x/bin/esbuild --service")
+        self.assertEqual(sysmon.display_name(proc), "esbuild --service")
+
+    def test_display_name_dev_server(self):
+        proc = sysmon.Proc(1, 1, 501, 0, 0, 0.0,
+                           "/usr/local/bin/node /x/serve-dist.mjs")
+        self.assertEqual(sysmon.display_name(proc), "node serve-dist.mjs")
+
+    def test_display_sub_cdp_profile(self):
+        proc = sysmon.Proc(22493, 1, 501, 0, 0, 0.0,
+                           "/Applications/Google Chrome.app/Contents/MacOS/"
+                           "Google Chrome --headless --user-data-dir=/tmp/"
+                           "cdp-prof-9603")
+        self.assertEqual(sysmon.display_sub(proc), "pid 22493 · cdp-prof-9603")
+
+
+class TestBuildView(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("SMARTBAR_SYSMON_AUTOKILL", None)
+        self.now = datetime(2026, 8, 23, 21, 24, tzinfo=timezone.utc)
+
+    def procs(self):
+        return [
+            # headless Chrome orphan tree (root 100 + GPU helper 101)
+            sysmon.Proc(100, 1, 501, 50_000, 21600, 5.0,
+                        "/Applications/Google Chrome.app/Contents/MacOS/"
+                        "Google Chrome --headless --user-data-dir=/tmp/"
+                        "cdp-prof-9603", start=1000),
+            sysmon.Proc(101, 100, 501, 400_000, 21600, 575.0,
+                        "Google Chrome Helper (GPU) --type=gpu-process",
+                        start=1000),
+            # an orphaned dev server (idle)
+            sysmon.Proc(210, 1, 501, 30_000, 3 * 86400, 0.0,
+                        "/usr/local/bin/node /x/serve-dist.mjs", start=500),
+            # two Firefox processes (independent apps, ppid 1) — a fold
+            sysmon.Proc(300, 1, 501, 500_000, 100, 20.0,
+                        "/Applications/Firefox.app/Contents/MacOS/firefox",
+                        start=100),
+            sysmon.Proc(301, 1, 501, 300_000, 100, 18.0,
+                        "/Applications/Firefox.app/Contents/MacOS/firefox "
+                        "-contentproc", start=100),
+            # claude session + node MCP child
+            sysmon.Proc(400, 1, 501, 900_000, 3600, 60.0,
+                        "/Users/ductran/.local/bin/claude", start=3000),
+            sysmon.Proc(401, 400, 501, 100_000, 3600, 55.0,
+                        "/usr/local/bin/node /x/mcp-server.js", start=3100),
+            # another user's process (system)
+            sysmon.Proc(2, 1, 0, 100_000, 99999, 60.0,
+                        "/System/Library/.../WindowServer", start=1),
+        ]
+
+    def view(self, prev=None):
+        return sysmon.build_view(
+            procs=self.procs(), cores=[40, 30, 10, 0], mem={
+                "totalBytes": 32 * 2**30, "usedBytes": 17 * 2**30 + 2**29,
+                "pct": 54.9, "compressedBytes": 3 * 2**30},
+            load=(5.2, 8.2, 23.4), prev_cpu=prev or {}, now=self.now,
+            my_uid=501, own_pids={9999}, history=[10, None, 84, 91, 12])
+
+    def test_leftovers_lists_orphan_junk_and_idle(self):
+        view = self.view()
+        kinds = [r["kind"] for r in view["leftovers"]["rows"]]
+        self.assertIn("junk", kinds)
+        self.assertIn("idle", kinds)
+
+    def test_headless_row_sums_helper_cpu_into_the_tree(self):
+        row = next(r for r in self.view()["leftovers"]["rows"]
+                   if r["kind"] == "junk")
+        self.assertEqual(row["name"], "Google Chrome (headless)")
+        self.assertEqual(row["token"], "100:1000")
+        self.assertTrue(row["burning"])          # 5 + 575 >= 50
+        self.assertIn("580%", row["meta"])       # tree cpu, one decimal dropped
+
+    def test_idle_dev_server_is_not_burning(self):
+        row = next(r for r in self.view()["leftovers"]["rows"]
+                   if r["kind"] == "idle")
+        self.assertFalse(row["burning"])
+        self.assertIn("idle", row["meta"])
+
+    def test_leftovers_chip_counts_burning_cores(self):
+        self.assertIn("burning", self.view()["leftovers"]["chip"])
+
+    def test_leftovers_sorted_burning_first(self):
+        kinds = [r["kind"] for r in self.view()["leftovers"]["rows"]]
+        self.assertEqual(kinds[0], "junk")       # burning before idle
+
+    def test_busy_folds_same_name_processes(self):
+        firefox = next(r for r in self.view()["busy"]["rows"]
+                       if r["name"] == "Firefox")
+        self.assertEqual(firefox["count"], 2)
+        self.assertTrue(firefox["killable"])
+        self.assertTrue(firefox["token"].startswith("group:"))
+
+    def test_busy_session_is_not_killable(self):
+        claude = next(r for r in self.view()["busy"]["rows"]
+                      if r["kind"] == "session")
+        self.assertFalse(claude["killable"])
+
+    def test_busy_system_is_not_killable(self):
+        row = next((r for r in self.view()["busy"]["rows"]
+                    if r["kind"] == "system"), None)
+        self.assertIsNotNone(row)
+        self.assertFalse(row["killable"])
+
+    def test_session_child_never_appears_as_a_leftover(self):
+        tokens = [r["token"] for r in self.view()["leftovers"]["rows"]]
+        self.assertNotIn("401:3100", tokens)     # the MCP child is a session
+
+    def test_cpu_block(self):
+        view = self.view()
+        self.assertEqual(view["cpu"]["pct"], 20)   # mean(40,30,10,0)
+        self.assertEqual(view["cpu"]["cores"], [40, 30, 10, 0])
+        self.assertIn("procs", view["cpu"]["caption"])
+
+    def test_mem_block(self):
+        view = self.view()
+        self.assertEqual(view["mem"]["pct"], 54.9)
+        self.assertIn("GB", view["mem"]["caption"])
+
+    def test_history_block(self):
+        view = self.view()
+        self.assertEqual(view["history"]["pct"], [10, None, 84, 91, 12])
+        self.assertEqual(view["history"]["lastPct"], 12)
+        self.assertIn("91", view["history"]["peakText"])
+
+    def test_cores_capped_and_paired_beyond_max(self):
+        many = list(range(64))
+        view = sysmon.build_view(procs=[], cores=many, mem={
+            "totalBytes": 1, "usedBytes": 0, "pct": 0.0}, load=(0, 0, 0),
+            prev_cpu={}, now=self.now, my_uid=501, own_pids=set(), history=[])
+        self.assertLessEqual(len(view["cpu"]["cores"]), sysmon.MAX_CORE_COLUMNS)
+
+    def test_foot_reports_autokill_state(self):
+        self.assertIn("Auto-kill off", self.view()["leftovers"]["foot"])
 
 
 if __name__ == "__main__":
