@@ -255,6 +255,17 @@ def scoped_worst(account):
     return max(scoped, key=lambda m: m.pct)
 
 
+def used_pct(pct) -> int:
+    """The one rounding rule for displayed percentages, on every platform.
+
+    Half AWAY from zero (12.5 → 13), clamped at 0 — matching Swift's
+    .rounded(). Python's round() is half-to-even, so the same payload
+    printed "12%" on Linux and "13%" on macOS; and a probe glitch's -3%
+    rendered literally.
+    """
+    return int(max(0.0, float(pct)) + 0.5)
+
+
 def icon_rows(account):
     """Rows for text-based badges: [(text, color)], 1 or 2 rows, % used.
 
@@ -264,7 +275,7 @@ def icon_rows(account):
     rows = []
     for m in (general_worst(account), scoped_worst(account)):
         if m is not None:
-            rows.append((f"{m.short}{round(m.pct)}", color(m.pct)))
+            rows.append((f"{m.short}{used_pct(m.pct)}", color(m.pct)))
     if not rows:
         rows.append(("?", "gray"))
     return rows
@@ -354,7 +365,8 @@ def best_switch(snapshot):
 
 
 def metrics_text(account) -> str:
-    return " · ".join(f"{m.short} {round(m.pct)}%" for m in account.metrics)
+    return " · ".join(f"{m.short} {used_pct(m.pct)}%"
+                      for m in account.metrics)
 
 
 def account_address(account) -> str:
@@ -407,7 +419,7 @@ def icon_text(account) -> str:
     m = worst(account)
     if m is None:
         return "?"
-    return f"{m.short}{round(m.pct)}"
+    return f"{m.short}{used_pct(m.pct)}"
 
 
 def macos_title(account) -> str:

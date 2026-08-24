@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .model import best_switch, red_threshold, worst
+from .model import best_switch, red_threshold, used_pct, worst
 from .reset_countdown_format import parse_iso, remaining_text
 
 # One usage window = one notification. The API re-stamps resets_at with
@@ -57,7 +57,7 @@ class AlertManager:
 
     def _build(self, snapshot, metric):
         suggestion = best_switch(snapshot)
-        title = f"Claude: {metric.label} — {round(metric.pct)}% used"
+        title = f"Claude: {metric.label} — {used_pct(metric.pct)}% used"
         if suggestion is None:
             title += " — no accounts left"
         lines = []
@@ -67,7 +67,7 @@ class AlertManager:
         if suggestion is not None:
             w = worst(suggestion)
             lines.append(f"Best switch: #{suggestion.number} {suggestion.email} "
-                         f"({round(w.pct)}% used)")
+                         f"({used_pct(w.pct)}% used)")
         else:
             lines.append("No other account available — you're on your own until this resets.")
         return Alert(title=title, body="\n".join(lines))

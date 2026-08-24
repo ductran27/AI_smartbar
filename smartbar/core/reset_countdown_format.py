@@ -69,7 +69,10 @@ def _windows_prefers_24_hour() -> bool:
         # 1 = 24-hour "HH" in the user's Control Panel short-time format.
         get_locale_info = ctypes.windll.kernel32.GetLocaleInfoW
         buf = ctypes.create_unicode_buffer(8)
-        n = get_locale_info(0x0400, 0x00000021, buf, len(buf))
+        # 0x23 is LOCALE_ITIME (12/24-hour). 0x21 — used here before — is
+        # LOCALE_IDATE, the short-DATE order, which made ja-JP read as
+        # 12-hour and DMY locales as 24-hour regardless of their clock.
+        n = get_locale_info(0x0400, 0x00000023, buf, len(buf))
         return n > 0 and buf.value.strip() == "1"
     except Exception:
         return False
@@ -100,13 +103,23 @@ def prefers_24_hour_clock() -> bool:
         return override == "24"
     if sys.platform == "win32":
         return _windows_prefers_24_hour()
+    fmt = _posix_time_format()
+    # glibc's en_US t_fmt is the ALIAS "%r" — a 12-hour format containing
+    # neither %I nor %l literally, which the plain substring test misread
+    # as 24-hour for every US Linux user.
+    if not fmt or "%r" in fmt:
+        return False
+    return "%I" not in fmt and "%l" not in fmt
+
+
+def _posix_time_format() -> str:
+    """The locale's T_FMT, or "" when it cannot be read."""
     try:
         previous = locale.setlocale(locale.LC_TIME)
         try:
             locale.setlocale(locale.LC_TIME, "")
-            fmt = locale.nl_langinfo(locale.T_FMT)
+            return locale.nl_langinfo(locale.T_FMT) or ""
         finally:
             locale.setlocale(locale.LC_TIME, previous)
     except (locale.Error, AttributeError, ValueError):
-        return False
-    return bool(fmt) and "%I" not in fmt and "%l" not in fmt
+        return ""

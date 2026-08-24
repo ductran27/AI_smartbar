@@ -140,10 +140,25 @@ def venv_python() -> str | None:
     if override:
         return override
     if sys.platform == "win32":
-        for candidate in ("~/.local/pipx/venvs/claude-swap/Scripts/python.exe",
-                          "~/.local/share/uv/tools/claude-swap/Scripts/python.exe"):
-            path = os.path.expanduser(candidate)
-            if os.path.exists(path):
+        appdata = os.environ.get("APPDATA", "")
+        local = os.environ.get("LOCALAPPDATA", "")
+        candidates = [
+            # New pipx (platformdirs): %LOCALAPPDATA%\pipx\pipx\venvs.
+            os.path.join(local, "pipx", "pipx", "venvs", "claude-swap",
+                         "Scripts", "python.exe") if local else "",
+            os.path.expanduser("~/pipx/venvs/claude-swap/Scripts/python.exe"),
+            os.path.expanduser(
+                "~/.local/pipx/venvs/claude-swap/Scripts/python.exe"),
+            # uv on Windows: %APPDATA%\uv\data\tools (and the older layout).
+            os.path.join(appdata, "uv", "data", "tools", "claude-swap",
+                         "Scripts", "python.exe") if appdata else "",
+            os.path.join(appdata, "uv", "tools", "claude-swap",
+                         "Scripts", "python.exe") if appdata else "",
+            os.path.expanduser(
+                "~/.local/share/uv/tools/claude-swap/Scripts/python.exe"),
+        ]
+        for path in candidates:
+            if path and os.path.exists(path):
                 return path
         return None
     try:
@@ -151,9 +166,23 @@ def venv_python() -> str | None:
             head = handle.read(512).decode("utf-8", errors="ignore")
     except (OSError, CswapError):
         return None
+    # Two launcher shapes: distlib's quoted sh-exec trick (used when the
+    # interpreter path contains a space) and the PLAIN shebang it writes
+    # otherwise — which is every standard Linux install. Matching only the
+    # quoted form silently disabled the primed near-live path there.
     match = re.search(r"'(/[^']*/bin/python[^']*)'", head)
     if match and os.path.exists(match.group(1)):
         return match.group(1)
+    match = re.match(r"#!(/\S*/bin/python\S*)", head)
+    if match and os.path.exists(match.group(1)):
+        return match.group(1)
+    # Last resort: the standard tool venv locations.
+    for candidate in ("~/.local/share/pipx/venvs/claude-swap/bin/python",
+                      "~/.local/pipx/venvs/claude-swap/bin/python",
+                      "~/.local/share/uv/tools/claude-swap/bin/python"):
+        path = os.path.expanduser(candidate)
+        if os.path.exists(path):
+            return path
     return None
 
 

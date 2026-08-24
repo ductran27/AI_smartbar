@@ -23,6 +23,16 @@ import unittest
 
 from smartbar.core import branding
 
+
+def _app_icon_or_skip(test):
+    """smartbar.paint.app_icon, or skip — it imports cairo at module scope,
+    and the README promises the suite runs (with skips) without pycairo."""
+    try:
+        from smartbar.paint import app_icon
+    except ImportError:
+        test.skipTest("pycairo not installed")
+    return app_icon
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET = os.path.join(REPO, "assets", "ai-smartbar.png")
 LINUX = os.path.join(REPO, "install", "linux.sh")
@@ -43,7 +53,7 @@ class TestTheAssetExists(unittest.TestCase):
         self.assertEqual(branding.icon_path(), ASSET)
 
     def test_it_is_a_square_png_at_the_size_app_icon_draws(self):
-        from smartbar.paint import app_icon
+        app_icon = _app_icon_or_skip(self)
 
         with open(ASSET, "rb") as handle:
             header = handle.read(24)
@@ -68,7 +78,7 @@ class TestTheLogoIsStillTheMenuBarMark(unittest.TestCase):
     in your menu bar. These are the numbers that make it the same object."""
 
     def test_pill_proportions_come_from_the_macos_badge(self):
-        from smartbar.paint import app_icon
+        app_icon = _app_icon_or_skip(self)
 
         swift = read(os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
                                   "MenuBarIcon.swift"))
@@ -80,7 +90,7 @@ class TestTheLogoIsStillTheMenuBarMark(unittest.TestCase):
 
     def test_the_fills_use_the_shared_ramp_and_stop_short_of_critical(self):
         from smartbar.core.model import RGB
-        from smartbar.paint import app_icon
+        app_icon = _app_icon_or_skip(self)
 
         names = [name for _, name in app_icon.STATES]
         for name in names:
