@@ -980,6 +980,27 @@ class TestTabActionUpdatesProviderAndLayout(GuiStubbedTestCase):
         _args, kwargs = fake_build.call_args
         self.assertEqual(kwargs.get("provider"), "openai")
 
+    def test_kill_hit_arms_confirm_and_confirm_kill_delegates(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = _bare_tray(mod)
+        tray.popover = None
+        tray._on_popover_action("kill:100:1000")
+        self.assertEqual(tray.confirm, "100:1000")
+        tray.controller = mock.MagicMock(name="controller")
+        tray._on_popover_action("confirm-kill:100:1000")
+        tray.controller.on_kill.assert_called_once_with("100:1000")
+        self.assertEqual(tray.confirm, "")
+
+    def test_popover_layout_forwards_the_system_payload(self):
+        mod = _reimport("smartbar.windows.tray")
+        tray = _bare_tray(mod)
+        tray.controller.system = {"leftovers": {"rows": []},
+                                  "busy": {"rows": []}}
+        with mock.patch.object(mod.popover_layout, "build") as fake_build:
+            tray._popover_layout()
+        self.assertIs(fake_build.call_args.kwargs["system"],
+                      tray.controller.system)
+
 class TestOptimisticFlip(GuiStubbedTestCase):
     """TrayController.on_switch owns WHEN the optimistic flip runs (pinned
     in test_tray_controller.py's TestOnSwitch); _flip_active_optimistically

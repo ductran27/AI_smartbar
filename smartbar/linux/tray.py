@@ -68,7 +68,7 @@ from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
 from smartbar.core import (model, paths, popover_layout, portable,
-                           presence)
+                           presence, sysmon)
 from smartbar.core import update as update_core
 from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
@@ -170,7 +170,7 @@ class Tray:
             error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
             action_error=c.action_error, refreshing=c.refreshing,
-            stale_reason=c.last_error)
+            stale_reason=c.last_error, system=c.system)
 
     def _on_popover_action(self, name):
         """Route a hit-tested click from the panel."""
@@ -194,6 +194,16 @@ class Tray:
         elif name.startswith("remove:"):
             # First click of the two-step removal: arm the in-card confirm.
             self.confirm = name.split(":", 1)[1]
+        elif name.startswith("confirm-kill:"):
+            self.confirm = ""
+            self.controller.on_kill(name.split(":", 1)[1])
+        elif name == "cancel-kill":
+            self.confirm = ""
+        elif name.startswith("kill:"):
+            # First click of the two-step kill: arm the in-row confirm.
+            self.confirm = name.split(":", 1)[1]
+        elif name.startswith("row:"):
+            pass   # hover container — a click on a process row does nothing
         elif name.startswith("card:"):
             pass   # hover container — a click on the card body does nothing
         elif name.startswith("switch:"):
@@ -498,6 +508,15 @@ def main():
     GLib.timeout_add_seconds(tray.interval, tray.controller._tick)
     if presence.enabled():
         GLib.timeout_add_seconds(int(presence.interval()), tray._presence_tick)
+    if sysmon.enabled():
+        # Machine vitals + leftover processes on their own cadence; the tick
+        # samples in a worker so it never blocks the GTK loop.
+        tray.controller.sysmon_tick()
+
+        def _sysmon_tick():
+            tray.controller.sysmon_tick()
+            return True
+        GLib.timeout_add_seconds(sysmon.interval(), _sysmon_tick)
     # GLib.unix_signal_add, not signal.signal: the latter only runs its
     # handler between bytecode instructions on the MAIN thread and would
     # have to somehow poke the GTK loop awake itself; unix_signal_add
