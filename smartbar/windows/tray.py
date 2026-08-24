@@ -224,7 +224,7 @@ class Tray:
         # the 60s urgent cadence near the limit); the store still paces the
         # real network, so faster polling adds no API traffic.
         self.root = root
-        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
+        self.interval = TrayController.poll_interval_from_env()
         self.controller = TrayController(self)
         self.provider = ""   # panel tab; "" auto-resolves in the layout
         self.confirm = ""    # card awaiting remove confirmation, or ""

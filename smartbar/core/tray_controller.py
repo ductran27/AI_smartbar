@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -241,6 +242,25 @@ class TrayController:
         self._sysmon_busy = False    # a sysmon sample is in flight
 
     # --- pending-update reading -----------------------------------------
+
+    @staticmethod
+    def poll_interval_from_env(default: float = 60.0,
+                               floor: float = 15.0) -> int:
+        """SMARTBAR_INTERVAL as the hosts' timer period, in whole seconds.
+
+        One parser for all three painted hosts: a bare int() crashed the
+        tray at startup on "90.0" or an empty line (both accepted by
+        config.env), and 0 made the GLib/tk timer fire continuously. Swift
+        applies the same floor.
+        """
+        raw = os.environ.get("SMARTBAR_INTERVAL", "").strip()
+        try:
+            value = float(raw)
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError(raw)
+        except (TypeError, ValueError):
+            value = default
+        return int(max(floor, value))
 
     def _pending_update(self) -> str:
         """The release the updater found waiting, or "" — never raises.

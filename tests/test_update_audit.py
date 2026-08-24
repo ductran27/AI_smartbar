@@ -158,6 +158,28 @@ class TestRunInstallerHardening(unittest.TestCase):
         self.assertEqual(seen["env"].get("SMARTBAR_UPDATE_CHANNEL"), "release")
 
 
+class TestCronSpecForLongIntervals(unittest.TestCase):
+    def test_a_day_is_once_a_day(self):
+        self.assertEqual(update.cron_spec(86400), "17 3 * * *")
+
+    def test_two_days_is_every_second_day(self):
+        self.assertEqual(update.cron_spec(2 * 86400), "17 3 */2 * *")
+
+    def test_sub_day_intervals_unchanged(self):
+        self.assertEqual(update.cron_spec(21600), "17 */6 * * *")
+        self.assertEqual(update.cron_spec(600), "*/10 * * * *")
+
+
+class TestPollIntervalParsing(unittest.TestCase):
+    def test_hosts_share_one_tolerant_parser(self):
+        from smartbar.core.tray_controller import TrayController
+        for raw, want in (("90.0", 90), ("", 60), ("banana", 60),
+                          ("0", 15), ("inf", 60), ("120", 120)):
+            with mock.patch.dict(os.environ, {"SMARTBAR_INTERVAL": raw}):
+                self.assertEqual(TrayController.poll_interval_from_env(),
+                                 want, raw)
+
+
 class TestDisabledCheckIsHonest(unittest.TestCase):
     def test_check_outcome_disabled_wording(self):
         outcome = update.check_outcome(disabled=True)

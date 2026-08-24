@@ -116,7 +116,13 @@ def cron_spec(seconds: float) -> str:
     minutes = max(1, int(round((seconds or 0) / 60.0)))
     if minutes < 60:
         return f"*/{minutes} * * * *"
-    return f"17 */{min(23, max(1, int(round(minutes / 60.0))))} * * *"
+    hours = max(1, int(round(minutes / 60.0)))
+    if hours < 24:
+        return f"17 */{hours} * * *"
+    # A day or more: once a day (every N days), at a fixed off-hour minute.
+    # `17 */23 * * *` — the old cap — fired at 00:17 AND 23:17 daily.
+    days = min(28, max(1, int(round(hours / 24.0))))
+    return f"17 3 */{days} * *" if days > 1 else "17 3 * * *"
 
 
 def minutes_spec(seconds: float) -> int:
