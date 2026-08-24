@@ -5,6 +5,12 @@
 // saturation means "how much is spent". The live stream is started while this
 // view is on screen and stopped when it leaves, so a closed popover can never
 // leave a sampler running (the failure this whole feature exists to catch).
+//
+// Geometry and type come from the shared theme table (popover_theme.py:
+// CARD_GAP 9, CARD_PAD_H/V 14/11.5, CARD_RADIUS 15.5, LABEL_W 73, SIZE_EMAIL
+// 15.5, SIZE_CAPTION 12.5, SIZE_CHIP 11.5, BAR_H 7.5, SYS_CORES_H 22,
+// SYS_HIST_H 34, SYS_ROW_H/TALL 26/38, PROC_KIND_W 48) — the same numbers
+// the cairo painters draw, so the tab is one instrument on every platform.
 import SwiftUI
 
 struct SystemView: View {
@@ -17,7 +23,7 @@ struct SystemView: View {
     private var palette: Palette { Palette.of(colorScheme) }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 9) {
             vitalsCard
             leftoversCard
             busyCard
@@ -34,16 +40,16 @@ struct SystemView: View {
 
     private var vitalsCard: some View {
         card {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 Circle().fill(ramp(Double(payload.cpu.pct)))
-                    .frame(width: 8, height: 8)
-                Text("This Mac").font(.callout.weight(.semibold))
+                    .frame(width: 9, height: 9)
+                Text("This Mac").font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(palette.text)
-                Text(payload.machine.caption).font(.caption2)
+                Text(payload.machine.caption).font(.system(size: 12.5))
                     .foregroundStyle(palette.textTertiary).lineLimit(1)
                 Spacer(minLength: 4)
                 if payload.live {
-                    Text("LIVE").font(.system(size: 10.5, weight: .bold))
+                    Text("LIVE").font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(ramp(0))
                         .padding(.horizontal, 6).padding(.vertical, 1.5)
                         .background(Capsule().fill(ramp(0).opacity(0.18)))
@@ -73,10 +79,10 @@ struct SystemView: View {
                     ZStack(alignment: .leading) {
                         Capsule().fill(palette.barTrack)
                         Capsule().fill(ramp(payload.mem.pct))
-                            .frame(width: max(7, geo.size.width
+                            .frame(width: max(7.5, geo.size.width
                                               * min(payload.mem.pct, 100) / 100))
                     }
-                }.frame(height: 7)
+                }.frame(height: 7.5)
             }
         }
     }
@@ -87,13 +93,13 @@ struct SystemView: View {
         -> some View {
         VStack(alignment: .leading, spacing: 2.5) {
             HStack(spacing: 8) {
-                Text(label).font(.system(size: 12, weight: .semibold))
+                Text(label).font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(palette.text)
-                    .frame(width: 46, alignment: .leading)
-                Text(caption).font(.caption2)
+                    .frame(width: 73, alignment: .leading)
+                Text(caption).font(.system(size: 12.5))
                     .foregroundStyle(palette.textSecondary).lineLimit(1)
                 Spacer(minLength: 6)
-                Text(value).font(.system(size: 12, design: .monospaced))
+                Text(value).font(.system(size: 12.5, design: .monospaced))
                     .foregroundStyle(palette.text)
             }
             content()
@@ -125,15 +131,22 @@ struct SystemView: View {
                        chip: payload.leftovers.chip)
             if payload.leftovers.rows.isEmpty {
                 Text("Nothing left behind — every orphan is gone.")
-                    .font(.caption2).foregroundStyle(palette.textSecondary)
+                    .font(.system(size: 12.5)).foregroundStyle(palette.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ForEach(payload.leftovers.rows) { row in
                     procRow(row, tall: true)
                 }
             }
-            if let foot = payload.leftovers.foot, !foot.isEmpty {
-                Text(foot).font(.caption2).foregroundStyle(palette.textTertiary)
+            // "+N more" rides the foot line exactly as the painted hosts draw
+            // it (popover_layout._system_view) — 9+ orphans used to be
+            // invisible here.
+            let more = payload.leftovers.more ?? 0
+            let foot = (payload.leftovers.foot ?? "")
+                + (more > 0 ? " · +\(more) more" : "")
+            if !foot.isEmpty {
+                Text(foot).font(.system(size: 12.5))
+                    .foregroundStyle(palette.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 4)
             }
@@ -144,8 +157,14 @@ struct SystemView: View {
         card {
             procHeader(title: "Busy",
                        caption: payload.busy.caption ?? "", chip: nil)
-            ForEach(payload.busy.rows) { row in
-                procRow(row, tall: false)
+            if payload.busy.rows.isEmpty {
+                Text("Nothing busy right now.")
+                    .font(.system(size: 12.5)).foregroundStyle(palette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ForEach(payload.busy.rows) { row in
+                    procRow(row, tall: false)
+                }
             }
         }
     }
@@ -153,14 +172,14 @@ struct SystemView: View {
     private func procHeader(title: String, caption: String,
                             chip: String?) -> some View {
         HStack(spacing: 8) {
-            Text(title).font(.callout.weight(.semibold))
+            Text(title).font(.system(size: 15.5, weight: .semibold))
                 .foregroundStyle(palette.text)
-            Text(caption).font(.caption2)
+            Text(caption).font(.system(size: 12.5))
                 .foregroundStyle(palette.textTertiary).lineLimit(1)
             Spacer(minLength: 4)
             if let chip, !chip.isEmpty {
                 let burning = chip.contains("burning")
-                Text(chip).font(.system(size: 10.5))
+                Text(chip).font(.system(size: 11.5))
                     .foregroundStyle(burning ? palette.danger
                                      : palette.textSecondary)
                     .padding(.horizontal, 8).padding(.vertical, 1.5)
@@ -174,14 +193,17 @@ struct SystemView: View {
         if confirmToken == row.token && row.isKillable {
             HStack(spacing: 7) {
                 Text("Kill \(row.name)?")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(palette.text).lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer(minLength: 6)
                 Button("Kill") { confirmToken = nil; system.kill(row.token) }
                     .buttonStyle(.borderedProminent).tint(palette.danger)
                     .controlSize(.small)
+                    .help("Kill \(row.name)")
                 Button("Keep") { confirmToken = nil }
                     .buttonStyle(.bordered).controlSize(.small)
+                    .help("Keep this process")
             }
             .frame(height: tall ? 38 : 26)
         } else {
@@ -200,14 +222,15 @@ struct SystemView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 8) {
                     kindChip(row.kind)
-                    Text(row.name).font(.system(size: 12))
+                    Text(row.name).font(.system(size: 12.5))
                         .foregroundStyle(palette.text).lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer(minLength: 6)
                     if showCross { crossButton(row) }
-                    Text(row.meta).font(.system(size: 11, design: .monospaced))
+                    Text(row.meta).font(.system(size: 12.5, design: .monospaced))
                         .foregroundStyle(palette.textSecondary)
                 }
-                Text(row.sub).font(.caption2)
+                Text(row.sub).font(.system(size: 12.5))
                     .foregroundStyle(palette.textTertiary).lineLimit(1)
                     .padding(.leading, 56)
             }
@@ -215,11 +238,11 @@ struct SystemView: View {
             HStack(spacing: 8) {
                 kindChip(row.kind)
                 Text(row.sub.isEmpty ? row.name : "\(row.name)   \(row.sub)")
-                    .font(.system(size: 12)).foregroundStyle(palette.text)
-                    .lineLimit(1)
+                    .font(.system(size: 12.5)).foregroundStyle(palette.text)
+                    .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 6)
                 if showCross { crossButton(row) }
-                Text(row.meta).font(.system(size: 11, design: .monospaced))
+                Text(row.meta).font(.system(size: 12.5, design: .monospaced))
                     .foregroundStyle(palette.textSecondary)
             }
         }
@@ -233,15 +256,18 @@ struct SystemView: View {
         .buttonStyle(.plain).help("Kill \(row.name)")
     }
 
+    /// Kind-chip ink mirrors popover_layout._kind_ink: junk and hot take the
+    /// STATUS ramp's critical and yellow (the same reds/ambers every card
+    /// uses), not the palette's danger/warning button tints.
     private func kindChip(_ kind: String) -> some View {
         let ink: Color
         switch kind {
-        case "junk": ink = palette.danger
-        case "hot": ink = palette.warning
+        case "junk": ink = Status.critical.color(in: colorScheme)
+        case "hot": ink = Status.yellow.color(in: colorScheme)
         case "session": ink = ramp(0)
         default: ink = palette.textTertiary
         }
-        return Text(kind).font(.system(size: 10))
+        return Text(kind).font(.system(size: 11.5))
             .foregroundStyle(ink)
             .frame(width: 48)
             .padding(.vertical, 2)
@@ -251,10 +277,10 @@ struct SystemView: View {
     private func card<Content: View>(@ViewBuilder content: () -> Content)
         -> some View {
         VStack(alignment: .leading, spacing: 0, content: content)
-            .padding(.horizontal, 12.5).padding(.vertical, 10.5)
+            .padding(.horizontal, 14).padding(.vertical, 11.5)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14).fill(palette.cardBG))
-            .overlay(RoundedRectangle(cornerRadius: 14)
+            .background(RoundedRectangle(cornerRadius: 15.5).fill(palette.cardBG))
+            .overlay(RoundedRectangle(cornerRadius: 15.5)
                 .stroke(palette.cardBorder, lineWidth: 1))
     }
 }

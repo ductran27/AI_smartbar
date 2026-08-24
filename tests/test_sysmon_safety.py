@@ -288,6 +288,8 @@ class TestRunnerOrdering(unittest.TestCase):
             view = sysmon_runner.background_tick()
         self.assertEqual(view["history"]["pct"][-1], 40)
         self.assertEqual(view["history"]["lastPct"], 40)
+        # The Mac honours SMARTBAR_SYSMON_INTERVAL through the payload.
+        self.assertEqual(view["pollInterval"], sysmon.interval())
 
 
 class TestProbeCorrectness(unittest.TestCase):

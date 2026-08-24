@@ -110,11 +110,20 @@ enum CswapClient {
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout,
                                           execute: killTimer)
+        // Drain BOTH pipes before waiting: a child writing more than the
+        // 64 KB pipe buffer (a chatty venv python on stderr, a long list)
+        // blocks on write while we block in waitUntilExit — a deadlock the
+        // kill timer only resolves 40 s later as "cswap failed (rc=15)".
+        var errData = Data()
+        let drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.signal()
+        }
+        let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
         process.waitUntilExit()
         killTimer.cancel()
-
-        let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         return (process.terminationStatus, outData, errData)
     }
 
@@ -145,12 +154,27 @@ enum CswapClient {
                                 encoding: .utf8)
         else { return nil }
         defer { try? handle.close() }
-        guard let match = head.range(of: #"'(/[^']*/bin/python[^']*)'"#,
-                                     options: .regularExpression) else {
-            return nil
+        // Two launcher shapes (mirror of cswap.venv_python): distlib's
+        // quoted sh-exec trick, used only when the interpreter path has a
+        // space, and the PLAIN shebang it writes otherwise.
+        if let match = head.range(of: #"'(/[^']*/bin/python[^']*)'"#,
+                                  options: .regularExpression) {
+            let path = String(head[match].dropFirst().dropLast())
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
-        let path = String(head[match].dropFirst().dropLast())
-        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        if let match = head.range(of: #"^#!(/\S*/bin/python\S*)"#,
+                                  options: .regularExpression) {
+            let path = String(head[match].dropFirst(2))
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for candidate in [home + "/.local/share/pipx/venvs/claude-swap/bin/python",
+                          home + "/.local/pipx/venvs/claude-swap/bin/python",
+                          home + "/.local/share/uv/tools/claude-swap/bin/python"]
+        where FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        return nil
     }
 
     /// Best-effort store freshen; failures are silent (the follow-up list

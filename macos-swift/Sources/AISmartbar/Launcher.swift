@@ -23,8 +23,12 @@ enum Launcher {
     static func environment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // Mirrors install/macos-update.sh's AGENT_PATH — /usr/sbin:/sbin
+        // included: sysctl lives there, and without it the probe reported
+        // a 0 GB machine ("34.8 / 0 GB · 0%").
         environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
+                               "/usr/local/bin", "/usr/bin", "/bin",
+                               "/usr/sbin", "/sbin"]
             .joined(separator: ":")
         return environment
     }

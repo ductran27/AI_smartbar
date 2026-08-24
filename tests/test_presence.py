@@ -584,13 +584,15 @@ class TestMacAndLinuxAgree(unittest.TestCase):
 
     def test_the_kill_switch_is_spelled_the_same(self):
         self.assertIn('environment["SMARTBAR_PRESENCE"]', self.swift)
-        self.assertIn(
-            'raw.trimmingCharacters(in: .whitespaces).lowercased() != "off"',
-            self.swift)
-        # …and Python really does trim and lowercase, so " OFF " agrees.
-        for value in ("off", "OFF", " Off "):
+        # Both sides trim, lowercase, and accept the same falsy spellings
+        # (audit B5: "0"/"false"/"no" used to keep publishing on both).
+        self.assertIn('!["off", "0", "false", "no"].contains(value)',
+                      self.swift)
+        self.assertIn("trimmingCharacters(in: .whitespaces).lowercased()",
+                      self.swift)
+        for value in ("off", "OFF", " Off ", "0", "false", "No"):
             os.environ["SMARTBAR_PRESENCE"] = value
-            self.assertFalse(presence.enabled())
+            self.assertFalse(presence.enabled(), value)
         os.environ.pop("SMARTBAR_PRESENCE", None)
 
     def test_the_beat_interval_default_and_floor_match(self):

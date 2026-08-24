@@ -332,6 +332,7 @@ struct Snapshot: Equatable {
 
 struct SystemPayload: Decodable, Equatable {
     var live: Bool
+    var pollInterval: Int?   // the device's configured poll period (seconds)
     var machine: SysMachine
     var cpu: SysCPU
     var history: SysHistory
@@ -368,6 +369,8 @@ struct SysGroup: Decodable, Equatable {
     var caption: String?
     var foot: String?
     var rows: [ProcRow]
+    var burning: Int?      // leftovers: burning count over the FULL set
+    var more: Int?         // leftovers: rows beyond the displayed cap
 }
 
 struct ProcRow: Decodable, Equatable, Identifiable {

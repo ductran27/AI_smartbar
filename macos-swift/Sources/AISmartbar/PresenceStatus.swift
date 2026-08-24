@@ -54,7 +54,9 @@ final class PresenceStatus: ObservableObject {
     /// kill switch for every remote write this app can make.
     nonisolated private static var isEnabled: Bool {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_PRESENCE"] ?? ""
-        return raw.trimmingCharacters(in: .whitespaces).lowercased() != "off"
+        let value = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        // Same falsy spellings as core/presence.enabled().
+        return !["off", "0", "false", "no"].contains(value)
     }
 
     init() {
@@ -205,14 +207,8 @@ final class PresenceStatus: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
         process.arguments = arguments
-        // launchd hands a GUI app a bare PATH, and the launcher's shebang
-        // has to be able to find python3.
-        var environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
-            .joined(separator: ":")
-        process.environment = environment
+        // One PATH fix for every helper — Launcher.environment().
+        process.environment = Launcher.environment()
         let input = Pipe()
         process.standardInput = input
         process.standardOutput = FileHandle.nullDevice

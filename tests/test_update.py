@@ -554,9 +554,18 @@ class TestBothUIsShareOneAnswer(unittest.TestCase):
                              "of showing what --check-update --json returned")
 
     def test_the_mac_never_infers_up_to_date_from_an_exit_code(self):
-        # The specific mistake this design exists to prevent.
+        # The specific mistake this design exists to prevent: the CHECK path
+        # (runCheck) must display what --check-update --json said, never an
+        # exit code. launchctl's own exit code is a different matter —
+        # whether `kickstart` even started the job is something Python has
+        # no wording for (audit B10 made that spawn waitable), so the pin is
+        # scoped to the check function rather than the whole file.
         swift = self.source(SWIFT_UPDATE)
-        self.assertNotIn("terminationStatus", swift)
+        start = swift.index("func runCheck(")
+        end = swift.index("func installUpdate(")
+        self.assertNotIn("terminationStatus", swift[start:end])
+        # …and the launch-failure use stays where it belongs.
+        self.assertIn("func spawnAndWait(", swift)
 
 
 class TestTheMacOffersMainChannelUpdatesToo(unittest.TestCase):

@@ -44,7 +44,9 @@ enum MenuBarIcon {
                     string: "?",
                     attributes: [
                         .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-                        .foregroundColor: NSColor(white: 1, alpha: 0.75),
+                        // Mid-gray, not white: on the light menu bar the
+                        // no-data "?" was invisible (only hollow pills).
+                        .foregroundColor: NSColor(white: 0.55, alpha: 0.95),
                     ])
                 let bounds = question.size()
                 question.draw(at: NSPoint(x: (width - bounds.width) / 2,

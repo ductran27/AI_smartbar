@@ -146,6 +146,10 @@ def background_tick() -> dict:
     view["alerts"] = alerts
     view["autokilled"] = autokilled
     view["live"] = False
+    # The device's configured cadence rides in the payload so the macOS app
+    # can honour SMARTBAR_SYSMON_INTERVAL without reading the variable
+    # itself (the parity rule: Swift maps nothing).
+    view["pollInterval"] = sysmon.interval()
     return view
 
 

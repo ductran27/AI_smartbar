@@ -29,6 +29,7 @@ final class UpdateStatus: ObservableObject {
     private static let updateGrace: TimeInterval = 600
 
     private var repoRoot = ""      // learned from the state file
+    private var checkToken = 0     // generation of the result-clear timer
     private var triggeredAt: Date?
     private var timer: Timer?
     private var activationObserver: NSObjectProtocol?
@@ -151,10 +152,16 @@ final class UpdateStatus: ObservableObject {
                    let body = answer["body"] as? String {
                     UsageStore.notify(title: title, body: body)
                 }
-                // Clear after a moment so the footer goes back to the version.
+                // Clear after a moment so the footer goes back to the
+                // version — but only THIS check's result: two checks inside
+                // 20 s let the first timer wipe the second's answer early.
+                self.checkToken += 1
+                let token = self.checkToken
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: 20_000_000_000)
-                    if self?.isChecking == false { self?.checkResult = "" }
+                    guard let self, self.checkToken == token,
+                          !self.isChecking else { return }
+                    self.checkResult = ""
                 }
             }
         }
@@ -162,18 +169,18 @@ final class UpdateStatus: ObservableObject {
 
     /// Runs the check and returns its JSON, or [:] if anything went wrong.
     nonisolated private static func runCheck(_ root: String) -> [String: Any] {
-        let launcher = (root.isEmpty ? nil : root).map { $0 + "/bin/ai-smartbar" }
+        // Launcher.path() resolves SMARTBAR_REPO_ROOT (baked into the app
+        // plist) and the default checkout — a device installed with
+        // --no-auto-update never writes repoRoot into the state file, so the
+        // state-file-only lookup answered "✕ Could not check" forever there.
+        let launcher = Launcher.path()
+            ?? (root.isEmpty ? nil : root).map { $0 + "/bin/ai-smartbar" }
         guard let launcher, FileManager.default.isExecutableFile(atPath: launcher)
         else { return [:] }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
         process.arguments = ["--check-update", "--json"]
-        var environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
-            .joined(separator: ":")
-        process.environment = environment
+        process.environment = Launcher.environment()
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -220,15 +227,39 @@ final class UpdateStatus: ObservableObject {
                                                  root: String) -> Bool {
         if agentInstalled() {
             // launchd owns the job, so it survives this app being restarted
-            // by the update it is performing.
-            return spawn("/bin/launchctl",
-                         ["kickstart", "-k", "gui/\(uid)/\(label)"])
+            // by the update it is performing. Plain kickstart, NOT -k: -k
+            // kills a running instance, and the agent writes pendingVersion
+            // (which draws this very button) BEFORE its 1-3 minute build —
+            // clicking "hurry up" killed the apply mid-install, with no
+            // signal handler and no rollback. A job already running is the
+            // update; kickstart of a running job is a harmless no-op.
+            return spawnAndWait("/bin/launchctl",
+                                ["kickstart", "gui/\(uid)/\(label)"])
         }
-        guard !root.isEmpty else { return false }
-        // Device opted out of the agent: run the updater detached.
+        // Device opted out of the agent: run the updater detached. The
+        // checkout comes from the same resolution the other helpers use.
+        let checkout = Launcher.path().map {
+            String($0.dropLast("/bin/ai-smartbar".count))
+        } ?? root
+        guard !checkout.isEmpty else { return false }
         return spawn("/bin/sh",
-                     ["-c", "nohup \"\(root)/bin/ai-smartbar\" --update "
+                     ["-c", "nohup \"\(checkout)/bin/ai-smartbar\" --update "
                           + ">/dev/null 2>&1 &"])
+    }
+
+    /// launchctl returns immediately (only the JOB restarts this app), so it
+    /// can be waited on — a plist that exists but is not bootstrapped fails
+    /// instantly, and "Updating…" used to show for ten minutes anyway.
+    nonisolated private static func spawnAndWait(_ executable: String,
+                                                 _ arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     nonisolated private static func agentInstalled() -> Bool {
