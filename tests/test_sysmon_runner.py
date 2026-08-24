@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -94,6 +95,34 @@ class TestKill(RunnerBase):
         group = "group:" + self.token_for(40404)
         ok, error = sysmon_runner.kill(group)
         self.assertTrue(ok, error)
+
+
+class TestCLI(RunnerBase):
+    """The launcher's --sysmon / --kill entry points (subprocess, as Swift
+    and the installers invoke them)."""
+
+    def _run(self, args):
+        import subprocess
+        env = dict(os.environ)
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(
+            [sys.executable, os.path.join(repo, "bin", "ai-smartbar"), *args],
+            capture_output=True, text=True, env=env, cwd=repo, timeout=30)
+        return proc
+
+    def test_sysmon_json_prints_payload(self):
+        proc = self._run(["--sysmon", "--json"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertIn("cpu", payload)
+        self.assertIn("leftovers", payload)
+
+    def test_kill_unknown_token_exits_nonzero(self):
+        os.environ["SMARTBAR_SYSMON_KILL"] = "off"
+        proc = self._run(["--kill", "999999:1"])
+        self.assertEqual(proc.returncode, 1)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["ok"])
 
 
 class TestStream(RunnerBase):

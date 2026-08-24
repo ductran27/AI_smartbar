@@ -247,6 +247,19 @@ def main() -> int:
     parser.add_argument("--presence-status", action="store_true",
                         help="name the devices behind the counts, and say "
                              "whether this one is visible to them")
+    parser.add_argument("--sysmon", action="store_true",
+                        help="print machine vitals + process groups as JSON "
+                             "(--json), or with --stream emit one JSON line "
+                             "per second until the parent exits (the macOS "
+                             "app's System-tab data source)")
+    parser.add_argument("--stream", action="store_true",
+                        help="with --sysmon: stream one line per second "
+                             "instead of a single snapshot")
+    parser.add_argument("--kill", metavar="TOKEN",
+                        help="kill the process named by a token from --sysmon "
+                             "(SIGTERM then SIGKILL) and print a JSON result; "
+                             "refuses other users' processes, live Claude/"
+                             "Codex sessions and AI smartbar itself")
     parser.add_argument("--json", action="store_true",
                         help="with --check-update: print the result as JSON "
                              "(label/title/body/found) — this is how both UIs "
@@ -324,6 +337,19 @@ def main() -> int:
         import json as _json
         from smartbar.core import account_removal
         ok, error = account_removal.remove(args.remove_account)
+        print(_json.dumps({"ok": ok, "error": error}))
+        return 0 if ok else 1
+    if args.sysmon:
+        from smartbar import sysmon_runner
+        if args.stream:
+            return sysmon_runner.stream()
+        import json as _json
+        print(_json.dumps(sysmon_runner.background_tick()))
+        return 0
+    if args.kill:
+        import json as _json
+        from smartbar import sysmon_runner
+        ok, error = sysmon_runner.kill(args.kill)
         print(_json.dumps({"ok": ok, "error": error}))
         return 0 if ok else 1
     if sys.platform == "darwin":
