@@ -184,6 +184,12 @@ The panel — the same layout on macOS, Linux and Windows:
   opens it on Windows — see [Linux panel](#the-linux-panel) and
   [`docs/windows-bring-up.md`](docs/windows-bring-up.md) (Windows is
   unverified on real hardware — see [Status](#install) below).
+- **System tab — what the sessions cost the machine.** Per-core CPU, a
+  60-minute history and memory, plus the processes dead Claude/Codex
+  sessions left running (a leaked headless Chrome, an orphaned `esbuild`
+  service) — each killable in place with a guarded SIGTERM→SIGKILL, or
+  cleaned up automatically once you opt in. See
+  [The System tab](#the-system-tab-what-your-agent-sessions-cost-the-machine).
 - **Hands off your credentials.** The bar reads `cswap list --json`,
   switches via `cswap switch`, registers/re-captures via `cswap add`,
   and warms via `cswap run` + the official claude CLI. It never touches
@@ -307,6 +313,11 @@ from scratch, and applying an update *is* re-running them.
 | `SMARTBAR_PLANS` | on | `off` hides the plan badges (`· 20x`) and skips the local tier reads |
 | `SMARTBAR_OPENAI` | on | `off` hides the OpenAI tab and skips every Codex read |
 | `SMARTBAR_CODEX_HOME` | `~/.codex` | Where Codex CLI keeps its files (tests, relocated installs) |
+| `SMARTBAR_SYSMON` | on | `off` hides the System tab and skips every sample, stream and kill |
+| `SMARTBAR_SYSMON_INTERVAL` | `60` | Seconds between background System-tab samples (floor 15) |
+| `SMARTBAR_SYSMON_HOT` | `50` | % CPU (over two consecutive samples) that puts a process in **Busy** |
+| `SMARTBAR_SYSMON_AUTOKILL` | off | `on` automatically kills junk orphans older than 5 min, logs and notifies |
+| `SMARTBAR_SYSMON_NOTIFY` | on | `off` silences the "leftovers burning" / "killed" notifications |
 
 ## Settings that survive an update
 
@@ -447,6 +458,57 @@ exists to read:
 
 The menu-bar pills stay Claude-only; the tab is the OpenAI surface.
 `SMARTBAR_OPENAI=off` removes all of it.
+
+## The System tab (what your agent sessions cost the machine)
+
+A **System** tab sits beside Claude and OpenAI and answers a different
+question: what are the AI sessions on this machine costing it right now, and
+what did dead ones leave behind? It came out of a real recurring problem —
+a Claude Code session exits and leaves a headless Chrome or an `esbuild`
+service pinned at hundreds of percent CPU for hours, fans on, with nothing on
+screen to point at it.
+
+- **Vitals.** A per-core CPU strip (one column per core, each coloured by the
+  same used-ramp the bars use), a 60-minute history built from the background
+  poll (so it is already there when you open the panel — a missing minute,
+  from sleep or the app being closed, is drawn as a gap, never smeared), and a
+  memory bar. CPU and memory are literally "% used", the panel's own scale, so
+  they take the ramp without inventing a second colour meaning.
+- **Leftovers.** Orphaned processes a dead session left running, one row per
+  process tree: a `junk` row matches an allowlist of things that are never
+  legitimate as an orphan (an `esbuild --service`, a puppeteer "Chrome for
+  Testing", a headless Chrome on a `/tmp/cdp-prof-*` profile, a Playwright
+  browser, a Claude Code shell snapshot); an `idle` row is an orphaned dev
+  server (Vite, `http.server`, and the like). Hover a row and a ✕ appears;
+  click it and the row asks `Kill <name>?  [Kill] [Keep]` in place. Kill sends
+  SIGTERM, then SIGKILL after three seconds to anything that ignores it, and
+  is guarded so it can only ever touch **your** processes — never another
+  user's, never a live Claude/Codex session, never AI smartbar itself. The
+  kill token carries the process start time, so a PID reused between drawing
+  the row and clicking it is refused rather than mis-killed.
+- **Busy.** Everything else that is working hard, folded by name
+  (`Firefox ×4`), with the same kill affordance on your own non-session
+  processes. Live Claude/Codex sessions and other users' system processes are
+  shown for context but never carry a ✕.
+- **Auto-kill (off by default).** With `SMARTBAR_SYSMON_AUTOKILL=on`, the bar
+  cleans up `junk` orphans on its own once they have persisted five minutes —
+  only that allowlist, only orphans, always logged and announced with a
+  notification. It is opt-in because killing processes unattended is a strong
+  action; the allowlist is deliberately narrow.
+
+The rules are anchored on each process's executable, not on its arguments, so
+a `grep esbuild` or a shell whose command line merely mentions a pattern is
+never mistaken for the thing it names. On macOS the tab reads the payload from
+`ai-smartbar --sysmon` and, while it is open, a one-line-per-second live
+stream that stops the instant the panel closes — a closed popover can never
+leave a sampler running, which is the very failure the feature exists to
+catch. `SMARTBAR_SYSMON=off` removes the tab and every sample, stream and kill.
+
+Platform support: macOS is full (per-core CPU via Mach, the live stream).
+Linux is full too (`/proc`), minus the macOS-only 1-second stream — the panel
+still samples on its own timer. Windows is an honest downgrade: total CPU
+only (no per-core strip) and no live stream, but the process lists and the
+guarded kill work.
 
 ## The Linux panel
 
