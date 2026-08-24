@@ -562,71 +562,86 @@ def _vitals_card(shapes, s, system, top):
     return height
 
 
-def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm):
-    """One process row: a kind chip, the name (+ sub), the meta on the right,
-    and — for a killable row under the pointer — a ✕ that arms an in-row
-    "Kill …? [Kill] [Keep]" confirm (the account-removal affordance, reused)."""
+def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm,
+              tall=False):
+    """One process row. A one-line row (Busy) is: kind chip · name · meta,
+    with a ✕ on hover. A `tall` row (Leftovers) gives the name+meta their own
+    line and puts the sub (pid · profile) on a second line below, so a long
+    name and a long identifier both fit without fighting over one line. A
+    killable row under the pointer reveals a ✕ that arms an in-row "Kill …?
+    [Kill] [Keep]" confirm (the account-removal affordance, reused)."""
     token = row["token"]
     killable = row.get("killable", True)
-    row_cy = top + t.SYS_ROW_H / 2
+    row_h = t.SYS_ROW_TALL if tall else t.SYS_ROW_H
+    row_cy = top + row_h / 2
+    line1 = (top + 13) if tall else row_cy
     # Whole-row hover region, appended first so the ✕/buttons win hit-testing.
-    hits.append(t.Hit(f"row:{token}", inner_l, top, inner_r - inner_l,
-                      t.SYS_ROW_H))
+    hits.append(t.Hit(f"row:{token}", inner_l, top, inner_r - inner_l, row_h))
 
     if confirm == token and killable:
-        question = f"Kill {row['name']}, {row['sub']}?"
-        shapes.append(t.Label(inner_l, row_cy, question, size=t.SIZE_ROW_LABEL,
-                              bold=True, color=s.text,
-                              max_width=inner_r - inner_l - 120))
+        question = f"Kill {row['name']}?"
         keep_l = _button(shapes, hits, s, "cancel-kill", inner_r, row_cy,
                          "Keep", hover=hover, tooltip="Leave it running")
-        _button(shapes, hits, s, f"confirm-kill:{token}", keep_l - 7, row_cy,
-                "Kill", hover=hover, danger=True,
-                tooltip="Send SIGTERM, then SIGKILL if it ignores it")
+        kill_l = _button(shapes, hits, s, f"confirm-kill:{token}", keep_l - 7,
+                         row_cy, "Kill", hover=hover, danger=True,
+                         tooltip="Send SIGTERM, then SIGKILL if it ignores it")
+        shapes.append(t.Label(inner_l, row_cy, question, size=t.SIZE_ROW_LABEL,
+                              bold=True, color=s.text,
+                              max_width=kill_l - 10 - inner_l, mode="middle"))
         return
 
     chip_w = t.PROC_KIND_W
-    shapes.append(t.Box(inner_l, row_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
+    shapes.append(t.Box(inner_l, line1 - t.CHIP_H / 2, chip_w, t.CHIP_H,
                         radius=t.CHIP_H / 2, fill=s.button_disabled))
-    shapes.append(t.Label(inner_l + chip_w / 2, row_cy, row["kind"],
+    shapes.append(t.Label(inner_l + chip_w / 2, line1, row["kind"],
                           size=t.SIZE_CHIP, anchor="center",
                           color=_kind_ink(s, row["kind"])))
     name_l = inner_l + chip_w + 8
-    meta_w = t.text_width(row["meta"], t.SIZE_CAPTION)
     on_row = hover in (f"row:{token}", f"kill:{token}")
-    cross_gutter = (t.REMOVE_HIT + 7) if (killable and on_row) else 0
-    name_r = inner_r - meta_w - 10 - cross_gutter
-    name = row["name"]
-    sub = row.get("sub") or ""
-    sub_w = (t.text_width(sub, t.SIZE_CAPTION) + 6) if sub else 0
-    shapes.append(t.Label(name_l, row_cy, name, size=t.SIZE_ROW_LABEL,
-                          color=s.text, max_width=name_r - name_l - sub_w,
-                          mode="middle"))
-    if sub:
-        sub_l = min(name_l + t.text_width(name, t.SIZE_ROW_LABEL) + 6,
-                    name_r - sub_w + 6)
-        shapes.append(t.Label(sub_l, row_cy, sub, size=t.SIZE_CAPTION,
-                              color=s.text_tertiary, max_width=name_r - sub_l))
-    shapes.append(t.Label(inner_r, row_cy, row["meta"], size=t.SIZE_CAPTION,
+    meta_w = t.text_width(row["meta"], t.SIZE_CAPTION)
+    shapes.append(t.Label(inner_r, line1, row["meta"], size=t.SIZE_CAPTION,
                           mono=True, anchor="right", color=s.text_secondary))
+    avail_r = inner_r - meta_w - 10
     if killable and on_row:
-        cx = inner_r - meta_w - 10 - t.REMOVE_HIT / 2
-        shapes.append(t.Glyph("close", cx, row_cy, t.REMOVE_ICON,
+        cx = avail_r - t.REMOVE_HIT / 2
+        shapes.append(t.Glyph("close", cx, line1, t.REMOVE_ICON,
                               s.text if hover == f"kill:{token}"
                               else s.text_tertiary))
         hits.append(t.Hit(f"kill:{token}", cx - t.REMOVE_HIT / 2,
-                          row_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
+                          line1 - t.REMOVE_HIT / 2, t.REMOVE_HIT,
                           t.REMOVE_HIT, tooltip=f"Kill {row['name']}"))
+        avail_r -= t.REMOVE_HIT + 7
+    sub = row.get("sub") or ""
+    if tall:
+        # Name+meta on line 1 (the name gets the whole width up to the ✕/
+        # meta), the sub on its own line below in tertiary ink.
+        shapes.append(t.Label(name_l, line1, row["name"],
+                              size=t.SIZE_ROW_LABEL, color=s.text,
+                              max_width=avail_r - name_l, mode="middle"))
+        if sub:
+            shapes.append(t.Label(name_l, top + 28, sub, size=t.SIZE_CAPTION,
+                                  color=s.text_tertiary,
+                                  max_width=inner_r - name_l))
+        return
+    # One-line row: a short sub (e.g. "×4") folds into the name as one label
+    # so the fold count can never be truncated to "…" on its own by a
+    # width estimate that disagrees with the renderer's measurement.
+    name_text = f"{row['name']}   {sub}" if sub else row["name"]
+    shapes.append(t.Label(name_l, line1, name_text, size=t.SIZE_ROW_LABEL,
+                          color=s.text, max_width=avail_r - name_l,
+                          mode="middle"))
 
 
 def _proc_card(shapes, hits, s, title, caption, block, top, hover, confirm,
-               foot=""):
+               foot="", tall=False):
     """A card of process rows (Leftovers or Busy), with a header chip and an
-    optional foot line."""
+    optional foot line. Leftover rows are `tall` (two lines: name+meta, then
+    the pid/profile sub); Busy rows are single-line."""
     left, right = t.PAD, t.WIDTH - t.PAD
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
     rows = block.get("rows", [])
-    body = len(rows) * t.SYS_ROW_H if rows else t.STATE_ROW_H
+    row_h = t.SYS_ROW_TALL if tall else t.SYS_ROW_H
+    body = len(rows) * row_h if rows else t.STATE_ROW_H
     foot_h = (t.CARD_INNER_GAP + t.STATE_LINE_H) if foot else 0
     height = (t.CARD_PAD_V * 2 + t.CARD_HEADER_H + t.CARD_INNER_GAP
               + body + foot_h)
@@ -637,28 +652,32 @@ def _proc_card(shapes, hits, s, title, caption, block, top, hover, confirm,
     shapes.append(t.Label(inner_l, head_cy, title, size=t.SIZE_EMAIL,
                           bold=True, color=s.text))
     cap_l = inner_l + t.text_width(title, t.SIZE_EMAIL, bold=True) + 8
+    # The chip is drawn first (from the right) so the caption's truncation
+    # width is the REAL gap to it, not a guessed reserve that let a wide
+    # "N burning · X cores" chip overrun the caption (found in preview).
     chip = block.get("chip", "")
-    chip_room = 120 if chip else 0
-    if caption:
-        shapes.append(t.Label(cap_l, head_cy, caption, size=t.SIZE_CAPTION,
-                              color=s.text_tertiary,
-                              max_width=inner_r - cap_l - chip_room))
+    caption_r = inner_r
     if chip:
         chip_w = t.text_width(chip, t.SIZE_CHIP) + 16
         chip_x = inner_r - chip_w
+        caption_r = chip_x - 8
         burning = "burning" in chip
         shapes.append(t.Box(chip_x, head_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
-                            radius=t.CHIP_H / 2,
-                            fill=s.button_disabled))
+                            radius=t.CHIP_H / 2, fill=s.button_disabled))
         shapes.append(t.Label(chip_x + chip_w / 2, head_cy, chip,
                               size=t.SIZE_CHIP, anchor="center",
                               color=s.danger if burning else s.text_secondary))
+    if caption:
+        shapes.append(t.Label(cap_l, head_cy, caption, size=t.SIZE_CAPTION,
+                              color=s.text_tertiary,
+                              max_width=caption_r - cap_l))
 
     y = top + t.CARD_PAD_V + t.CARD_HEADER_H + t.CARD_INNER_GAP
     if rows:
         for row in rows:
-            _proc_row(shapes, hits, s, row, y, inner_l, inner_r, hover, confirm)
-            y += t.SYS_ROW_H
+            _proc_row(shapes, hits, s, row, y, inner_l, inner_r, hover,
+                      confirm, tall=tall)
+            y += row_h
     else:
         shapes.append(t.Label(inner_l, y + t.STATE_ROW_H / 2,
                               "Nothing left behind — every orphan is gone.",
@@ -682,7 +701,7 @@ def _system_view(shapes, hits, s, system, top, hover, confirm):
     cursor = top + _vitals_card(shapes, s, system, top) + t.CARD_GAP
     cursor += _proc_card(shapes, hits, s, "Leftovers",
                          "orphans of dead sessions", left, cursor, hover,
-                         confirm, foot=foot) + t.CARD_GAP
+                         confirm, foot=foot, tall=True) + t.CARD_GAP
     cursor += _proc_card(shapes, hits, s, "Busy",
                          system["busy"].get("caption", ""), system["busy"],
                          cursor, hover, confirm)

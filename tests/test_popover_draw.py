@@ -201,6 +201,25 @@ class TestPopoverPainter(unittest.TestCase):
 
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
+@unittest.skipIf(cairo is None, "pycairo not installed")
+class TestSystemPreview(unittest.TestCase):
+    def test_demo_system_has_the_payload_shape(self):
+        from smartbar.paint.popover_preview import demo_system
+        payload = demo_system()
+        for key in ("cpu", "mem", "history", "leftovers", "busy"):
+            self.assertIn(key, payload)
+        self.assertTrue(payload["leftovers"]["rows"])
+
+    def test_preview_renders_the_system_tab(self):
+        from smartbar.paint.popover_preview import render
+        for scheme in ("dark", "light"):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, f"sys-{scheme}.png")
+                out = render(path, demo=True, scheme=scheme, provider="system")
+                self.assertTrue(os.path.exists(out))
+                self.assertGreater(os.path.getsize(out), 1000)
+
+
 class TestGlyphDispatchCoversLayout(unittest.TestCase):
     """The test that matters most in stage 04: every Glyph.kind the layout
     can actually emit has to be a kind popover_draw._draw_glyph handles by

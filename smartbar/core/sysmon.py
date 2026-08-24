@@ -370,7 +370,10 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
             "kind": kinds[proc.pid],
             "name": display_name(proc),
             "sub": display_sub(proc),
-            "meta": f"orphan · {format_age(proc.elapsed)} · {cpu_text}",
+            # "orphan" is already said by the card title and the kind chip,
+            # so the row's meta stays short enough to share a line with the
+            # (long) process name: just its age and current cost.
+            "meta": f"{format_age(proc.elapsed)} · {cpu_text}",
             "burning": burning,
             "cores": round(cpu / 100, 1),
             "mem": tree_mem_mb(proc.pid, table),

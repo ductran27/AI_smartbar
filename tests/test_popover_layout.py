@@ -1279,7 +1279,8 @@ class TestSystemTab(unittest.TestCase):
         self.assertIn("Leftovers", text)
         self.assertIn("Busy", text)
         self.assertIn("Google Chrome (headless)", text)
-        self.assertIn("Firefox", text)
+        # Busy folds same-name processes, so the count rides in the label.
+        self.assertTrue(any(label.startswith("Firefox") for label in text))
 
     def test_per_core_and_history_columns_are_drawn(self):
         built = layout.build(snap(account(active=True)), provider="system",
