@@ -78,6 +78,29 @@ class TestSysmonTickInFlightGuard(ControllerTestCase):
         self.assertEqual(self.thread_cls.call_count, 2)
 
 
+class TestSysmonGateLivesInTheHost(ControllerTestCase):
+    """Which hosts poll the System tab is the HOST's decision. The pure
+    controller carried a `sys.platform == "win32"` gate for a while (its
+    own rules forbid one), which made every tick-driving test in this suite
+    fail on the Windows CI leg; the Windows host simply never schedules a
+    tick instead."""
+
+    def test_the_controller_ticks_on_any_platform(self):
+        import sys
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.object(tc.sysmon, "enabled", return_value=True):
+            self.controller.sysmon_tick()
+        self.assertEqual(self.thread_cls.call_count, 1)
+
+    def test_the_windows_host_never_schedules_a_tick(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "smartbar", "windows", "tray.py"),
+                  encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertNotIn("sysmon_tick(", source)
+
+
 class TestBrokenCswapDoesNotHideAWaitingUpdate(ControllerTestCase):
     def test_apply_error_rereads_the_pending_update(self):
         # Resolve the module at TEST time: test_runner_portability reloads

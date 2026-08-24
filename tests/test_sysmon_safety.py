@@ -322,7 +322,9 @@ class TestProbeCorrectness(unittest.TestCase):
     def test_ps_runs_under_the_c_locale(self):
         calls = []
 
-        def fake_check_output(cmd, text=True, env=None):
+        def fake_check_output(cmd, text=True, env=None, **kwargs):
+            # **kwargs: on Windows _run also passes portable.no_window()'s
+            # creationflags; the fake must accept the real call shape.
             calls.append(env)
             return ""
         with mock.patch.object(sysmon_probe.subprocess, "check_output",

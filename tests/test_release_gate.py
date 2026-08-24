@@ -53,6 +53,19 @@ class TestReleaseGate(unittest.TestCase):
         self.assertIsNone(re.search(
             r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", SOURCE))
 
+    def test_a_resumed_release_can_be_gated_on_a_manual_full_run(self):
+        # The Windows/Swift legs only run on a push when the release
+        # fingerprint / macos-swift/ changed, so a fix commit on top of a
+        # red candidate needs the manual dispatch require_full_legs asks
+        # for. Filtering runs to `push` made that advice unsatisfiable
+        # (v1.3.1, 2026-08-24).
+        self.assertNotIn("--event push", SOURCE)
+        identity = SOURCE[SOURCE.index("validate_ci_identity() {"):]
+        identity = identity[:identity.index("\n}")]
+        self.assertIn('"$CI_RUN_EVENT" == "push"', identity)
+        self.assertIn('"$CI_RUN_EVENT" == "workflow_dispatch"', identity)
+        self.assertIn('"$CI_RUN_BRANCH" == "main"', identity)
+
 
 if __name__ == "__main__":
     unittest.main()

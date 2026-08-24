@@ -58,23 +58,65 @@ class TestPingsAreHookFree(unittest.TestCase):
 
 
 class TestClaudeOverrideActuallyResolves(unittest.TestCase):
-    def test_an_override_not_named_claude_gets_a_shim(self):
-        # cswap resolves `claude` BY NAME on PATH; an override pointing at
-        # a versioned binary silently did nothing.
+    def setUp(self):
         import tempfile
-        real = os.path.join(tempfile.mkdtemp(), "2.1.241")
+        self.tmp = tempfile.mkdtemp()
+        patcher = mock.patch.object(warmup_runner, "CACHE_DIR",
+                                    os.path.join(self.tmp, "cache"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _versioned_binary(self, name):
+        real = os.path.join(self.tmp, name)
         with open(real, "w") as fh:
             fh.write("#!/bin/sh\n")
         os.chmod(real, 0o755)
+        return real
+
+    def test_an_override_not_named_claude_gets_a_shim(self):
+        # cswap resolves `claude` BY NAME on PATH; an override pointing at
+        # a versioned binary silently did nothing. The shim's shape is the
+        # host's: a symlink on POSIX, a `claude.cmd` on Windows (which is
+        # what the Windows CI leg runs this on).
+        real = self._versioned_binary("2.1.241")
         env = warmup_runner.env_with_claude_on_path(real)
         first = env["PATH"].split(os.pathsep)[0]
-        shim = os.path.join(first, "claude")
+        shim = os.path.join(
+            first, "claude.cmd" if os.name == "nt" else "claude")
         self.assertTrue(os.path.islink(shim) or os.path.isfile(shim),
                         f"no claude shim in {first}")
 
+    def test_the_windows_shim_is_a_cmd_wrapper_naming_the_target(self):
+        # Exercised in-process on every platform: only file I/O is involved.
+        real = self._versioned_binary("claude-2.1.241.exe")
+        with mock.patch.object(warmup_runner.sys, "platform", "win32"):
+            env = warmup_runner.env_with_claude_on_path(real)
+        first = env["PATH"].split(os.pathsep)[0]
+        shim = os.path.join(first, "claude.cmd")
+        with open(shim, encoding="utf-8", newline="") as fh:
+            body = fh.read()
+        self.assertEqual(body, f'@"{os.path.abspath(real)}" %*\r\n')
+        # A second call with the same target leaves the file alone.
+        before = os.stat(shim).st_mtime_ns
+        with mock.patch.object(warmup_runner.sys, "platform", "win32"):
+            warmup_runner.env_with_claude_on_path(real)
+        self.assertEqual(os.stat(shim).st_mtime_ns, before)
+
+    def test_windows_matches_the_name_through_pathext(self):
+        with mock.patch.object(warmup_runner.sys, "platform", "win32"):
+            for name in ("claude.exe", "claude.cmd", "Claude.EXE", "claude"):
+                self.assertFalse(warmup_runner._needs_claude_shim(name), name)
+            self.assertTrue(
+                warmup_runner._needs_claude_shim("claude-2.1.241.exe"))
+
     def test_an_override_named_claude_needs_no_shim(self):
-        env = warmup_runner.env_with_claude_on_path("/opt/x/bin/claude")
-        self.assertEqual(env["PATH"].split(os.pathsep)[0], "/opt/x/bin")
+        override = "/opt/x/bin/claude"
+        env = warmup_runner.env_with_claude_on_path(override)
+        # abspath, because Windows reports it drive-qualified (D:\opt\x\bin).
+        self.assertEqual(env["PATH"].split(os.pathsep)[0],
+                         os.path.dirname(os.path.abspath(override)))
+        self.assertFalse(os.path.exists(
+            os.path.join(warmup_runner.CACHE_DIR, "claude-shim")))
 
 
 class TestVerificationIsNextRun(unittest.TestCase):

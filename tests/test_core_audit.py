@@ -27,15 +27,20 @@ class TestVenvPythonFindsPlainShebangs(unittest.TestCase):
             fh.write(first_line.replace("PYPATH", python) + "\nrest\n")
         return launcher, python
 
+    # The launcher-parsing branch is POSIX-only (Windows probes venv
+    # layouts instead), so these pins force the platform: on the Windows
+    # CI leg the mocked launcher was never even opened.
     def test_plain_shebang_is_recognised(self):
         launcher, python = self._binary_with("#!PYPATH")
-        with mock.patch.object(cswap, "_binary", return_value=launcher):
+        with mock.patch.object(cswap.sys, "platform", "linux"), \
+             mock.patch.object(cswap, "_binary", return_value=launcher):
             self.assertEqual(cswap.venv_python(), python)
 
     def test_quoted_exec_still_works(self):
         launcher, python = self._binary_with(
             "#!/bin/sh\n'''exec' 'PYPATH' \"$0\" \"$@\"")
-        with mock.patch.object(cswap, "_binary", return_value=launcher):
+        with mock.patch.object(cswap.sys, "platform", "linux"), \
+             mock.patch.object(cswap, "_binary", return_value=launcher):
             self.assertEqual(cswap.venv_python(), python)
 
     def test_windows_probes_current_pipx_and_uv_layouts(self):
@@ -161,15 +166,22 @@ class TestClockDetection(unittest.TestCase):
         self.assertIn("0x00000023", source)      # LOCALE_ITIME
         self.assertNotIn("0x00000021, buf", source)
 
+    # Both pins exercise the POSIX branch, so they force it: on the Windows
+    # CI leg prefers_24_hour_clock() goes through GetLocaleInfoW instead
+    # and never reads the patched T_FMT.
     def test_glibc_en_us_percent_r_counts_as_12_hour(self):
         # glibc en_US t_fmt is the alias "%r" — no literal %I in it, so the
         # substring test called the US 24-hour.
-        with mock.patch.object(reset_countdown_format, "_posix_time_format",
+        with mock.patch.object(reset_countdown_format.sys, "platform",
+                               "linux"), \
+             mock.patch.object(reset_countdown_format, "_posix_time_format",
                                return_value="%r"):
             self.assertFalse(reset_countdown_format.prefers_24_hour_clock())
 
     def test_explicit_24_hour_format_still_wins(self):
-        with mock.patch.object(reset_countdown_format, "_posix_time_format",
+        with mock.patch.object(reset_countdown_format.sys, "platform",
+                               "linux"), \
+             mock.patch.object(reset_countdown_format, "_posix_time_format",
                                return_value="%H:%M:%S"):
             self.assertTrue(reset_countdown_format.prefers_24_hour_clock())
 

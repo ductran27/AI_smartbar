@@ -87,6 +87,36 @@ def claude_binary():
     return None
 
 
+def _needs_claude_shim(claude: str) -> bool:
+    """Does cswap's by-name lookup of `claude` miss this override?
+
+    On Windows the lookup goes through PATHEXT, so `claude.exe` and
+    `claude.cmd` (npm's real install) both already answer to the name;
+    only a differently-named file (`claude-2.1.241.exe`) needs a shim."""
+    name = os.path.basename(claude)
+    if sys.platform == "win32":
+        return os.path.splitext(name)[0].lower() != "claude"
+    return name != "claude"
+
+
+def _write_cmd_shim(shim: str, target: str) -> None:
+    """A one-line batch wrapper, rewritten only when its text changed.
+
+    Not a symlink: creating one needs a privilege most Windows accounts
+    lack, and a bare `claude` file would never match PATHEXT anyway. A
+    `claude.cmd` is exactly the shape npm installs the real CLI as, so
+    whatever resolves that resolves this."""
+    body = f'@"{target}" %*\r\n'
+    try:
+        with open(shim, encoding="utf-8", newline="") as fh:
+            if fh.read() == body:
+                return
+    except OSError:
+        pass
+    with open(shim, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
+
+
 def env_with_claude_on_path(claude: str) -> dict:
     """Subprocess env whose PATH is guaranteed to resolve `claude`.
 
@@ -103,22 +133,25 @@ def env_with_claude_on_path(claude: str) -> dict:
     """
     env = dict(os.environ)
     claude_dir = os.path.dirname(os.path.abspath(claude))
-    if os.path.basename(claude) != "claude" and sys.platform != "win32":
+    if _needs_claude_shim(claude):
         # cswap resolves `claude` BY NAME on PATH — an override pointing at
         # a differently-named binary (a versioned install) silently did
-        # nothing. A shim directory holding a `claude` symlink makes the
-        # override real.
+        # nothing. A shim directory holding a `claude` symlink (POSIX) or a
+        # one-line `claude.cmd` (Windows) makes the override real.
         shim_dir = os.path.join(CACHE_DIR, "claude-shim")
         try:
             os.makedirs(shim_dir, exist_ok=True)
-            shim = os.path.join(shim_dir, "claude")
             target = os.path.abspath(claude)
-            if not (os.path.islink(shim) and os.readlink(shim) == target):
-                try:
-                    os.unlink(shim)
-                except OSError:
-                    pass
-                os.symlink(target, shim)
+            if sys.platform == "win32":
+                _write_cmd_shim(os.path.join(shim_dir, "claude.cmd"), target)
+            else:
+                shim = os.path.join(shim_dir, "claude")
+                if not (os.path.islink(shim) and os.readlink(shim) == target):
+                    try:
+                        os.unlink(shim)
+                    except OSError:
+                        pass
+                    os.symlink(target, shim)
             claude_dir = shim_dir
         except OSError:
             log.warning("could not shim %s as `claude`; cswap may not "

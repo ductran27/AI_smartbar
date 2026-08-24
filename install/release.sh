@@ -140,8 +140,14 @@ read_ci_row() {
 }
 validate_ci_identity() {
   local expected_sha="$1"
+  # push OR workflow_dispatch: the Windows and Swift legs only run on a
+  # push when the release fingerprint / macos-swift/ changed, so a resumed
+  # release (a fix commit on top of the candidate) needs the manual full
+  # run that require_full_legs asks for — which is a dispatch event. With
+  # `push` alone that advice could never be satisfied.
   [[ -n "$CI_RUN_ID" && "$CI_RUN_SHA" == "$expected_sha" \
-      && "$CI_RUN_BRANCH" == "main" && "$CI_RUN_EVENT" == "push" \
+      && "$CI_RUN_BRANCH" == "main" \
+      && ( "$CI_RUN_EVENT" == "push" || "$CI_RUN_EVENT" == "workflow_dispatch" ) \
       && "$CI_RUN_WORKFLOW" == "tests" ]]
 }
 CI_WAIT_LIMIT=900
@@ -157,9 +163,12 @@ require_ci_success() {
   local row
 
   while true; do
+    # No --event filter: the newest run for the SHA wins, so a full manual
+    # dispatch made after a leg-skipping push run is the one gated (see
+    # validate_ci_identity). --branch main keeps pull_request runs out.
     if ! row="$(run_gh run list --repo "$GH_REPO" \
         --workflow tests.yml --branch main \
-        --commit "$expected_sha" --event push --limit 10 \
+        --commit "$expected_sha" --limit 10 \
         --json "$CI_FIELDS" --jq "$CI_JQ")"; then
       echo "could not query the GitHub tests workflow — refusing to tag" >&2
       return 1

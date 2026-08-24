@@ -45,7 +45,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 import threading
 import time
 
@@ -537,10 +536,12 @@ class TrayController:
         """One System-tab poll, scheduled by the host on its own timer.
         Samples in a worker (the sample sleeps ~0.5 s, which must never
         block the UI thread) and marshals the payload back."""
-        if not sysmon.enabled() or sys.platform == "win32":
-            # Windows has no honest sample yet (no per-process CPU column,
-            # no `ps`): the tab used to appear with fabricated zeros
-            # ("0 cores · 0 GB · load 0.0"). No tab beats a fake one.
+        # Which hosts poll at all is the HOST's call (Windows has no honest
+        # sample yet — no per-process CPU column, no `ps` — so
+        # windows/tray.py simply never schedules this; see its note). A
+        # `sys.platform` check here broke this module's own rule and made
+        # every core test that drives a tick fail on the Windows CI leg.
+        if not sysmon.enabled():
             self.system = None
             return
         if self._sysmon_busy:

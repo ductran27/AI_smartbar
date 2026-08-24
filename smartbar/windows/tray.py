@@ -100,7 +100,7 @@ from PIL import Image
 
 from smartbar import __version__, presence_client
 from smartbar.core import (model, paths, popover_layout, portable,
-                           presence, sysmon)
+                           presence)
 from smartbar.core import update as update_core
 from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
@@ -729,16 +729,12 @@ class Tray:
             self.root.after(int(presence.interval()) * 1000,
                             self._presence_tick)
 
-    def _sysmon_tick(self):
-        """Recurring System-tab poll; same self-rescheduling shape as
-        _presence_tick. The controller samples in a worker, so this never
-        blocks the tk thread."""
-        try:
-            self.controller.sysmon_tick()
-        except Exception:
-            log.exception("sysmon tick failed")
-        finally:
-            self.root.after(sysmon.interval() * 1000, self._sysmon_tick)
+    # No System tab on Windows, so no sysmon tick is scheduled here: the
+    # probe has no honest Windows sample yet (no per-process CPU column, no
+    # `ps`), and the tab used to appear with fabricated zeros ("0 cores ·
+    # 0 GB · load 0.0"). No tab beats a fake one. controller.system stays
+    # None, which is exactly what hides the tab in popover_layout — the
+    # decision lives in this host, not in the platform-agnostic controller.
 
     # --- TrayHost: the optional panel triad -------------------------------
 
@@ -909,9 +905,7 @@ def main():
     root.after(tray.interval * 1000, tray._tick)
     if presence.enabled():
         root.after(int(presence.interval()) * 1000, tray._presence_tick)
-    if sysmon.enabled():
-        tray.controller.sysmon_tick()
-        root.after(sysmon.interval() * 1000, tray._sysmon_tick)
+    # (no sysmon tick on Windows — see the note above Tray's panel triad)
     # Decision D1: pystray's Icon.run() is only main-thread-mandatory on
     # macOS (confirmed against the pystray FAQ), so on Windows it runs on
     # its own worker thread while root.mainloop() owns the real main
