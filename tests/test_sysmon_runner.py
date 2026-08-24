@@ -11,13 +11,17 @@ import unittest
 from smartbar import sysmon_runner
 from smartbar.core import sysmon
 
+# The orphan rows must belong to the uid the runner sees (os.getuid()),
+# or the foreign-uid guard hides them — 501 only ever matched the
+# author's Mac, and the same fixture failed on every CI runner.
+MY_UID = os.getuid() if hasattr(os, "getuid") else 501
 PS_TEXT = (
     "    1     0     0  27744 21-05:52:10 213:23.48 "
     "Sun Aug  2 16:19:43 2026 /sbin/launchd\n"
-    "40404     1   501 400000    06:03:42 3618:57.00 "
+    f"40404     1   {MY_UID} 400000    06:03:42 3618:57.00 "
     "Sun Aug 23 15:13:24 2026 /Applications/Google Chrome.app/Contents/MacOS/"
     "Google Chrome --headless --user-data-dir=/tmp/cdp-prof-9603\n"
-    "40405 40404   501 100000    06:03:42 10:00.00 "
+    f"40405 40404   {MY_UID} 100000    06:03:42 10:00.00 "
     "Sun Aug 23 15:13:24 2026 Google Chrome Helper (GPU) --type=gpu-process\n")
 
 
