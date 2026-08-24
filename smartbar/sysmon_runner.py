@@ -21,8 +21,9 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from smartbar.core import paths, sysmon, sysmon_probe
 
@@ -48,11 +49,22 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     path = _state_file()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as handle:
-        json.dump(state, handle)
-    os.replace(tmp, path)   # atomic: a concurrent reader never sees half
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    # A per-call temp name: a fixed "<path>.tmp" let two overlapping ticks
+    # (the timer and a kill's refresh) write the same file — one os.replace
+    # then raised or promoted the other's half-written state.
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".sysmon-state-")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(state, handle)
+        os.replace(tmp, path)   # atomic: a reader never sees half
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --- helpers ---------------------------------------------------------------
@@ -87,18 +99,25 @@ def _build(side_effects: bool):
     prev_cpu = {int(k): v for k, v in state.get("prevCpu", {}).items()}
     ring = [tuple(entry) for entry in state.get("history", [])]
     minute = int(time.time() // 60)
+    if side_effects:
+        # Append THIS tick's point before building the series, or the
+        # newest history column is always a gap and lastPct lags one poll.
+        pct = round(sum(cores) / len(cores)) if cores else 0
+        ring = sysmon.history_append(ring, minute, pct)
     series = sysmon.history_series(ring, minute)
     view = sysmon.build_view(procs, cores, mem, load, prev_cpu,
-                             datetime.now(timezone.utc), _my_uid(),
+                             datetime.now(), _my_uid(),
                              _own_pids(), series)
     if not side_effects:
         return view, [], []
 
-    ring = sysmon.history_append(ring, minute, view["cpu"]["pct"])
+    # Auto-kill and its grace tracking act on the FULL junk set the view
+    # carries, not the 8 rows the panel displays — a 9th junk orphan used
+    # to fall off the tracked set every tick and never age into eligibility.
     first_seen = dict(state.get("firstSeen", {}))
     now_epoch = time.time()
-    junk = {row["token"] for row in view["leftovers"]["rows"]
-            if row["kind"] == "junk"}
+    junk_rows = view["leftovers"]["junk"]
+    junk = {row["token"] for row in junk_rows}
     for token in junk:
         first_seen.setdefault(token, now_epoch)
     for token in list(first_seen):
@@ -106,10 +125,8 @@ def _build(side_effects: bool):
             del first_seen[token]
 
     autokilled = []
-    for token in sysmon.autokill_targets(view["leftovers"]["rows"], first_seen,
-                                         now_epoch):
-        row = next((r for r in view["leftovers"]["rows"]
-                    if r["token"] == token), None)
+    for token in sysmon.autokill_targets(junk_rows, first_seen, now_epoch):
+        row = next((r for r in junk_rows if r["token"] == token), None)
         ok, _ = kill(token)
         if ok and row is not None:
             autokilled.append({"name": row["name"], "cores": row["cores"],
@@ -159,7 +176,8 @@ def stream(out=None, interval: float = 1.0, stop=None) -> int:
         except (BrokenPipeError, ValueError):
             break   # the reader (a closed popover) went away
         if interval:
-            time.sleep(interval)
+            # The sample itself already took ~0.5 s of the cadence.
+            time.sleep(max(0.0, interval - 0.5))
     return 0
 
 
@@ -181,30 +199,27 @@ def _signal(pids, sig) -> None:
             pass
 
 
-def kill(token: str) -> tuple:
-    """Kill the process (tree) a token names, with every core guard applied.
+def _session_set(table) -> set:
+    """Every pid inside a live claude/codex tree — never a kill target,
+    even when it sits inside the tree (or group) being killed."""
+    out: set = set()
+    for proc in table.values():
+        if sysmon.is_session_exe(proc.args):
+            out |= sysmon.tree_pids(proc.pid, table)
+    return out
 
-    A "group:" token (a folded Busy row) kills each member independently.
-    SMARTBAR_SYSMON_KILL=off validates and reports but signals nothing — the
-    dry-run tests and e2e fences depend on it. Otherwise: SIGTERM the whole
-    tree, wait up to 3 s, then SIGKILL any survivor (esbuild's service loop
-    ignores SIGTERM — found in the original battery-drain forensics)."""
-    if token.startswith("group:"):
-        results = [kill(member) for member in token[6:].split(",") if member]
-        ok = all(result[0] for result in results)
-        error = "; ".join(r[1] for r in results if not r[0])
-        return ok, error
 
-    table = _current_table()
-    ok, error = sysmon.validate_kill(token, table, _my_uid(), _own_pids())
-    if not ok:
-        return False, error
-    if os.environ.get("SMARTBAR_SYSMON_KILL", "").strip().lower() == "off":
-        return True, ""   # dry-run
-
-    pid, _ = sysmon.parse_token(token)
-    targets = sysmon.tree_pids(pid, table)
+def _terminate(targets) -> None:
+    """SIGTERM the set, wait up to 3 s, then SIGKILL survivors (esbuild's
+    service loop ignores SIGTERM — the original battery-drain forensics).
+    One round for the whole set: killing tree members one-by-one re-sampled
+    the table between members and reported the already-dead rest as
+    failures. On Windows SIGTERM is already TerminateProcess (unconditional)
+    and probing liveness with os.kill(pid, 0) would itself terminate the
+    probed process, so the wait loop is POSIX-only."""
     _signal(targets, signal.SIGTERM)
+    if sys.platform == "win32":
+        return
     deadline = time.time() + 3
     while time.time() < deadline:
         if not any(_alive(p) for p in targets):
@@ -212,5 +227,61 @@ def kill(token: str) -> tuple:
         time.sleep(0.2)
     survivors = [p for p in targets if _alive(p)]
     if survivors:
-        _signal(survivors, signal.SIGKILL)
+        _signal(survivors, getattr(signal, "SIGKILL", signal.SIGTERM))
+
+
+def kill(token: str) -> tuple:
+    """Kill what a token names, with every core guard applied.
+
+    Three shapes, decided by the layer that built the row:
+      * "pid:start"           — one process (a Busy row's single member).
+      * "group:a:s,b:s"       — the listed members only, no tree expansion
+                                (a folded Busy row; killing members' whole
+                                trees took down login shells and sessions).
+      * "tree:pid:start"      — the root and its descendants (a leftover
+                                row), MINUS any live session's tree, the
+                                bar's own pids and other users' pids.
+    A member that is already gone counts as success inside group/tree — the
+    goal state is "not running". SMARTBAR_SYSMON_KILL=off validates and
+    reports but signals nothing (dry-run for tests and e2e fences)."""
+    table = _current_table()
+    my_uid = _my_uid()
+    own = _own_pids()
+    dry = os.environ.get("SMARTBAR_SYSMON_KILL", "").strip().lower() == "off"
+
+    if token.startswith("group:"):
+        members = [m for m in token[6:].split(",") if m]
+        targets, errors = [], []
+        for member in members:
+            ok, error = sysmon.validate_kill(member, table, my_uid, own)
+            if ok:
+                targets.append(sysmon.parse_token(member)[0])
+            elif "already gone" not in error:
+                errors.append(error)
+        if not targets and not errors:
+            return False, "that process is already gone"
+        if not targets:
+            return False, "; ".join(errors)
+        if not dry:
+            _terminate(set(targets))
+        return True, ""
+
+    tree = token.startswith("tree:")
+    bare = token[5:] if tree else token
+    ok, error = sysmon.validate_kill(bare, table, my_uid, own)
+    if not ok:
+        return False, error
+    if dry:
+        return True, ""
+
+    pid, _ = sysmon.parse_token(bare)
+    if tree:
+        sessions = _session_set(table)
+        targets = {p for p in sysmon.tree_pids(pid, table)
+                   if p not in sessions and p not in own
+                   and (my_uid < 0 or table[p].uid == my_uid)
+                   and not sysmon.is_self_exe(table[p].args)}
+    else:
+        targets = {pid}
+    _terminate(targets)
     return True, ""

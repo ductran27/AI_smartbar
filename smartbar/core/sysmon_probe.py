@@ -27,15 +27,21 @@ _PS_ARGS = ["ps", "-Axwwo", "pid=,ppid=,uid=,rss=,etime=,time=,lstart=,args="]
 # --- pure parsers ----------------------------------------------------------
 
 def cpu_seconds(text: str) -> float:
-    """Cumulative CPU time from ps TIME ("[[hh:]mm:]ss.cs"); minutes and hours
-    are NOT capped at 60 (ps prints "213:23.48" for 213 minutes)."""
+    """Cumulative CPU time from ps TIME ("[[dd-]hh:]mm:]ss.cs"); minutes and
+    hours are NOT capped at 60 (ps prints "213:23.48" for 213 minutes), and
+    procps prefixes days as "1-02:03:04" once a process has burned a day of
+    CPU — dropping those rows made long-lived sessions vanish."""
+    days = 0
+    if "-" in text:
+        day_str, text = text.split("-", 1)
+        days = int(day_str)
     parts = text.split(":")
     seconds = float(parts[-1])
     if len(parts) >= 2:
         seconds += int(parts[-2]) * 60
     if len(parts) >= 3:
         seconds += int(parts[-3]) * 3600
-    return seconds
+    return days * 86400 + seconds
 
 
 def etime_seconds(text: str) -> int:
@@ -98,19 +104,28 @@ def cpu_percent(pid: int, prev: dict, cur: dict, wall: float) -> float:
 
 
 def parse_vm_stat(text: str, total_bytes: int) -> dict:
-    """Used memory from `vm_stat`: (active + wired + compressor) × page size.
-
-    Matches Activity Monitor's "memory used" closely enough for a bar: it
-    counts the pages that are actually holding something that cannot be freed
-    on demand, and reports the compressor separately for the caption."""
+    """Used memory from `vm_stat`, the way Activity Monitor counts it:
+    (anonymous − purgeable + wired + compressor) × page size. The earlier
+    active+wired+compressor sum undercounted by ~10 GB against Activity
+    Monitor on this very machine (54% vs 68%); anonymous-minus-purgeable is
+    what its "App Memory" actually is. Falls back to the old sum when the
+    vm_stat build predates the "Anonymous pages" line."""
     page_match = re.search(r"page size of (\d+) bytes", text)
     page = int(page_match.group(1)) if page_match else 4096
     pages = {}
     for line in text.splitlines()[1:]:
         if ":" in line:
             name, _, value = line.partition(":")
-            pages[name.strip()] = int(value.strip().rstrip("."))
-    used_pages = (pages.get("Pages active", 0)
+            try:
+                pages[name.strip()] = int(value.strip().rstrip("."))
+            except ValueError:
+                continue
+    if "Anonymous pages" in pages:
+        app_pages = max(0, pages["Anonymous pages"]
+                        - pages.get("Pages purgeable", 0))
+    else:
+        app_pages = pages.get("Pages active", 0)
+    used_pages = (app_pages
                   + pages.get("Pages wired down", 0)
                   + pages.get("Pages occupied by compressor", 0))
     used = used_pages * page
@@ -172,14 +187,39 @@ def core_busy(before, after) -> list:
 
 
 def _run(cmd) -> str:
-    return subprocess.check_output(cmd, text=True)
+    # LC_ALL=C: `ps -o lstart` is locale-formatted; a German LANG turned
+    # every start time into "So.  2 Aug." → parse_lstart 0 → the PID-reuse
+    # guard silently disabled. C pins the one format the parsers expect.
+    return subprocess.check_output(cmd, text=True,
+                                   env={**os.environ, "LC_ALL": "C"})
 
 
 def _memsize() -> int:
-    try:
-        return int(_run(["sysctl", "-n", "hw.memsize"]).strip())
-    except (subprocess.SubprocessError, ValueError, OSError):
-        return 0
+    """Total RAM in bytes, with no PATH dependence.
+
+    The Swift app launches the sampler with a hardened PATH that omits
+    /usr/sbin, where `sysctl` lives — so a bare-name subprocess returned 0
+    and the panel read "34.8 / 0 GB · 0%". ctypes sysctlbyname needs no
+    PATH at all; the absolute-path subprocess is the fallback."""
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+            import ctypes.util
+            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+            value = ctypes.c_uint64(0)
+            size = ctypes.c_size_t(ctypes.sizeof(value))
+            rc = libc.sysctlbyname(b"hw.memsize", ctypes.byref(value),
+                                   ctypes.byref(size), None, 0)
+            if rc == 0 and value.value:
+                return int(value.value)
+        except (OSError, AttributeError, ValueError):
+            pass
+    for sysctl in ("/usr/sbin/sysctl", "sysctl"):
+        try:
+            return int(_run([sysctl, "-n", "hw.memsize"]).strip())
+        except (subprocess.SubprocessError, ValueError, OSError):
+            continue
+    return 0
 
 
 # --- putting a sample together ---------------------------------------------
@@ -272,24 +312,31 @@ def sample(interval: float = 0.5, my_uid: int = None) -> tuple:
         my_uid = os.getuid() if hasattr(os, "getuid") else -1
 
     if sys.platform == "darwin":
+        t0 = time.monotonic()
         rows1 = parse_ps(_run(_PS_ARGS))
         ticks1 = core_ticks()
         time.sleep(interval)
         rows2 = parse_ps(_run(_PS_ARGS))
         ticks2 = core_ticks()
-        procs = _procs_from(rows1, rows2, interval or 0.5)
+        # Divide by the MEASURED wall time: the two ps scans themselves take
+        # tens of milliseconds, and dividing by the nominal interval
+        # inflated every cpu% by their share.
+        wall = time.monotonic() - t0
+        procs = _procs_from(rows1, rows2, wall or interval or 0.5)
         cores = core_busy(ticks1, ticks2) if ticks1 and ticks2 else []
         mem = parse_vm_stat(_run(["vm_stat"]), _memsize())
         load = os.getloadavg()
         return procs, cores, mem, load
 
     if sys.platform.startswith("linux"):
+        t0 = time.monotonic()
         stat1 = _read("/proc/stat")
         rows1 = parse_ps(_run(_PS_ARGS))
         time.sleep(interval)
         stat2 = _read("/proc/stat")
         rows2 = parse_ps(_run(_PS_ARGS))
-        procs = _procs_from(rows1, rows2, interval or 0.5)
+        wall = time.monotonic() - t0
+        procs = _procs_from(rows1, rows2, wall or interval or 0.5)
         cores = _linux_core_busy(stat1, stat2)
         return procs, cores, _linux_mem(), os.getloadavg()
 

@@ -324,7 +324,9 @@ class TestBuildView(unittest.TestCase):
         row = next(r for r in self.view()["leftovers"]["rows"]
                    if r["kind"] == "junk")
         self.assertEqual(row["name"], "Google Chrome (headless)")
-        self.assertEqual(row["token"], "100:1000")
+        # tree: prefix — a leftover kill takes the whole descendant tree
+        # (minus sessions), unlike a Busy row's single-process token.
+        self.assertEqual(row["token"], "tree:100:1000")
         self.assertTrue(row["burning"])          # 5 + 575 >= 50
         self.assertIn("580%", row["meta"])       # tree cpu, one decimal dropped
 
@@ -354,11 +356,32 @@ class TestBuildView(unittest.TestCase):
         self.assertEqual(kinds[0], "junk")       # burning before idle
 
     def test_busy_folds_same_name_processes(self):
-        firefox = next(r for r in self.view()["busy"]["rows"]
+        # Busy honours the hot threshold (>= 50% in BOTH samples) — the
+        # fixture's 20%/18% Firefox correctly stays off the card, so the
+        # fold behaviour is pinned with genuinely hot processes.
+        procs = [
+            sysmon.Proc(300, 1, 501, 500_000, 100, 60.0,
+                        "/Applications/Firefox.app/Contents/MacOS/firefox",
+                        start=100),
+            sysmon.Proc(301, 1, 501, 300_000, 100, 55.0,
+                        "/Applications/Firefox.app/Contents/MacOS/firefox "
+                        "-contentproc", start=100),
+        ]
+        view = sysmon.build_view(
+            procs=procs, cores=[40], mem={"totalBytes": 1, "usedBytes": 0,
+                                          "pct": 0.0}, load=(0, 0, 0),
+            prev_cpu={300: 70.0, 301: 52.0}, now=self.now, my_uid=501,
+            own_pids=set(), history=[])
+        firefox = next(r for r in view["busy"]["rows"]
                        if r["name"] == "Firefox")
         self.assertEqual(firefox["count"], 2)
         self.assertTrue(firefox["killable"])
         self.assertTrue(firefox["token"].startswith("group:"))
+
+    def test_busy_leaves_sub_threshold_folds_off_the_card(self):
+        # 20%/18% Firefox from the shared fixture: not hot, not listed.
+        names = [r["name"] for r in self.view()["busy"]["rows"]]
+        self.assertNotIn("Firefox", names)
 
     def test_busy_session_is_not_killable(self):
         claude = next(r for r in self.view()["busy"]["rows"]
