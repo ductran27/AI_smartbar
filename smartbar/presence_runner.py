@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import os
 import socket
 import sys
@@ -52,6 +53,7 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
+    tmp = ""
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=CACHE_DIR, prefix=".presence-state-")
@@ -60,6 +62,11 @@ def save_state(state: dict) -> None:
         os.replace(tmp, STATE_FILE)
     except OSError:
         log.exception("could not persist presence state")
+        if tmp:
+            try:
+                os.unlink(tmp)     # a failed replace was leaking the temp
+            except OSError:
+                pass
 
 
 def device_id() -> str:
@@ -78,6 +85,7 @@ def device_id() -> str:
     except OSError:
         pass
     fresh = presence.new_device_id()
+    tmp = ""
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".device-id-")
@@ -85,7 +93,18 @@ def device_id() -> str:
             handle.write(fresh + "\n")
         os.replace(tmp, ID_FILE)
     except OSError:
-        log.warning("could not persist the device id; using a volatile one")
+        # A volatile id must NOT publish: every beat would mint a fresh
+        # "device", inflating the account's count on every other machine
+        # and littering the namespace with a new ref per beat. "" tells
+        # run_once to keep reading counts but stop announcing.
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        log.warning("could not persist the device id; "
+                    "not publishing this device")
+        return ""
     return fresh
 
 
@@ -105,10 +124,23 @@ def device_label() -> str:
     raw = os.environ.get("SMARTBAR_PRESENCE_LABEL")
     if raw is not None:
         return presence.sanitize_label(raw)
-    try:
-        host = socket.gethostname()
-    except OSError:
-        host = ""
+    host = ""
+    if sys.platform == "darwin":
+        # gethostname() on macOS returns the DHCP-assigned name — this very
+        # machine's label silently became "mac-dhcp-172-27-078-158" and the
+        # ref churned on every network change. LocalHostName is the stable
+        # user-chosen one.
+        try:
+            host = subprocess.check_output(
+                ["/usr/sbin/scutil", "--get", "LocalHostName"],
+                text=True, timeout=5).strip()
+        except (OSError, subprocess.SubprocessError):
+            host = ""
+    if not host:
+        try:
+            host = socket.gethostname()
+        except OSError:
+            host = ""
     # sanitize_label truncates, so the prefix is what survives on a machine
     # with a very long name — which is the part worth keeping.
     return presence.sanitize_label("{}-{}".format(presence.platform_tag(), host))
@@ -224,9 +256,18 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
             print("presence is off (SMARTBAR_PRESENCE=off)")
         return 0
     lock = _lock()
+    if lock is None and leave:
+        # Quit races the in-flight first beat constantly (it fires seconds
+        # after launch). Silently skipping meant the device lingered the
+        # full TTL on every other machine; wait briefly for the beat to
+        # finish instead.
+        deadline = time.time() + presence_git.LEAVE_TIMEOUT
+        while lock is None and time.time() < deadline:
+            time.sleep(0.25)
+            lock = _lock()
     if lock is None:
         log.info("another beat is in progress; skipping")
-        return 0
+        return 1 if leave else 0
 
     state = load_state()
     if leave:
@@ -252,7 +293,7 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
             _report(state, [], me, active_email)
         return 1
 
-    head, refs = remote
+    candidates, refs = remote
     beacons = presence.decode_all(refs)
     seen = presence.observe(beacons, state.get("seen"), now)
     live = presence.live_devices(beacons, now, seen, window)
@@ -260,12 +301,15 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
 
     published = state.get("published", False)
     my_ref = state.get("myRef", "")
-    if not report:
+    if not report and me:
         new_ref = presence.encode_ref(me, label, int(now), active_key)
         published = presence_git.publish(
-            head, new_ref, presence.own_stale_refs(beacons, me, new_ref))
+            candidates, new_ref,
+            presence.own_stale_refs(beacons, me, new_ref))
         if published:
             my_ref = new_ref
+    elif not me:
+        published = False   # volatile identity: read-only this run
 
     changed = counts != (state.get("counts") or {})
     # We are live by definition; our own ref is only in `live` when a beat

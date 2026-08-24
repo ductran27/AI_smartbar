@@ -57,6 +57,15 @@ def env() -> dict:
             parts.append(part)
     result["PATH"] = os.pathsep.join(parts)
     result["GIT_TERMINAL_PROMPT"] = "0"
+    # GIT_TERMINAL_PROMPT stops TERMINAL prompts only. A desktop session
+    # exporting SSH_ASKPASS/GIT_ASKPASS (KDE/GNOME, VS Code terminals) or
+    # Git Credential Manager would still pop a GUI credential dialog — from
+    # a background beat every five minutes. Force every route to fail fast
+    # and quietly instead.
+    result["GIT_ASKPASS"] = ""
+    result["SSH_ASKPASS_REQUIRE"] = "never"
+    result["GCM_INTERACTIVE"] = "never"
+    result.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
     result.setdefault("HOME", os.path.expanduser("~"))
     return result
 
