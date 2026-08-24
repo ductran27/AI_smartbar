@@ -12,6 +12,7 @@ struct AISmartbarApp: App {
     @StateObject private var updates = UpdateStatus()
     @StateObject private var plans = PlanStatus()
     @StateObject private var openai = OpenAIStatus()
+    @StateObject private var system = SystemStatus()
 
     var body: some Scene {
         MenuBarExtra {
@@ -21,6 +22,7 @@ struct AISmartbarApp: App {
                 .environmentObject(store.presence)
                 .environmentObject(plans)
                 .environmentObject(openai)
+                .environmentObject(system)
                 // Invisible: exists only so StatusItemLocator can capture a
                 // live NSStatusItem reference for the hotkey below to open
                 // this same window with. See StatusItemLocator's own

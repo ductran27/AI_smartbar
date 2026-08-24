@@ -20,6 +20,7 @@ struct PopoverView: View {
     @EnvironmentObject private var store: UsageStore
     @EnvironmentObject private var updates: UpdateStatus
     @EnvironmentObject private var openai: OpenAIStatus
+    @EnvironmentObject private var system: SystemStatus
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("providerTab") private var providerTab = "claude"
 
@@ -40,7 +41,11 @@ struct PopoverView: View {
                     .foregroundStyle(palette.warning)
                     .lineLimit(2)
             }
-            if selectedProvider == "openai" {
+            if selectedProvider == "system" {
+                if let payload = system.payload {
+                    SystemView(payload: payload)
+                }
+            } else if selectedProvider == "openai" {
                 openAIList
             } else if let snapshot = store.snapshot {
                 if snapshot.activeAccount == nil {
@@ -75,6 +80,7 @@ struct PopoverView: View {
             store.refresh()
             updates.reload()
             openai.refresh()
+            system.refresh()
         }
     }
 
@@ -82,34 +88,38 @@ struct PopoverView: View {
         !(store.snapshot?.accounts.isEmpty ?? true)
     }
 
-    /// The tab row exists to choose BETWEEN providers, so it appears only
-    /// when both of them actually have accounts (mirror of
-    /// popover_layout.build). One provider means one pill, which is a
-    /// button that changes nothing.
-    private var showsTabs: Bool {
-        hasClaudeAccounts && !openai.accounts.isEmpty
+    /// The tabs that actually have something to show. System rides the same
+    /// row (its payload is present only when the feature is on), so the row
+    /// rule generalises from "both providers" to "two or more tabs" — a
+    /// Claude-only machine with System off looks exactly as it did before
+    /// (mirror of popover_layout.build).
+    private var availableTabs: [String] {
+        var tabs: [String] = []
+        if hasClaudeAccounts { tabs.append("claude") }
+        if !openai.accounts.isEmpty { tabs.append("openai") }
+        if system.payload != nil { tabs.append("system") }
+        return tabs
     }
 
-    private static let tabIDs = ["claude", "openai"]
+    private var showsTabs: Bool { availableTabs.count >= 2 }
 
     /// The provider a returning user last picked, but only honoured while
-    /// the tab row is on screen — stale AppStorage from before this Mac
-    /// had a second provider (or naming a tab that no longer exists) falls
-    /// back to the plain auto-resolve instead.
+    /// the tab row is on screen and the tab still exists — stale AppStorage
+    /// otherwise falls back to the plain auto-resolve.
     private var selectedProvider: String {
-        guard showsTabs, Self.tabIDs.contains(providerTab) else {
+        guard showsTabs, availableTabs.contains(providerTab) else {
             return autoSelectedProvider
         }
         return providerTab
     }
 
     private var autoSelectedProvider: String {
-        (!openai.accounts.isEmpty && !hasClaudeAccounts) ? "openai" : "claude"
+        availableTabs.first ?? "claude"
     }
 
     private var providerTabs: some View {
         HStack(spacing: 7.5) {
-            ForEach(Self.tabIDs, id: \.self) { id in
+            ForEach(availableTabs, id: \.self) { id in
                 tabButton(tabTitle(for: id), id: id)
             }
             Spacer()
@@ -117,7 +127,16 @@ struct PopoverView: View {
     }
 
     private func tabTitle(for id: String) -> String {
-        id == "openai" ? "OpenAI" : "Claude"
+        switch id {
+        case "openai": return "OpenAI"
+        case "system":
+            // Show a count while leftovers are burning (red is applied by
+            // the tab's own colour); calm = a plain "System".
+            let burning = system.payload?.leftovers.rows
+                .filter { $0.burning == true }.count ?? 0
+            return burning > 0 ? "System · \(burning)" : "System"
+        default: return "Claude"
+        }
     }
 
     /// The mark sits BESIDE its label and the tabs read as faded /

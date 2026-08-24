@@ -321,3 +321,64 @@ struct Snapshot: Equatable {
         return Snapshot(accounts: accounts, schemaWarning: warning)
     }
 }
+
+
+// MARK: - System tab payload (ai-smartbar --sysmon --json / --stream)
+// ONE SHARED ANSWER, NOT A SWIFT PORT: every string here — captions, meta,
+// the leftovers chip and foot, the kill token — is formed by
+// smartbar/core/sysmon.py. Swift decodes and lays out; it maps nothing, has
+// no rule, no threshold and no wording of its own (pinned by
+// tests/test_sysmon_parity.py).
+
+struct SystemPayload: Decodable, Equatable {
+    var live: Bool
+    var machine: SysMachine
+    var cpu: SysCPU
+    var history: SysHistory
+    var mem: SysMem
+    var leftovers: SysGroup
+    var busy: SysGroup
+}
+
+struct SysMachine: Decodable, Equatable {
+    var caption: String
+}
+
+struct SysCPU: Decodable, Equatable {
+    var pct: Int
+    var cores: [Int]
+    var caption: String
+}
+
+struct SysHistory: Decodable, Equatable {
+    // A missing minute (sleep, app not running) decodes as nil — an honest
+    // gap the strip draws as track-only, never smeared over.
+    var pct: [Int?]
+    var peakText: String
+    var lastPct: Int
+}
+
+struct SysMem: Decodable, Equatable {
+    var pct: Double
+    var caption: String
+}
+
+struct SysGroup: Decodable, Equatable {
+    var chip: String?
+    var caption: String?
+    var foot: String?
+    var rows: [ProcRow]
+}
+
+struct ProcRow: Decodable, Equatable, Identifiable {
+    var token: String
+    var kind: String       // junk / idle / hot / session / system
+    var name: String
+    var sub: String
+    var meta: String
+    var burning: Bool?     // leftovers only
+    var killable: Bool?    // busy only; absent (nil) on leftovers = killable
+
+    var id: String { token }
+    var isKillable: Bool { killable ?? true }
+}

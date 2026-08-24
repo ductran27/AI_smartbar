@@ -33,9 +33,26 @@ struct ProviderMark: View {
     private func strokedPath(size: CGFloat) -> Path {
         switch kind {
         case "openai": return openAIPath(size: size)
+        case "system": return systemPath(size: size)
         case "warn": return warnOutlinePath(size: size)
         default: return Path()
         }
+    }
+
+    // MARK: - system — a pulse line (mirror of popover_draw._draw_system).
+    // A flat baseline with one spike, reading as an activity/heartbeat
+    // trace: the System tab shows how hard the machine is working.
+
+    private func systemPath(size: CGFloat) -> Path {
+        var path = Path()
+        let cx = size / 2, cy = size / 2
+        path.move(to: CGPoint(x: cx - size * 0.46, y: cy))
+        path.addLine(to: CGPoint(x: cx - size * 0.20, y: cy))
+        path.addLine(to: CGPoint(x: cx - size * 0.06, y: cy - size * 0.34))
+        path.addLine(to: CGPoint(x: cx + size * 0.10, y: cy + size * 0.30))
+        path.addLine(to: CGPoint(x: cx + size * 0.22, y: cy))
+        path.addLine(to: CGPoint(x: cx + size * 0.46, y: cy))
+        return path
     }
 
     /// Everything drawn with `.fill()` — solid marks read as "presence"
