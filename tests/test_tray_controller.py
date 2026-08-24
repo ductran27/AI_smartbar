@@ -570,7 +570,9 @@ class TestOnRemove(ControllerTestCase):
             self.run_last_worker()
         remove.assert_called_once_with(1)
         self.assertEqual([a.number for a in snap.accounts], [2])
-        self.assertEqual(self.controller.generation, 1)
+        # Audit B8: on_remove bumps the generation so an in-flight
+        # pre-remove fetch can no longer resurrect the removed card.
+        self.assertEqual(self.controller.generation, 2)
 
     def test_openai_removal_filters_by_email(self):
         snap = model.Snapshot(openai=[
@@ -593,7 +595,7 @@ class TestOnRemove(ControllerTestCase):
             self.run_last_worker()
             self.host.drain()
         self.assertEqual(self.controller.action_error, "Remove failed: no such")
-        self.assertEqual(self.controller.generation, 1)
+        self.assertEqual(self.controller.generation, 2)
 
     def test_a_successful_removal_leaves_no_stale_error_behind(self):
         self.controller.action_error = "Remove failed: stale"
