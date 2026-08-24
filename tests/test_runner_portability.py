@@ -79,6 +79,18 @@ def _reloaded(module_name, *, platform=None, env=None, fcntl_missing=False):
             sys.modules.pop(module_name, None)
             if saved_module is not None:
                 sys.modules[module_name] = saved_module
+            # Restore the PARENT PACKAGE's attribute too: `from smartbar
+            # import update_runner` resolves through it, so leaving it
+            # bound to the throwaway reload (fake env baked into its
+            # constants) poisoned later tests in the same process even
+            # though sys.modules looked clean (audit B8 flakiness).
+            parent_name, _, child = module_name.rpartition(".")
+            parent = sys.modules.get(parent_name) if parent_name else None
+            if parent is not None:
+                if saved_module is not None:
+                    setattr(parent, child, saved_module)
+                elif hasattr(parent, child):
+                    delattr(parent, child)
 
 
 class TestImportSurvivesWithoutFcntl(unittest.TestCase):
