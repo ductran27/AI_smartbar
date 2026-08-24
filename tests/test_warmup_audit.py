@@ -17,6 +17,16 @@ from smartbar.core import device_config
 
 
 class TestPingsAreHookFree(unittest.TestCase):
+    def setUp(self):
+        # ping_argv resolves the cswap binary; CI runners have none
+        # installed, and this file must not depend on the dev box having
+        # one (or on test_warmup_runner's module-level override leaking
+        # in first).
+        patcher = mock.patch.dict(os.environ,
+                                  {"SMARTBAR_CSWAP": "/mock/bin/cswap"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_argv_excludes_user_settings(self):
         argv = warmup_runner.ping_argv(2, ["--model", "haiku"])
         self.assertIn("--setting-sources", argv)

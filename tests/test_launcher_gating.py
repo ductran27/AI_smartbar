@@ -78,11 +78,8 @@ class TestOpenPanelSafety(unittest.TestCase):
         if sys.platform in ("darwin", "win32"):
             self.skipTest("--open-panel is Linux-only")
 
-    def test_a_reused_pid_is_not_signalled(self):
-        # Covered by unit test below on POSIX: the PID file names a live
-        # process that is NOT an ai-smartbar tray -> refuse, exit 1.
-        if sys.platform == "win32":
-            self.skipTest("POSIX only")
+    @staticmethod
+    def _launcher():
         import importlib.util
         from importlib.machinery import SourceFileLoader
         loader = SourceFileLoader(
@@ -90,15 +87,47 @@ class TestOpenPanelSafety(unittest.TestCase):
         spec = importlib.util.spec_from_loader("launcher_mod", loader)
         mod = importlib.util.module_from_spec(spec)
         loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _open_panel_with_pid(pid):
+        """Run open_panel() in-process against a PID file holding `pid`,
+        on the Linux branch, returning (rc, stderr)."""
+        import contextlib
+        import io
+        mod = TestOpenPanelSafety._launcher()
+        err = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
-            pid_path = os.path.join(tmp, "tray.pid")
-            with open(pid_path, "w") as fh:
-                fh.write(str(os.getpid()))   # a live pid that is NOT a tray
-            env = {"SMARTBAR_CACHE_DIR": tmp}
-            with mock.patch.dict(os.environ, env), \
-                 mock.patch.object(mod.sys, "platform", "linux"):
+            with open(os.path.join(tmp, "tray.pid"), "w") as fh:
+                fh.write(str(pid))
+            with mock.patch.dict(os.environ, {"SMARTBAR_CACHE_DIR": tmp}), \
+                 mock.patch.object(mod.sys, "platform", "linux"), \
+                 contextlib.redirect_stderr(err):
                 rc = mod.open_panel()
+        return rc, err.getvalue()
+
+    def test_a_reused_pid_is_not_signalled(self):
+        # Covered by unit test below on POSIX: the PID file names a live
+        # process that is NOT an ai-smartbar tray -> refuse, exit 1.
+        if sys.platform == "win32":
+            self.skipTest("POSIX only")
+        # a live pid that is NOT a tray
+        rc, err = self._open_panel_with_pid(os.getpid())
         self.assertEqual(rc, 1)
+        self.assertIn("not an ai-smartbar tray", err)
+
+    def test_a_dead_pid_is_reported_as_not_running(self):
+        # The cmdline verdict used to come first, so a PID nobody holds was
+        # reported as a foreign process ("not an ai-smartbar tray") and the
+        # Linux-only subprocess pin in test_open_panel_cli went red on CI
+        # while every macOS dev box skipped it. Liveness is checked first,
+        # on every POSIX host.
+        if sys.platform == "win32":
+            self.skipTest("POSIX only")
+        rc, err = self._open_panel_with_pid(999999)
+        self.assertEqual(rc, 1)
+        self.assertIn("not running", err)
+        self.assertNotIn("not an ai-smartbar tray", err)
 
 
 if __name__ == "__main__":

@@ -99,6 +99,20 @@ def open_panel() -> int:
         print(f"ERROR: no running ai-smartbar tray found (no PID at "
               f"{pid_path}) -- is it running?", file=sys.stderr)
         return 1
+    # Liveness first: a PID nobody holds has no cmdline to inspect, and
+    # reporting it as "not an ai-smartbar tray" (the cmdline verdict below)
+    # sends the user hunting for a foreign process that does not exist.
+    # Signal 0 delivers nothing; PermissionError means the PID is alive but
+    # someone else's, which the cmdline check then reports accurately.
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        print(f"ERROR: PID {pid} (from {pid_path}) is not running -- the "
+              "tray may have exited without cleaning up its PID file",
+              file=sys.stderr)
+        return 1
+    except OSError:
+        pass
     # SIGUSR1's default disposition is TERMINATE. A stale PID file (crash,
     # SIGKILL, the installer's pkill) plus PID reuse would aim that at an
     # unrelated process — so verify the pid actually IS an ai-smartbar tray
