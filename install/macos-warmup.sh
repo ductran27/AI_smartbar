@@ -23,6 +23,20 @@ command -v claude >/dev/null || [[ -x "$HOME/.local/bin/claude" ]] \
 # here on every install rather than remembered.
 CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
 
+# Bake the RESOLVED claude path: `command -v claude` passing here proves it
+# is on the INSTALLING SHELL's PATH (nvm/volta/asdf), not on the fixed PATH
+# the plist bakes below — the exact silent-death the 2026-07-22 fix chased.
+# config.env's own SMARTBAR_CLAUDE (already in CONFIG_PLIST) wins; only add
+# ours when the user set none, to keep the plist free of duplicate keys.
+CLAUDE_PLIST=""
+if ! printf '%s' "$CONFIG_PLIST" | grep -q "SMARTBAR_CLAUDE"; then
+  CLAUDE_BIN="$(command -v claude || true)"
+  if [[ -n "$CLAUDE_BIN" ]]; then
+    CLAUDE_PLIST="
+    <key>SMARTBAR_CLAUDE</key><string>${CLAUDE_BIN}</string>"
+  fi
+fi
+
 # launchd hands agents a bare PATH (/usr/bin:/bin) — cswap resolves the
 # claude CLI via PATH, so bake the usual install dirs in. The runner also
 # hardens its subprocess PATH itself; this is belt and suspenders.
@@ -40,7 +54,7 @@ cat > "$PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${CONFIG_PLIST}
+    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${CLAUDE_PLIST}${CONFIG_PLIST}
   </dict>
   <key>StartInterval</key><integer>600</integer>
   <key>RunAtLoad</key><true/>

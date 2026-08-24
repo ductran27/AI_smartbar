@@ -437,10 +437,18 @@ class TestClientFreshness(unittest.TestCase):
         self.saved = presence_runner.STATE_FILE
         self.work = tempfile.mkdtemp()
         presence_runner.STATE_FILE = os.path.join(self.work, "state.json")
+        # tests/__init__.py fences the suite with SMARTBAR_PRESENCE=off;
+        # this class tests the READ side, which that switch also gates.
+        self.saved_enabled = os.environ.get("SMARTBAR_PRESENCE")
+        os.environ["SMARTBAR_PRESENCE"] = "on"
 
     def tearDown(self):
         self.runner.STATE_FILE = self.saved
         shutil.rmtree(self.work, ignore_errors=True)
+        if self.saved_enabled is None:
+            os.environ.pop("SMARTBAR_PRESENCE", None)
+        else:
+            os.environ["SMARTBAR_PRESENCE"] = self.saved_enabled
 
     def write(self, checked_at):
         with open(self.runner.STATE_FILE, "w") as handle:

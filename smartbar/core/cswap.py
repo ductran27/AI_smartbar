@@ -103,7 +103,9 @@ def _reject_shell_reparse(path: str) -> str:
 def _binary() -> str:
     override = os.environ.get("SMARTBAR_CSWAP")
     if override:
-        return _reject_shell_reparse(override)
+        # ~ is the natural spelling in config.env; unexpanded it produced
+        # "No such file or directory: '~/.local/bin/cswap'" on every poll.
+        return _reject_shell_reparse(os.path.expanduser(override))
     # shutil.which already honours PATHEXT on Windows, so a bare "cswap" on
     # PATH resolves to cswap.exe (or .bat/.cmd) with no change needed here.
     found = shutil.which("cswap")

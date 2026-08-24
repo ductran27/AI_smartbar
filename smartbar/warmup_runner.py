@@ -52,7 +52,9 @@ def claude_binary():
     """
     override = os.environ.get("SMARTBAR_CLAUDE")
     if override:
-        return override
+        # ~ is the natural thing to write in config.env; unexpanded it
+        # prepended "<cwd>/~/.local/bin" to PATH and resolved nothing.
+        return os.path.expanduser(override)
     found = shutil.which("claude")
     if found:
         return found
@@ -101,6 +103,26 @@ def env_with_claude_on_path(claude: str) -> dict:
     """
     env = dict(os.environ)
     claude_dir = os.path.dirname(os.path.abspath(claude))
+    if os.path.basename(claude) != "claude" and sys.platform != "win32":
+        # cswap resolves `claude` BY NAME on PATH — an override pointing at
+        # a differently-named binary (a versioned install) silently did
+        # nothing. A shim directory holding a `claude` symlink makes the
+        # override real.
+        shim_dir = os.path.join(CACHE_DIR, "claude-shim")
+        try:
+            os.makedirs(shim_dir, exist_ok=True)
+            shim = os.path.join(shim_dir, "claude")
+            target = os.path.abspath(claude)
+            if not (os.path.islink(shim) and os.readlink(shim) == target):
+                try:
+                    os.unlink(shim)
+                except OSError:
+                    pass
+                os.symlink(target, shim)
+            claude_dir = shim_dir
+        except OSError:
+            log.warning("could not shim %s as `claude`; cswap may not "
+                        "find it", claude)
     if sys.platform == "win32":
         prepend = [claude_dir]
         appdata = os.environ.get("APPDATA")
@@ -131,9 +153,17 @@ def ping_argv(account_number: int, extra: list) -> list:
     booted ALL user-scope MCP servers, and Serena's dashboard popped a
     browser tab on each unattended run (~10/day; found 2026-08-18). With
     the flag and no --mcp-config, zero MCP servers load — the ping only
-    needs to start the 5h window, and it starts faster too."""
+    needs to start the 5h window, and it starts faster too.
+
+    --setting-sources local keeps it HOOK-free for the same reason: with
+    the user's settings loaded, every unattended ping ran their
+    SessionStart hooks and Stop hooks (a Discord webhook fired ~10×/day
+    from this very machine; found in the 2026-08-24 audit). Only the
+    project-local settings of the empty ping cwd load — i.e. nothing —
+    and OAuth is untouched (verified live: keychain auth still works)."""
     return [cswap._binary(), "run", str(account_number), "--",
-            *extra, "-p", ".", "--max-turns", "1", "--strict-mcp-config"]
+            *extra, "-p", ".", "--max-turns", "1", "--strict-mcp-config",
+            "--setting-sources", "local"]
 
 
 def load_state() -> dict:
@@ -142,8 +172,13 @@ def load_state() -> dict:
             state = json.load(f)
         if isinstance(state, dict):
             return state
-    except (OSError, ValueError):
-        pass
+        log.warning("state file %s held %s, not a dict — starting fresh "
+                    "(caps and cooldowns reset)", STATE_FILE, type(state))
+    except OSError:
+        pass                       # missing file is the normal first run
+    except ValueError as exc:
+        log.warning("state file %s unreadable (%s) — starting fresh "
+                    "(caps and cooldowns reset)", STATE_FILE, exc)
     return {"days": {}, "last": {}}
 
 
@@ -179,8 +214,13 @@ def notify_failure(title: str, body: str) -> None:
         return
     try:
         if sys.platform == "darwin":
+            # Backslashes BEFORE quotes: a detail ending in "\" otherwise
+            # escaped our own closing quote and the osascript silently
+            # failed to compile (check=False ate the error).
+            def _esc(text: str) -> str:
+                return text.replace("\\", "\\\\").replace('"', '\\"')
             script = ('display notification "{}" with title "{}"'
-                      .format(body.replace('"', '\\"'), title.replace('"', '\\"')))
+                      .format(_esc(body), _esc(title)))
             subprocess.run(["/usr/bin/osascript", "-e", script],
                            timeout=10, check=False)
         elif sys.platform == "win32":
@@ -224,15 +264,34 @@ def notify_failure(title: str, body: str) -> None:
         log.exception("notification failed")
 
 
+def _ping_cwd() -> str:
+    """A dedicated empty directory for pings. Under launchd the cwd was "/"
+    and under cron it was $HOME — where `-p .` picked up the user's
+    CLAUDE.md and project context. An empty cwd keeps the ping inert."""
+    path = os.path.join(CACHE_DIR, "warmup-cwd")
+    try:
+        os.makedirs(path, exist_ok=True)
+        return path
+    except OSError:
+        return CACHE_DIR
+
+
 def ping(account_number: int, claude: str) -> tuple[bool, str]:
     """One minimal message as the given account. (ok, detail)."""
     env = env_with_claude_on_path(claude)
     proc = None
+    detail = ""
     for extra in (["--model", "haiku"], []):  # haiku first, plain retry
         try:
+            # encoding pinned: on Windows text=True decodes with the ANSI
+            # code page, and one non-cp1252 byte in cswap's output raised
+            # out of here AFTER the attempt was recorded — cap consumed,
+            # no failure recorded, no brake.
             proc = subprocess.run(ping_argv(account_number, extra),
                                   capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace",
                                   timeout=PING_TIMEOUT, env=env,
+                                  cwd=_ping_cwd(),
                                   **portable.no_window())
         except subprocess.TimeoutExpired:
             return False, f"ping timed out after {PING_TIMEOUT}s"
@@ -241,6 +300,11 @@ def ping(account_number: int, claude: str) -> tuple[bool, str]:
         if proc.returncode == 0:
             return True, "ok (haiku)" if extra else "ok"
         detail = (proc.stderr or proc.stdout or "").strip()[:160]
+        if extra:
+            # Why the cheap model failed is worth a line before the plain
+            # retry silently spends the default model's budget instead.
+            log.warning("haiku ping failed (%s); retrying with the "
+                        "account's default model", detail)
     return False, f"claude exited rc={proc.returncode}: {detail}"
 
 
@@ -255,10 +319,22 @@ def run_once() -> int:
         log.info("another warmup run is in progress; skipping")
         return 0
 
+    state = load_state()
     claude = claude_binary()
     if claude is None:
         log.error("claude CLI not found (set SMARTBAR_CLAUDE)")
+        # Once, not every 10 minutes: the silent version of this is the
+        # exact failure class that kept v1's warmup dead for weeks.
+        if not state.get("claudeMissingNotified"):
+            state["claudeMissingNotified"] = True
+            save_state(state)
+            notify_failure("AI smartbar warmup",
+                           "The claude CLI was not found, so accounts are "
+                           "not being warmed. Set SMARTBAR_CLAUDE in "
+                           "config.env (see warmup.log).")
         return 1
+    if state.pop("claudeMissingNotified", None):
+        save_state(state)
     try:
         snap = cswap.fetch()
     except CswapError as exc:
@@ -266,7 +342,6 @@ def run_once() -> int:
         return 1
 
     now = datetime.now(timezone.utc)
-    state = load_state()
     warmup.prune_state(state, [a.email for a in snap.accounts], now)
     failures = 0
 
@@ -300,22 +375,12 @@ def run_once() -> int:
             continue
         warmup.record_success(state, account.email)
         save_state(state)
-        # Verify the window actually started.
-        verified = False
-        try:
-            fresh = cswap.fetch()
-            fresh_account = next((a for a in fresh.accounts
-                                  if a.email == account.email), None)
-            verified = warmup.warmed_successfully(fresh_account,
-                                                  datetime.now(timezone.utc))
-        except CswapError as exc:
-            log.warning("verification fetch failed: %s", exc)
-        if verified:
-            log.info("warmed #%s %s (%s) — 5h window started",
-                     account.number, account.email, detail)
-        else:
-            # Ping went through but usage data does not show a window yet
-            # (API/cache lag is common). Cooldown prevents a re-ping storm.
-            log.warning("warmed #%s %s (%s) — window not visible yet",
-                        account.number, account.email, detail)
+        # No immediate re-fetch "verification": cswap serves rows younger
+        # than its 180 s TTL from the store, so the new window CANNOT be
+        # visible yet — the old check logged a false WARNING for nearly
+        # every real success (7 "started" vs 397 "not visible" in the live
+        # log). The NEXT run's gate check is the real verification: it
+        # logs "window running" when the ping took.
+        log.info("pinged #%s %s (%s) — window verified on the next run",
+                 account.number, account.email, detail)
     return 1 if failures else 0

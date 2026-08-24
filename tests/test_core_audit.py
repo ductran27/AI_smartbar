@@ -122,9 +122,10 @@ class TestCodexWindows(unittest.TestCase):
 
     def test_registry_temp_names_are_unique_per_write(self):
         seen = []
-        with mock.patch.object(codex.os, "replace",
-                               lambda tmp, path: seen.append(tmp)), \
-             mock.patch.object(codex.os, "makedirs", lambda *a, **k: None):
+        cache = tempfile.mkdtemp()
+        with mock.patch.dict(os.environ, {"SMARTBAR_CACHE_DIR": cache}), \
+             mock.patch.object(codex.os, "replace",
+                               lambda tmp, path: seen.append(tmp)):
             codex._save_registry({"a": 1})
             codex._save_registry({"a": 2})
         self.assertEqual(len(seen), 2)
