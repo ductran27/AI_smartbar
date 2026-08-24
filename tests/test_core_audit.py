@@ -27,20 +27,24 @@ class TestVenvPythonFindsPlainShebangs(unittest.TestCase):
             fh.write(first_line.replace("PYPATH", python) + "\nrest\n")
         return launcher, python
 
-    # The launcher-parsing branch is POSIX-only (Windows probes venv
-    # layouts instead), so these pins force the platform: on the Windows
-    # CI leg the mocked launcher was never even opened.
+    # The launcher-parsing branch is POSIX-only: Windows installs a compiled
+    # cswap.exe and probes venv layouts instead, and the exec-line/shebang
+    # parser only knows POSIX paths — a `C:\...\python` written into a
+    # mock launcher can never match it. Same skip as test_warmup_runner's
+    # TestEnvWithClaudeOnPath.
+    _POSIX_ONLY = "exercises the POSIX launcher parser, which needs POSIX paths"
+
+    @unittest.skipIf(os.name == "nt", _POSIX_ONLY)
     def test_plain_shebang_is_recognised(self):
         launcher, python = self._binary_with("#!PYPATH")
-        with mock.patch.object(cswap.sys, "platform", "linux"), \
-             mock.patch.object(cswap, "_binary", return_value=launcher):
+        with mock.patch.object(cswap, "_binary", return_value=launcher):
             self.assertEqual(cswap.venv_python(), python)
 
+    @unittest.skipIf(os.name == "nt", _POSIX_ONLY)
     def test_quoted_exec_still_works(self):
         launcher, python = self._binary_with(
             "#!/bin/sh\n'''exec' 'PYPATH' \"$0\" \"$@\"")
-        with mock.patch.object(cswap.sys, "platform", "linux"), \
-             mock.patch.object(cswap, "_binary", return_value=launcher):
+        with mock.patch.object(cswap, "_binary", return_value=launcher):
             self.assertEqual(cswap.venv_python(), python)
 
     def test_windows_probes_current_pipx_and_uv_layouts(self):
