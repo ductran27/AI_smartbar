@@ -125,9 +125,15 @@ def env_with_claude_on_path(claude: str) -> dict:
 
 def ping_argv(account_number: int, extra: list) -> list:
     """`cswap run <n> -- <claude args>`. cswap resolves the claude binary
-    itself; post-`--` tokens are claude's arguments only."""
+    itself; post-`--` tokens are claude's arguments only.
+
+    --strict-mcp-config keeps the ping MCP-free: without it every warmup
+    booted ALL user-scope MCP servers, and Serena's dashboard popped a
+    browser tab on each unattended run (~10/day; found 2026-08-18). With
+    the flag and no --mcp-config, zero MCP servers load — the ping only
+    needs to start the 5h window, and it starts faster too."""
     return [cswap._binary(), "run", str(account_number), "--",
-            *extra, "-p", ".", "--max-turns", "1"]
+            *extra, "-p", ".", "--max-turns", "1", "--strict-mcp-config"]
 
 
 def load_state() -> dict:
