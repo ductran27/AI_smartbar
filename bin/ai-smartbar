@@ -40,6 +40,24 @@ def once() -> int:
     return 0
 
 
+def _config_env_settings(windows: bool = False) -> dict:
+    """config.env parsed, or {} — never raises, never prints.
+
+    Reads through smartbar.core.paths directly. The old route imported
+    presence_runner just for its CONFIG_DIR constant, which froze presence's
+    cache paths from the pre-config environment before the Windows loader
+    had folded config.env in — so presence state landed in a different
+    directory than every other feature's.
+    """
+    from smartbar.core import device_config, paths
+    try:
+        path = os.path.join(paths.config_dir(), device_config.FILENAME)
+        with open(path, encoding="utf-8-sig") as handle:
+            return device_config.parse(handle.read(), windows=windows)[0]
+    except OSError:
+        return {}
+
+
 def open_panel() -> int:
     """Ask an already-running Linux tray to show its panel.
 
@@ -65,6 +83,14 @@ def open_panel() -> int:
     import signal
 
     from smartbar.core import paths
+    # The tray runs under the .desktop entry's env prefix, which carries
+    # config.env — including SMARTBAR_CACHE_DIR, where tray.pid lives. A
+    # bare `ai-smartbar --open-panel` bound to a DE hotkey has none of
+    # that, so fold config.env in (setdefault: a real export still wins)
+    # before resolving the PID path, or the hotkey looks in ~/.cache and
+    # reports "no running tray" forever on a device that set a cache dir.
+    for key, value in _config_env_settings().items():
+        os.environ.setdefault(key, value)
     pid_path = paths.tray_pid_file()
     try:
         with open(pid_path) as handle:
@@ -72,6 +98,27 @@ def open_panel() -> int:
     except (OSError, ValueError):
         print(f"ERROR: no running ai-smartbar tray found (no PID at "
               f"{pid_path}) -- is it running?", file=sys.stderr)
+        return 1
+    # SIGUSR1's default disposition is TERMINATE. A stale PID file (crash,
+    # SIGKILL, the installer's pkill) plus PID reuse would aim that at an
+    # unrelated process — so verify the pid actually IS an ai-smartbar tray
+    # before signalling.
+    cmdline = ""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            cmdline = handle.read().replace(b"\0", b" ").decode(
+                "utf-8", errors="ignore")
+    except OSError:
+        try:
+            import subprocess
+            cmdline = subprocess.check_output(
+                ["ps", "-o", "command=", "-p", str(pid)], text=True)
+        except Exception:
+            cmdline = ""
+    if "ai-smartbar" not in cmdline:
+        print(f"ERROR: PID {pid} (from {pid_path}) is not an ai-smartbar "
+              "tray -- stale PID file after a crash? Remove it and restart "
+              "the tray.", file=sys.stderr)
         return 1
     try:
         os.kill(pid, signal.SIGUSR1)
@@ -101,13 +148,12 @@ def print_config(fmt: str) -> int:
     Never fatal. An installer that cannot read the config must still produce a
     working agent — losing a setting is a papercut, failing to install is not.
     """
-    from smartbar.core import device_config
-    # presence_runner owns the canonical ~/.config location (and the
-    # SMARTBAR_CONFIG_DIR override) because the device id already lives there.
-    from smartbar.presence_runner import CONFIG_DIR
-    path = os.path.join(CONFIG_DIR, device_config.FILENAME)
+    from smartbar.core import device_config, paths
+    path = os.path.join(paths.config_dir(), device_config.FILENAME)
     try:
-        with open(path) as handle:
+        # utf-8-sig: a config.env saved as "UTF-8 with BOM" (older Notepad)
+        # otherwise loses its first key to the invisible ﻿ prefix.
+        with open(path, encoding="utf-8-sig") as handle:
             text = handle.read()
     except OSError:
         text = ""
@@ -124,13 +170,7 @@ def print_config(fmt: str) -> int:
 
 def _device_config() -> dict:
     """This device's config.env, or {} — never raises, never prints."""
-    from smartbar.core import device_config
-    from smartbar.presence_runner import CONFIG_DIR
-    try:
-        with open(os.path.join(CONFIG_DIR, device_config.FILENAME)) as handle:
-            return device_config.parse(handle.read())[0]
-    except OSError:
-        return {}
+    return _config_env_settings()
 
 
 def print_update_interval(fmt: str) -> int:
@@ -177,15 +217,7 @@ def _load_windows_env() -> None:
     """
     if sys.platform != "win32":
         return
-    from smartbar.core import device_config
-    from smartbar.presence_runner import CONFIG_DIR
-    try:
-        with open(os.path.join(CONFIG_DIR, device_config.FILENAME)) as handle:
-            text = handle.read()
-    except OSError:
-        return
-    settings, _ = device_config.parse(text, windows=True)
-    for key, value in settings.items():
+    for key, value in _config_env_settings(windows=True).items():
         os.environ.setdefault(key, value)
 
 
@@ -296,9 +328,12 @@ def main() -> int:
     # path, update.channel(), instead of a second one that could disagree.
     if args.channel:
         os.environ["SMARTBAR_UPDATE_CHANNEL"] = args.channel
-    if args.print_config:
+    # `is not None`, never truthiness: an empty value ("" from a broken
+    # caller) must be rejected by the branch's own format check, not fall
+    # through every dispatch and start a second tray.
+    if args.print_config is not None:
         return print_config(args.print_config)
-    if args.update_interval:
+    if args.update_interval is not None:
         return print_update_interval(args.update_interval)
     if args.check_update and args.json:
         import json as json_mod
@@ -337,22 +372,37 @@ def main() -> int:
         from smartbar.core import codex
         print(_json.dumps(codex.payload()))
         return 0
-    if args.remove_account:
+    if args.remove_account is not None:
         import json as _json
         from smartbar.core import account_removal
         ok, error = account_removal.remove(args.remove_account)
         print(_json.dumps({"ok": ok, "error": error}))
         return 0 if ok else 1
     if args.sysmon:
+        # SMARTBAR_SYSMON=off means OFF here too, not just in the painted
+        # trays: no sample, no stream. The bare {"disabled": true} body is
+        # deliberately not a SystemPayload — Swift's decode returns nil and
+        # the System tab disappears, with no Swift-side knowledge of the
+        # env var (the parity rule).
+        import json as _json
         from smartbar import sysmon_runner
+        from smartbar.core import sysmon as sysmon_core
+        if not sysmon_core.enabled():
+            if not args.stream:
+                print(_json.dumps({"disabled": True}))
+            return 0
         if args.stream:
             return sysmon_runner.stream()
-        import json as _json
         print(_json.dumps(sysmon_runner.background_tick()))
         return 0
     if args.kill is not None:
         import json as _json
         from smartbar import sysmon_runner
+        from smartbar.core import sysmon as sysmon_core
+        if not sysmon_core.enabled():
+            print(_json.dumps({"ok": False, "error":
+                               "System tab is off (SMARTBAR_SYSMON=off)"}))
+            return 1
         ok, error = sysmon_runner.kill(args.kill)
         print(_json.dumps({"ok": ok, "error": error}))
         return 0 if ok else 1
