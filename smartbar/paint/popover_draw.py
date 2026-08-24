@@ -225,6 +225,23 @@ def _draw_openai(ctx, glyph) -> None:
     ctx.stroke()
 
 
+def _draw_system(ctx, glyph) -> None:
+    """A pulse line — the System tab's mark. A flat baseline with one spike,
+    reading as an activity/heartbeat trace, which is what the tab shows: how
+    hard the machine is working and what is running on it."""
+    size = glyph.size
+    left = glyph.cx - size * 0.46
+    right = glyph.cx + size * 0.46
+    mid = glyph.cy
+    ctx.move_to(left, mid)
+    ctx.line_to(glyph.cx - size * 0.20, mid)
+    ctx.line_to(glyph.cx - size * 0.06, mid - size * 0.34)   # spike up
+    ctx.line_to(glyph.cx + size * 0.10, mid + size * 0.30)   # dip down
+    ctx.line_to(glyph.cx + size * 0.22, mid)
+    ctx.line_to(right, mid)
+    ctx.stroke()
+
+
 def _draw_pause(ctx, glyph) -> None:
     """Two rounded vertical bars, filled — prefixes the footer's "update
     held" label."""
@@ -267,6 +284,7 @@ _GLYPH_DRAWERS = {
                            # "power" under its own name (see t.Glyph).
     "claude": _draw_claude,
     "openai": _draw_openai,
+    "system": _draw_system,
     "pause": _draw_pause,
     "warn": _draw_warn,
 }

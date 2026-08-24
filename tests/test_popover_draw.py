@@ -25,6 +25,28 @@ def _demo():
     return demo_snapshot()
 
 
+_SYS_DEMO = {
+    "sampledAt": "21:24",
+    "machine": {"caption": "16 cores · 64 GB · load 1.0 · 2.0 · 3.0"},
+    "cpu": {"pct": 13, "cores": [40, 30, 10, 0, 5, 0],
+            "caption": "13 claude · 1141 procs"},
+    "history": {"pct": [10, None, 84, 91, 12], "peakText": "peak 91%",
+                "lastPct": 12},
+    "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed"},
+    "leftovers": {"chip": "1 burning · 5.8 cores", "more": 0,
+                  "foot": "Auto-kill off · junk rules: 5",
+                  "rows": [{"token": "100:1000", "kind": "junk",
+                            "name": "Google Chrome (headless)",
+                            "sub": "pid 100 · cdp-prof-9603",
+                            "meta": "orphan · 6 h · 580%", "burning": True,
+                            "cores": 5.8, "mem": 440, "age": 21600}]},
+    "busy": {"caption": "≥ 50% CPU over two samples", "rows": [
+        {"token": "400:1", "kind": "session", "name": "claude", "sub": "×12",
+         "count": 12, "cpu": 40, "mem": 9000, "meta": "40% · 8.8 GB",
+         "killable": False}]},
+}
+
+
 @unittest.skipIf(cairo is None, "pycairo not installed")
 class TestFitTruncationMode(unittest.TestCase):
     """popover_draw._fit's two modes, mirroring SwiftUI's two truncation
@@ -202,6 +224,10 @@ class TestGlyphDispatchCoversLayout(unittest.TestCase):
                         hover="card:claude:1"),
             layout.build(demo, action_error="Switch failed: in use",
                         hover="dismiss-error"),
+            # The System tab: its "system" tab mark and the kill ✕ on a
+            # hovered leftover row.
+            layout.build(demo, provider="system", system=_SYS_DEMO,
+                        hover="row:100:1000"),
         ]
         kinds = set()
         for built in builds:
@@ -223,7 +249,7 @@ class TestGlyphDispatchCoversLayout(unittest.TestCase):
         # if the demo snapshot ever stopped covering one of stage 04's new
         # kinds, "nothing is missing" would stop meaning "nothing broke".
         self.assertEqual(
-            {"claude", "openai", "warn", "pause"}
+            {"claude", "openai", "warn", "pause", "system"}
             - self._emitted_kinds(), set())
 
 
