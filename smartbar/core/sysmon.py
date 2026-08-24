@@ -159,3 +159,81 @@ def classify(proc, orphan: bool, cpu: float, prev_cpu: float, my_uid: int):
     if cpu >= hot_threshold() and prev_cpu >= hot_threshold():
         return "hot"
     return None
+
+
+# --- process trees + guarded kill ------------------------------------------
+
+def kill_token(proc) -> str:
+    """The opaque handle a UI sends back to kill this process: pid + start
+    epoch. The start time makes the token survive PID reuse — by the time a
+    click arrives the pid may name a different process, and killing that one
+    would be a real bug (this is why a raw pid is never enough)."""
+    return f"{proc.pid}:{proc.start}"
+
+
+def _children_map(table) -> dict:
+    kids: dict = {}
+    for proc in table.values():
+        kids.setdefault(proc.ppid, []).append(proc.pid)
+    return kids
+
+
+def tree_pids(root: int, table) -> set:
+    """`root` and every descendant present in `table` (breadth-first, cycle
+    safe). A leftover row is a whole tree: a headless Chrome's cost lives in
+    its GPU helper, and killing the root without the helpers leaves them
+    burning."""
+    kids = _children_map(table)
+    seen, stack = set(), [root]
+    while stack:
+        pid = stack.pop()
+        if pid in seen or pid not in table:
+            continue
+        seen.add(pid)
+        stack.extend(kids.get(pid, ()))
+    return seen
+
+
+def tree_cpu(root: int, table) -> float:
+    return round(sum(table[pid].cpu for pid in tree_pids(root, table)), 1)
+
+
+def tree_mem_mb(root: int, table) -> int:
+    return round(sum(table[pid].rss_kb
+                     for pid in tree_pids(root, table)) / 1024)
+
+
+def parse_token(token: str):
+    """(pid, start) from a "pid:start" token, or None if malformed."""
+    pid_str, _, start_str = (token or "").partition(":")
+    try:
+        return int(pid_str), int(start_str)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_kill(token: str, table, my_uid: int, own_pids) -> tuple:
+    """(ok, reason) — may this token be killed right now?
+
+    Refuses, in order: a malformed token, a pid no longer present, a pid
+    whose start time no longer matches the token (PID reuse), the app's own
+    process tree, another user's process, and a live session. The checks run
+    against a FRESH table at kill time, never the snapshot the row was drawn
+    from — the world moves between drawing a row and clicking it.
+    """
+    parsed = parse_token(token)
+    if parsed is None:
+        return False, f"malformed kill token {token!r}"
+    pid, start = parsed
+    proc = table.get(pid)
+    if proc is None:
+        return False, "that process is already gone"
+    if proc.start and start and proc.start != start:
+        return False, "that PID was reused by another process — refusing"
+    if pid in own_pids:
+        return False, "refusing to kill AI smartbar itself"
+    if my_uid >= 0 and proc.uid != my_uid:
+        return False, "that process belongs to another user"
+    if is_session_exe(proc.args):
+        return False, "that is a live Claude/Codex session — close it there"
+    return True, ""

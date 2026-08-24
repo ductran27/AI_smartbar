@@ -147,5 +147,96 @@ class TestClassify(unittest.TestCase):
         self.assertIsNone(self.k("/usr/bin/pmset -g", False, cpu=1))
 
 
+class TestTreeAndKill(unittest.TestCase):
+    """Process-tree grouping and the guarded kill token."""
+
+    def table(self):
+        # A headless-Chrome root (100) with a GPU helper (101) and a network
+        # helper (102); an unrelated process (200); a claude session (300)
+        # with an MCP child (301).
+        procs = [
+            sysmon.Proc(100, 1, 501, 50_000, 21600, 5.0,
+                        "/Applications/Google Chrome.app/Contents/MacOS/"
+                        "Google Chrome --headless --user-data-dir=/tmp/"
+                        "cdp-prof-9603", start=1000),
+            sysmon.Proc(101, 100, 501, 400_000, 21600, 575.0,
+                        "/Applications/Google Chrome.app/.../Helpers/"
+                        "Google Chrome Helper (GPU) --type=gpu-process",
+                        start=1000),
+            sysmon.Proc(102, 100, 501, 30_000, 21600, 1.0,
+                        "Google Chrome Helper --type=utility", start=1000),
+            sysmon.Proc(200, 1, 501, 1000, 10, 0.0, "/usr/bin/pmset",
+                        start=2000),
+            sysmon.Proc(300, 400, 501, 900_000, 3600, 5.0,
+                        "/Users/ductran/.local/bin/claude", start=3000),
+            sysmon.Proc(301, 300, 501, 100_000, 3600, 1.0,
+                        "/usr/bin/node /x/mcp-server.js", start=3100),
+        ]
+        return {p.pid: p for p in procs}
+
+    def test_kill_token_is_pid_and_start(self):
+        proc = sysmon.Proc(100, 1, 501, 0, 0, 0.0, "x", start=1000)
+        self.assertEqual(sysmon.kill_token(proc), "100:1000")
+
+    def test_tree_pids_collects_descendants(self):
+        table = self.table()
+        self.assertEqual(sysmon.tree_pids(100, table), {100, 101, 102})
+        self.assertEqual(sysmon.tree_pids(300, table), {300, 301})
+
+    def test_tree_cpu_sums_the_subtree(self):
+        table = self.table()
+        # 5 + 575 + 1 — the headless root's real cost is in its GPU helper.
+        self.assertEqual(sysmon.tree_cpu(100, table), 581.0)
+
+    def test_tree_mem_sums_the_subtree_in_mb(self):
+        table = self.table()
+        # (50000 + 400000 + 30000) KB / 1024 ≈ 469 MB
+        self.assertEqual(sysmon.tree_mem_mb(100, table), round(480_000 / 1024))
+
+    def test_validate_kill_ok_for_own_orphan(self):
+        table = self.table()
+        ok, error = sysmon.validate_kill("100:1000", table, my_uid=501,
+                                         own_pids={9999})
+        self.assertTrue(ok)
+        self.assertEqual(error, "")
+
+    def test_validate_kill_refuses_unknown_pid(self):
+        ok, error = sysmon.validate_kill("55555:1", self.table(), my_uid=501,
+                                         own_pids=set())
+        self.assertFalse(ok)
+        self.assertIn("gone", error.lower())
+
+    def test_validate_kill_refuses_start_time_mismatch(self):
+        # PID reuse: same pid, different start time than the token names.
+        ok, error = sysmon.validate_kill("100:999", self.table(), my_uid=501,
+                                         own_pids=set())
+        self.assertFalse(ok)
+        self.assertIn("reused", error.lower())
+
+    def test_validate_kill_refuses_other_user(self):
+        table = self.table()
+        table[100].uid = 0
+        ok, error = sysmon.validate_kill("100:1000", table, my_uid=501,
+                                         own_pids=set())
+        self.assertFalse(ok)
+
+    def test_validate_kill_refuses_a_session(self):
+        ok, error = sysmon.validate_kill("300:3000", self.table(), my_uid=501,
+                                         own_pids=set())
+        self.assertFalse(ok)
+        self.assertIn("session", error.lower())
+
+    def test_validate_kill_refuses_own_process(self):
+        table = self.table()
+        ok, error = sysmon.validate_kill("100:1000", table, my_uid=501,
+                                         own_pids={100})
+        self.assertFalse(ok)
+
+    def test_validate_kill_rejects_malformed_token(self):
+        ok, error = sysmon.validate_kill("nonsense", self.table(), my_uid=501,
+                                         own_pids=set())
+        self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()
