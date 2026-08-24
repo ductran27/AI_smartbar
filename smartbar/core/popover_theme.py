@@ -205,6 +205,22 @@ BUTTON_PAD_H = 10.5
 FOOTER_H = 25.5
 ICON_BUTTON_W = 27.5
 
+# --- System tab (machine vitals + process rows) ----------------------------
+# Per-core CPU and the 60-minute history are drawn as Boxes — one filled
+# column each — so the three painters need no new shape kind for a "graph";
+# an htop meter IS a bar, and a btop history IS a column of bars. Each column
+# takes the used-ramp colour of its own value, so the panel keeps its one
+# rule: saturation only ever means "how much is spent".
+SYS_CORES_H = 22.0         # height of the per-core column strip
+SYS_CORE_GAP = 2.0         # gap between core columns
+SYS_HIST_H = 34.0          # height of the 60-minute history strip
+SYS_HIST_GAP = 1.0         # gap between history columns
+SYS_ROW_H = 26.0           # one process row (kind chip · name · meta · ✕)
+SYS_MAX_CORES = 32         # cores past this are averaged into columns (model)
+SYS_HISTORY = 60           # minutes of history drawn
+PROC_KIND_W = 48.0         # width of a row's kind chip column
+PROC_MAX_ROWS = 8          # process rows shown per card before "+N more"
+
 # --- type sizes ------------------------------------------------------------
 SIZE_TITLE = 16.5          # .headline
 SIZE_EMAIL = 15.5          # .callout.weight(.semibold)
@@ -464,9 +480,9 @@ class Glyph:
     rather than typeset. `kind` is one of: "refresh", "close", "power",
     "quit" (the header's Quit button — the same power-ring shape as
     "power", under its own name because its Hit is also named "quit"),
-    "claude", "openai" (the provider marks beside a tab's label), "pause"
-    (the footer's "update held") and "warn" (a blocked account's state
-    line).
+    "claude", "openai", "system" (the provider marks beside a tab's label;
+    "system" is a pulse line for the System tab), "pause" (the footer's
+    "update held") and "warn" (a blocked account's state line).
     """
     kind: str
     cx: float

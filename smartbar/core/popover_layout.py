@@ -457,10 +457,242 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
         _bar(shapes, s, bar_l, bar_top, bar_w, metric, now)
 
 
+# --- System tab (machine vitals + process rows) ----------------------------
+
+_KIND_COLORS = {
+    "junk": "critical", "hot": "yellow", "session": "green",
+    "idle": "gray", "system": "gray",
+}
+
+
+def _kind_ink(s, kind):
+    """The chip label ink for a process kind — reusing the status ramp so the
+    System tab introduces no new colour vocabulary (junk reads critical, a
+    session reads green, everything neutral is tertiary)."""
+    name = _KIND_COLORS.get(kind, "gray")
+    return s.status_rgba(name) if name != "gray" else s.text_tertiary
+
+
+def _metric_line(shapes, s, inner_l, inner_r, y, label, caption, value):
+    """The label/caption/value line a vitals row shares with a metric row:
+    bold label left, secondary caption in the middle, mono value right."""
+    label_cy = y + t.ROW_LABEL_H / 2
+    shapes.append(t.Label(inner_l, label_cy, label, size=t.SIZE_ROW_LABEL,
+                          bold=True, color=s.text, max_width=t.LABEL_W))
+    shapes.append(t.Label(inner_r, label_cy, value, size=t.SIZE_ROW_VALUE,
+                          bold=True, mono=True, anchor="right", color=s.text))
+    if caption:
+        cap_l = inner_l + t.LABEL_W + t.BAR_GAP
+        cap_w = (inner_r - t.VALUE_PCT_W - t.BAR_GAP) - cap_l
+        shapes.append(t.Label(cap_l, label_cy, caption, size=t.SIZE_ROW_VALUE,
+                              color=s.text_secondary, max_width=cap_w))
+
+
+def _column_strip(shapes, s, x, y, w, values, height, gap):
+    """A row of value columns (per-core CPU, or the minute history): a track
+    box per column, and a fill box rising from the bottom in the used-ramp
+    colour of that column's own value. A None value (a missing history
+    minute) draws the track only — an honest gap, not a smear."""
+    count = len(values)
+    if count == 0:
+        return
+    col_w = max(1.0, (w - (count - 1) * gap) / count)
+    for index, value in enumerate(values):
+        cx = x + index * (col_w + gap)
+        shapes.append(t.Box(cx, y, col_w, height, radius=2.0,
+                            fill=s.bar_track))
+        if value is None:
+            continue
+        fill_h = max(0.0, min(100.0, value)) / 100.0 * height
+        if fill_h > 0:
+            shapes.append(t.Box(cx, y + height - fill_h, col_w, fill_h,
+                                radius=2.0,
+                                fill=s.status_rgba(model.color(value))))
+
+
+def _vitals_card(shapes, s, system, top):
+    """The "This Mac" card: CPU total over a per-core strip, a 60-minute
+    history strip, and a memory bar — the machine's context for reading the
+    process lists below."""
+    left, right = t.PAD, t.WIDTH - t.PAD
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+    inner_w = inner_r - inner_l
+    cpu, mem = system["cpu"], system["mem"]
+    cpu_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.SYS_CORES_H
+    hist_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.SYS_HIST_H
+    mem_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.BAR_H
+    height = (t.CARD_PAD_V * 2 + t.CARD_HEADER_H + t.CARD_INNER_GAP
+              + cpu_block + t.ROW_GAP + hist_block + t.ROW_GAP + mem_block)
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=s.card_bg, stroke=s.card_border, line_width=1.0))
+
+    head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
+    shapes.append(t.Dot(inner_l + t.DOT_R, head_cy, t.DOT_R,
+                        s.status_rgba(model.color(cpu["pct"]))))
+    title_l = inner_l + t.DOT_R * 2 + 8
+    shapes.append(t.Label(title_l, head_cy, "This Mac", size=t.SIZE_EMAIL,
+                          bold=True, color=s.text))
+    cap_l = title_l + t.text_width("This Mac", t.SIZE_EMAIL, bold=True) + 8
+    shapes.append(t.Label(cap_l, head_cy, system["machine"]["caption"],
+                          size=t.SIZE_CAPTION, color=s.text_tertiary,
+                          max_width=inner_r - cap_l))
+
+    y = top + t.CARD_PAD_V + t.CARD_HEADER_H + t.CARD_INNER_GAP
+    _metric_line(shapes, s, inner_l, inner_r, y, "CPU", cpu["caption"],
+                 f"{cpu['pct']}%")
+    _column_strip(shapes, s, inner_l, y + t.ROW_LABEL_H + t.ROW_LABEL_GAP,
+                  inner_w, cpu["cores"], t.SYS_CORES_H, t.SYS_CORE_GAP)
+
+    y += cpu_block + t.ROW_GAP
+    hist = system["history"]
+    _metric_line(shapes, s, inner_l, inner_r, y, "60 min", hist["peakText"],
+                 f"{hist['lastPct']}%")
+    _column_strip(shapes, s, inner_l, y + t.ROW_LABEL_H + t.ROW_LABEL_GAP,
+                  inner_w, hist["pct"], t.SYS_HIST_H, t.SYS_HIST_GAP)
+
+    y += hist_block + t.ROW_GAP
+    _metric_line(shapes, s, inner_l, inner_r, y, "MEM", mem["caption"],
+                 f"{round(mem['pct'])}%")
+    bar_y = y + t.ROW_LABEL_H + t.ROW_LABEL_GAP
+    shapes.append(t.Box(inner_l, bar_y, inner_w, t.BAR_H, radius=t.BAR_H / 2,
+                        fill=s.bar_track))
+    fill_w = max(t.BAR_H, inner_w * min(max(mem["pct"], 0.0), 100.0) / 100.0)
+    shapes.append(t.Box(inner_l, bar_y, fill_w, t.BAR_H, radius=t.BAR_H / 2,
+                        fill=s.status_rgba(model.color(mem["pct"]))))
+    return height
+
+
+def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm):
+    """One process row: a kind chip, the name (+ sub), the meta on the right,
+    and — for a killable row under the pointer — a ✕ that arms an in-row
+    "Kill …? [Kill] [Keep]" confirm (the account-removal affordance, reused)."""
+    token = row["token"]
+    killable = row.get("killable", True)
+    row_cy = top + t.SYS_ROW_H / 2
+    # Whole-row hover region, appended first so the ✕/buttons win hit-testing.
+    hits.append(t.Hit(f"row:{token}", inner_l, top, inner_r - inner_l,
+                      t.SYS_ROW_H))
+
+    if confirm == token and killable:
+        question = f"Kill {row['name']}, {row['sub']}?"
+        shapes.append(t.Label(inner_l, row_cy, question, size=t.SIZE_ROW_LABEL,
+                              bold=True, color=s.text,
+                              max_width=inner_r - inner_l - 120))
+        keep_l = _button(shapes, hits, s, "cancel-kill", inner_r, row_cy,
+                         "Keep", hover=hover, tooltip="Leave it running")
+        _button(shapes, hits, s, f"confirm-kill:{token}", keep_l - 7, row_cy,
+                "Kill", hover=hover, danger=True,
+                tooltip="Send SIGTERM, then SIGKILL if it ignores it")
+        return
+
+    chip_w = t.PROC_KIND_W
+    shapes.append(t.Box(inner_l, row_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
+                        radius=t.CHIP_H / 2, fill=s.button_disabled))
+    shapes.append(t.Label(inner_l + chip_w / 2, row_cy, row["kind"],
+                          size=t.SIZE_CHIP, anchor="center",
+                          color=_kind_ink(s, row["kind"])))
+    name_l = inner_l + chip_w + 8
+    meta_w = t.text_width(row["meta"], t.SIZE_CAPTION)
+    on_row = hover in (f"row:{token}", f"kill:{token}")
+    cross_gutter = (t.REMOVE_HIT + 7) if (killable and on_row) else 0
+    name_r = inner_r - meta_w - 10 - cross_gutter
+    name = row["name"]
+    sub = row.get("sub") or ""
+    sub_w = (t.text_width(sub, t.SIZE_CAPTION) + 6) if sub else 0
+    shapes.append(t.Label(name_l, row_cy, name, size=t.SIZE_ROW_LABEL,
+                          color=s.text, max_width=name_r - name_l - sub_w,
+                          mode="middle"))
+    if sub:
+        sub_l = min(name_l + t.text_width(name, t.SIZE_ROW_LABEL) + 6,
+                    name_r - sub_w + 6)
+        shapes.append(t.Label(sub_l, row_cy, sub, size=t.SIZE_CAPTION,
+                              color=s.text_tertiary, max_width=name_r - sub_l))
+    shapes.append(t.Label(inner_r, row_cy, row["meta"], size=t.SIZE_CAPTION,
+                          mono=True, anchor="right", color=s.text_secondary))
+    if killable and on_row:
+        cx = inner_r - meta_w - 10 - t.REMOVE_HIT / 2
+        shapes.append(t.Glyph("close", cx, row_cy, t.REMOVE_ICON,
+                              s.text if hover == f"kill:{token}"
+                              else s.text_tertiary))
+        hits.append(t.Hit(f"kill:{token}", cx - t.REMOVE_HIT / 2,
+                          row_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
+                          t.REMOVE_HIT, tooltip=f"Kill {row['name']}"))
+
+
+def _proc_card(shapes, hits, s, title, caption, block, top, hover, confirm,
+               foot=""):
+    """A card of process rows (Leftovers or Busy), with a header chip and an
+    optional foot line."""
+    left, right = t.PAD, t.WIDTH - t.PAD
+    inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
+    rows = block.get("rows", [])
+    body = len(rows) * t.SYS_ROW_H if rows else t.STATE_ROW_H
+    foot_h = (t.CARD_INNER_GAP + t.STATE_LINE_H) if foot else 0
+    height = (t.CARD_PAD_V * 2 + t.CARD_HEADER_H + t.CARD_INNER_GAP
+              + body + foot_h)
+    shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
+                        fill=s.card_bg, stroke=s.card_border, line_width=1.0))
+
+    head_cy = top + t.CARD_PAD_V + t.CARD_HEADER_H / 2
+    shapes.append(t.Label(inner_l, head_cy, title, size=t.SIZE_EMAIL,
+                          bold=True, color=s.text))
+    cap_l = inner_l + t.text_width(title, t.SIZE_EMAIL, bold=True) + 8
+    chip = block.get("chip", "")
+    chip_room = 120 if chip else 0
+    if caption:
+        shapes.append(t.Label(cap_l, head_cy, caption, size=t.SIZE_CAPTION,
+                              color=s.text_tertiary,
+                              max_width=inner_r - cap_l - chip_room))
+    if chip:
+        chip_w = t.text_width(chip, t.SIZE_CHIP) + 16
+        chip_x = inner_r - chip_w
+        burning = "burning" in chip
+        shapes.append(t.Box(chip_x, head_cy - t.CHIP_H / 2, chip_w, t.CHIP_H,
+                            radius=t.CHIP_H / 2,
+                            fill=s.button_disabled))
+        shapes.append(t.Label(chip_x + chip_w / 2, head_cy, chip,
+                              size=t.SIZE_CHIP, anchor="center",
+                              color=s.danger if burning else s.text_secondary))
+
+    y = top + t.CARD_PAD_V + t.CARD_HEADER_H + t.CARD_INNER_GAP
+    if rows:
+        for row in rows:
+            _proc_row(shapes, hits, s, row, y, inner_l, inner_r, hover, confirm)
+            y += t.SYS_ROW_H
+    else:
+        shapes.append(t.Label(inner_l, y + t.STATE_ROW_H / 2,
+                              "Nothing left behind — every orphan is gone.",
+                              size=t.SIZE_CAPTION, color=s.text_secondary))
+        y += t.STATE_ROW_H
+    if foot:
+        y += t.CARD_INNER_GAP
+        shapes.append(t.Label(inner_l, y + t.STATE_LINE_H / 2, foot,
+                              size=t.SIZE_CAPTION, color=s.text_tertiary,
+                              max_width=inner_r - inner_l))
+    return height
+
+
+def _system_view(shapes, hits, s, system, top, hover, confirm):
+    """The three System-tab cards, returning the cursor at the bottom of the
+    last one (the shared footer picks up from there)."""
+    left = system["leftovers"]
+    foot = left.get("foot", "")
+    if left.get("more"):
+        foot += f" · +{left['more']} more"
+    cursor = top + _vitals_card(shapes, s, system, top) + t.CARD_GAP
+    cursor += _proc_card(shapes, hits, s, "Leftovers",
+                         "orphans of dead sessions", left, cursor, hover,
+                         confirm, foot=foot) + t.CARD_GAP
+    cursor += _proc_card(shapes, hits, s, "Busy",
+                         system["busy"].get("caption", ""), system["busy"],
+                         cursor, hover, confirm)
+    return cursor
+
+
 def build(snapshot, *, version="", pending_version="", blocked_reason="",
           fetched_at="", stale=False, error="", now=None, hover="",
           provider="", confirm="", action_error="", refreshing=False,
-          stale_reason="", scheme=t.DARK) -> t.Layout:
+          stale_reason="", scheme=t.DARK, system=None) -> t.Layout:
     """Positioned primitives + hit rects for the whole popover.
 
     `scheme` is the appearance to paint — a t.Scheme, or the name of one
@@ -551,15 +783,39 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     cursor = t.PAD + t.HEADER_H + t.SECTION_GAP
     accounts = list(snapshot.accounts) if snapshot is not None else []
     openai = list(getattr(snapshot, "openai", []) or []) if snapshot else []
-    selected = provider or ("openai" if openai and not accounts else "claude")
-    if accounts and openai:
+    # Which tabs exist: a provider gets a pill only when it has something to
+    # show. System rides the same row (its payload is passed in when the
+    # feature is on), so the row rule generalises from "both providers" to
+    # "two or more tabs" — a Claude-only machine with System off looks
+    # exactly as it did before this feature.
+    tabs = []
+    if accounts:
+        tabs.append(("claude", "Claude"))
+    if openai:
+        tabs.append(("openai", "OpenAI"))
+    if system is not None:
+        burning = sum(1 for row in system["leftovers"]["rows"]
+                      if row.get("burning"))
+        tabs.append(("system", f"System · {burning}" if burning else "System"))
+    tab_names = [name for name, _ in tabs]
+    if provider in tab_names:
+        selected = provider
+    elif accounts:
+        selected = "claude"
+    elif openai:
+        selected = "openai"
+    elif system is not None:
+        selected = "system"
+    else:
+        selected = "claude"
+    if len(tabs) >= 2:
         # The tab row is part of the header block, not a section of its
         # own, so it sits TAB_TOP_GAP under the title instead of a full
         # SECTION_GAP (mirrored by PopoverView's nested header VStack).
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
-        for name, text in (("claude", "Claude"), ("openai", "OpenAI")):
+        for name, text in tabs:
             current = name == selected
             label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
             width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
@@ -588,8 +844,10 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
             label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
             shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
                                   bold=current, color=color))
+            tip = ("Show machine vitals and leftover processes"
+                   if name == "system" else f"Show {text} accounts")
             hits.append(t.Hit(hit_name, x, cy - t.BUTTON_H / 2, width,
-                              t.BUTTON_H, tooltip=f"Show {text} accounts"))
+                              t.BUTTON_H, tooltip=tip))
             x += width + t.TAB_GAP
         cursor += t.TAB_H + t.SECTION_GAP
     if action_error:
@@ -612,34 +870,40 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                           err_cy - t.REMOVE_HIT / 2, t.REMOVE_HIT,
                           t.REMOVE_HIT, tooltip="Dismiss"))
         cursor += block_h + t.CARD_GAP
-    cards = accounts if selected == "claude" else openai
-    if snapshot is None:
-        text_ = error or "Loading usage…"
-        lines = _lines_for_width(text_, right - t.PAD)
-        block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
-        shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
-                              size=t.SIZE_CAPTION,
-                              color=s.warning if error else s.text_secondary,
-                              max_width=right - t.PAD, max_lines=lines))
-        cursor += block_h + t.CARD_GAP
-    elif selected == "claude" and snapshot.active_account is None:
-        # cswap registration is a Claude story; the OpenAI tab never begs
-        # the user to sign in to Claude Code. max_lines=2 (SwiftUI wraps
-        # at 2 here too) plus the matching height growth is FINDING 1:
-        # NO_ACCOUNTS needs ~355pt in a 308pt slot, and without both it
-        # used to middle-truncate into nonsense.
-        text_ = NO_ACCOUNTS if not accounts else UNREGISTERED
-        lines = _lines_for_width(text_, right - t.PAD)
-        block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
-        shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
-                              size=t.SIZE_CAPTION, color=s.text_secondary,
-                              max_width=right - t.PAD, max_lines=lines))
-        cursor += block_h + t.CARD_GAP
-    for account in cards:
-        cursor += _card(shapes, hits, s, account, cursor, now, hover,
-                        confirm) + t.CARD_GAP
-    if cards:
-        cursor -= t.CARD_GAP
+    if selected == "system":
+        # The System tab renders machine vitals + process rows instead of
+        # account cards; the footer below is shared with the account path.
+        cursor = _system_view(shapes, hits, s, system, cursor, hover, confirm)
+    else:
+        cards = accounts if selected == "claude" else openai
+        if snapshot is None:
+            text_ = error or "Loading usage…"
+            lines = _lines_for_width(text_, right - t.PAD)
+            block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+            shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
+                                  size=t.SIZE_CAPTION,
+                                  color=s.warning if error
+                                  else s.text_secondary,
+                                  max_width=right - t.PAD, max_lines=lines))
+            cursor += block_h + t.CARD_GAP
+        elif selected == "claude" and snapshot.active_account is None:
+            # cswap registration is a Claude story; the OpenAI tab never begs
+            # the user to sign in to Claude Code. max_lines=2 (SwiftUI wraps
+            # at 2 here too) plus the matching height growth is FINDING 1:
+            # NO_ACCOUNTS needs ~355pt in a 308pt slot, and without both it
+            # used to middle-truncate into nonsense.
+            text_ = NO_ACCOUNTS if not accounts else UNREGISTERED
+            lines = _lines_for_width(text_, right - t.PAD)
+            block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+            shapes.append(t.Label(t.PAD, cursor + block_h / 2, text_,
+                                  size=t.SIZE_CAPTION, color=s.text_secondary,
+                                  max_width=right - t.PAD, max_lines=lines))
+            cursor += block_h + t.CARD_GAP
+        for account in cards:
+            cursor += _card(shapes, hits, s, account, cursor, now, hover,
+                            confirm) + t.CARD_GAP
+        if cards:
+            cursor -= t.CARD_GAP
 
     cursor += t.SECTION_GAP
     foot_cy = cursor + t.FOOTER_H / 2
