@@ -6,6 +6,18 @@ SUPPORT="$HOME/Library/Application Support/ai-smartbar"
 VENV="$SUPPORT/venv"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.plist"
 
+# Plist bodies below splice paths into XML: a checkout under "~/R&D/…" or a
+# HOME with "<" produced a plist launchd rejects (an update-apply rollback
+# loop). Escape once, use the escaped copies inside every heredoc.
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+XREPO="$(xml_escape "$REPO")"
+XHOME="$(xml_escape "$HOME")"
+XVENV="$(xml_escape "$VENV")"
+
 AUTO_UPDATE=1
 CHANNEL_ARG=()
 while [[ $# -gt 0 ]]; do
@@ -15,6 +27,9 @@ while [[ $# -gt 0 ]]; do
       rm -f "$PLIST"
       rm -rf "$SUPPORT"
       "$REPO/install/macos-update.sh" --uninstall >/dev/null 2>&1 || true
+      # The warmup agent kept pinging every 10 minutes after an
+      # "uninstall" — real claude requests per account, forever.
+      "$REPO/install/macos-warmup.sh" --uninstall >/dev/null 2>&1 || true
       echo "ai-smartbar uninstalled."
       exit 0 ;;
     --no-auto-update) AUTO_UPDATE=0; shift ;;
@@ -46,15 +61,15 @@ cat > "$PLIST" <<EOF
   <key>Label</key><string>com.ductran.ai-smartbar</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$VENV/bin/python3</string>
-    <string>$REPO/bin/ai-smartbar</string>
+    <string>${XVENV}/bin/python3</string>
+    <string>${XREPO}/bin/ai-smartbar</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>${CONFIG_PLIST}
+    <key>SMARTBAR_REPO_ROOT</key><string>${XREPO}</string>${CONFIG_PLIST}
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/Library/Logs/ai-smartbar.log</string>
+  <key>StandardErrorPath</key><string>${XHOME}/Library/Logs/ai-smartbar.log</string>
 </dict>
 </plist>
 EOF

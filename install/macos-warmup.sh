@@ -6,6 +6,17 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.warmup.plist"
 
+# Plist bodies below splice paths into XML: a checkout under "~/R&D/…" or a
+# HOME with "<" produced a plist launchd rejects (an update-apply rollback
+# loop). Escape once, use the escaped copies inside every heredoc.
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+XREPO="$(xml_escape "$REPO")"
+XHOME="$(xml_escape "$HOME")"
+
 if [[ "${1:-}" == "--uninstall" ]]; then
   launchctl unload "$PLIST" 2>/dev/null || true
   rm -f "$PLIST"
@@ -33,7 +44,7 @@ if ! printf '%s' "$CONFIG_PLIST" | grep -q "SMARTBAR_CLAUDE"; then
   CLAUDE_BIN="$(command -v claude || true)"
   if [[ -n "$CLAUDE_BIN" ]]; then
     CLAUDE_PLIST="
-    <key>SMARTBAR_CLAUDE</key><string>${CLAUDE_BIN}</string>"
+    <key>SMARTBAR_CLAUDE</key><string>$(xml_escape "$CLAUDE_BIN")</string>"
   fi
 fi
 
@@ -48,17 +59,17 @@ cat > "$PLIST" <<EOF
   <key>Label</key><string>com.ductran.ai-smartbar.warmup</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${REPO}/bin/ai-smartbar</string>
+    <string>${XREPO}/bin/ai-smartbar</string>
     <string>--warmup-once</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${CLAUDE_PLIST}${CONFIG_PLIST}
+    <string>${XHOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>${CLAUDE_PLIST}${CONFIG_PLIST}
   </dict>
   <key>StartInterval</key><integer>600</integer>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/.cache/ai-smartbar/warmup-agent.log</string>
+  <key>StandardErrorPath</key><string>${XHOME}/.cache/ai-smartbar/warmup-agent.log</string>
 </dict>
 </plist>
 EOF

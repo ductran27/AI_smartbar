@@ -57,6 +57,7 @@ jobs:
   changes:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       swift: ${{ steps.filter.outputs.swift }}
       windows: ${{ steps.filter.outputs.windows }}
@@ -113,6 +114,7 @@ jobs:
   # `if: matrix.os == ...` guards they used to carry.
   unittest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -216,6 +218,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.windows == 'true'
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -264,6 +267,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.swift == 'true'
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
@@ -291,6 +295,7 @@ jobs:
   # and stay where they are, behind release.sh's --full.
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 

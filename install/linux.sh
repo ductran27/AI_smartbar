@@ -166,8 +166,14 @@ install_updater() {
   # the updater is re-running this script (it just fetched, and a network blip
   # must not turn a good update into a rollback).
   if [[ "${SMARTBAR_UPDATE_APPLY:-}" != "1" ]]; then
+    # Fail exactly where the timer would: BatchMode + no stdin stops ssh
+    # asking on the terminal, and SSH_AUTH_SOCK passes through because the
+    # user manager provides it (env -i alone rejected agent-only keys).
     if env -i PATH="$AGENT_PATH" HOME="$HOME" GIT_TERMINAL_PROMPT=0 \
-         git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1; then
+         GIT_ASKPASS= SSH_ASKPASS_REQUIRE=never \
+         GIT_SSH_COMMAND="ssh -oBatchMode=yes" \
+         SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
+         git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1 </dev/null; then
       echo "Non-interactive fetch OK."
     else
       echo "ERROR: cannot fetch origin without a prompt — add an SSH key or a" >&2

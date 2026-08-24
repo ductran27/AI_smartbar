@@ -9,6 +9,18 @@ PKG="$REPO/macos-swift"
 APP_DIR="$HOME/Applications/AI_smartbar.app"
 PLIST="$HOME/Library/LaunchAgents/com.ductran.ai-smartbar.plist"
 
+# Plist bodies below splice paths into XML: a checkout under "~/R&D/…" or a
+# HOME with "<" produced a plist launchd rejects (an update-apply rollback
+# loop). Escape once, use the escaped copies inside every heredoc.
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+XREPO="$(xml_escape "$REPO")"
+XHOME="$(xml_escape "$HOME")"
+XAPP_DIR="$(xml_escape "$APP_DIR")"
+
 # Canonical version lives in smartbar/__init__.py; install/release.sh bumps it
 # there and everything else (this bundle, Version.swift, the git tag) follows.
 VERSION="$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' "$REPO/smartbar/__init__.py")"
@@ -30,6 +42,9 @@ while [[ $# -gt 0 ]]; do
       rm -f "$PLIST"
       rm -rf "$APP_DIR"
       "$REPO/install/macos-update.sh" --uninstall >/dev/null 2>&1 || true
+      # The warmup agent kept pinging every 10 minutes after an
+      # "uninstall" — real claude requests per account, forever.
+      "$REPO/install/macos-warmup.sh" --uninstall >/dev/null 2>&1 || true
       echo "AI_smartbar.app uninstalled."
       exit 0 ;;
     --no-auto-update) AUTO_UPDATE=0; shift ;;
@@ -59,6 +74,11 @@ BIN="$(swift build -c release --package-path "$PKG" --show-bin-path)/AISmartbar"
 
 echo "Bundling ${APP_DIR}…"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+# rm first: cp into the existing file truncates the RUNNING app's Mach-O in
+# place (same inode) seconds before it is unloaded below, and macOS kills a
+# running signed binary whose backing file changed on its next page-in.
+# A new inode leaves the running instance its old pages.
+rm -f "$APP_DIR/Contents/MacOS/AISmartbar"
 cp "$BIN" "$APP_DIR/Contents/MacOS/AISmartbar"
 
 # The app icon, built from the one committed asset that every platform shares
@@ -151,16 +171,16 @@ cat > "$PLIST" <<EOF
 <dict>
   <key>Label</key><string>com.ductran.ai-smartbar</string>
   <key>ProgramArguments</key>
-  <array><string>$APP_DIR/Contents/MacOS/AISmartbar</string></array>
+  <array><string>${XAPP_DIR}/Contents/MacOS/AISmartbar</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <!-- The bundle is a COPY in ~/Applications and cannot find the checkout
          on its own; device presence needs bin/ai-smartbar to announce this
          Mac to the other devices. -->
-    <key>SMARTBAR_REPO_ROOT</key><string>$REPO</string>${CONFIG_PLIST}
+    <key>SMARTBAR_REPO_ROOT</key><string>${XREPO}</string>${CONFIG_PLIST}
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/Library/Logs/ai-smartbar.log</string>
+  <key>StandardErrorPath</key><string>${XHOME}/Library/Logs/ai-smartbar.log</string>
 </dict>
 </plist>
 EOF

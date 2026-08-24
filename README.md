@@ -242,7 +242,10 @@ fast-forwards, so put it somewhere permanent.
 Both macOS installers share the `com.ductran.ai-smartbar` LaunchAgent
 label — installing one replaces the other at login (single instance).
 Uninstall with `./install/linux.sh --uninstall`,
-`./install/macos.sh --uninstall`, or `.\install\windows.ps1 -Uninstall`.
+`./install/macos-swift.sh --uninstall` (the native app) or
+`./install/macos.sh --uninstall` (the Python menu bar), or
+`.\install\windows.ps1 -Uninstall`. Each also removes the update agent and,
+on macOS, the warmup agent.
 
 Every installer also turns on [self-updating](#updating-and-releases).
 Add `--no-auto-update` to opt a device out, or `--channel main` to follow
@@ -506,9 +509,12 @@ catch. `SMARTBAR_SYSMON=off` removes the tab and every sample, stream and kill.
 
 Platform support: macOS is full (per-core CPU via Mach, the live stream).
 Linux is full too (`/proc`), minus the macOS-only 1-second stream — the panel
-still samples on its own timer. Windows is an honest downgrade: total CPU
-only (no per-core strip) and no live stream, but the process lists and the
-guarded kill work.
+still samples on its own timer. Windows has no System tab yet: there is no
+honest per-process sample there (no `ps`, no cheap cumulative-CPU column),
+and a tab of fabricated zeros is worse than none. Kill safety on every
+platform: a Busy row kills only the listed process(es), a Leftover row kills
+the orphan's whole tree minus any live claude/codex session inside it, and
+the bar's own processes are never offered.
 
 ## The Linux panel
 
@@ -654,7 +660,8 @@ period, or — where cron is the fallback — the closest crontab spacing cron c
 express, since cron has minute resolution and no notion of an interval. It is
 resolved at **install** time rather than read per run, so a change takes effect
 when the installer next runs — immediately if you re-run it, otherwise at the
-next update.
+next update (the updater re-runs the installers with `config.env`'s value,
+never the previous agent's baked one).
 
 **How a device tells you.** A waiting release badges the bar icon with a
 small red dot — the icon gets slightly wider rather than the dot covering a
