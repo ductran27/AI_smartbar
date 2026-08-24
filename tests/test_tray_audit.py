@@ -80,8 +80,13 @@ class TestSysmonTickInFlightGuard(ControllerTestCase):
 
 class TestBrokenCswapDoesNotHideAWaitingUpdate(ControllerTestCase):
     def test_apply_error_rereads_the_pending_update(self):
-        with mock.patch("smartbar.update_runner.pending_for_ui",
-                        return_value=("9.9.9", "")):
+        # Resolve the module at TEST time: test_runner_portability reloads
+        # smartbar.update_runner, so a string-target patch bound earlier in
+        # the run can end up on a stale module object.
+        import importlib
+        ur = importlib.import_module("smartbar.update_runner")
+        with mock.patch.object(ur, "pending_for_ui",
+                               return_value=("9.9.9", "")):
             self.controller._apply_error("cswap exploded",
                                          self.controller.generation)
         self.assertEqual(self.controller.update_pending, "9.9.9")
