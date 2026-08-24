@@ -169,8 +169,11 @@ def enable_dpi_awareness() -> None:
     """
     if sys.platform != "win32":
         return
-    _declare_signatures()
     try:
+        # Inside the try: on Windows 8.1 / 10 before 1703 the export does
+        # not exist and the attribute lookup itself raised, which took the
+        # whole popover module down at import instead of falling back.
+        _declare_signatures()
         # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == -4 (API research).
         if ctypes.windll.user32.SetProcessDpiAwarenessContext(-4):
             return
@@ -324,11 +327,16 @@ class Popover(tk.Toplevel):
         """(Un)bind the mouse wheel to match whether there is anything to
         scroll -- avoids a bound handler quietly consuming wheel events
         over a panel that has nothing to scroll."""
+        # Bound on the TOPLEVEL, not the canvas: Tk 8.6 routes <MouseWheel>
+        # like key events, to the window that has focus — and show_panel
+        # focus_force()s this Toplevel, whose bindtags never include the
+        # canvas. A canvas binding therefore never fired, and a capped
+        # panel's lower cards were unreachable.
         if scrollable and not self._scroll_bound:
-            self.canvas.bind("<MouseWheel>", self._on_scroll)
+            self.bind("<MouseWheel>", self._on_scroll)
             self._scroll_bound = True
         elif not scrollable and self._scroll_bound:
-            self.canvas.unbind("<MouseWheel>")
+            self.unbind("<MouseWheel>")
             self._scroll_bound = False
             self.canvas.yview_moveto(0.0)
 
@@ -507,8 +515,15 @@ class Popover(tk.Toplevel):
         if not self.get_visible():
             self._tick_id = None
             return
-        self.refresh_layout()   # countdowns recompute from the reset times
-        self._tick_id = self.after(TICK_SECONDS * 1000, self._tick)
+        try:
+            self.refresh_layout()   # countdowns recompute from the reset times
+        except Exception:
+            # Re-armed in `finally`: a raising refresh used to leave a
+            # stale _tick_id behind, so neither this tick nor any later
+            # show_panel() ever rescheduled — countdowns froze for good.
+            log.exception("panel tick failed")
+        finally:
+            self._tick_id = self.after(TICK_SECONDS * 1000, self._tick)
 
     # --- placement ---------------------------------------------------------
     def _position(self) -> None:

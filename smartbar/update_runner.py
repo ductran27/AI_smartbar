@@ -501,7 +501,9 @@ def run_installer(key: str, channel: str = "",
     env.pop("SMARTBAR_UPDATE_INTERVAL", None)
     if channel:
         env["SMARTBAR_UPDATE_CHANNEL"] = channel
-    kwargs = {}
+    # no_window: a powershell.exe child of a console-less pythonw sat as a
+    # black console on screen for the whole unattended update on Windows.
+    kwargs = dict(portable.no_window())
     if sys.platform != "win32":
         # Own process group: on timeout, kill the INSTALLER'S CHILDREN too.
         # subprocess's timeout kills only bash and orphaned the `swift

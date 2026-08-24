@@ -377,7 +377,11 @@ class Tray:
         if self.popover is None:
             return
         self.confirm = ""   # a fresh open never starts mid-question
-        self.call_on_ui_thread(self.popover.show_panel)  # thread -> UI handoff
+        # toggle, not show: a panel that could not take the foreground
+        # (Windows' focus-lock while a UWP app is frontmost) gets neither
+        # Escape nor FocusOut, and a second click on the icon is the one
+        # dismissal that always works.
+        self.call_on_ui_thread(self.popover.toggle)  # thread -> UI handoff
         # Opening the panel is the user looking: refresh so what they read is
         # current (cswap's store paces the real network traffic). Safe to
         # call from any thread — see TrayController._start_fetch's own
@@ -596,11 +600,21 @@ class Tray:
         `start` opens for `cswap tui` is unaffected, since that is a
         separate process `start` creates without CREATE_NO_WINDOW.
         """
-        if shutil.which("cswap") is None:
-            log.error("could not open the cswap TUI: cswap not found on PATH")
+        # The same resolution polling uses (SMARTBAR_CSWAP honoured): a
+        # configured binary off PATH made this row silently do nothing.
+        try:
+            from smartbar.core import cswap as cswap_core
+            binary = cswap_core._binary()
+        except Exception:
+            binary = shutil.which("cswap")
+        if not binary:
+            log.error("could not open the cswap TUI: cswap not found")
+            self.controller.action_error = ("cswap not found — set "
+                                            "SMARTBAR_CSWAP in config.env")
+            self.refresh_panel()
             return
         try:
-            subprocess.Popen(["cmd", "/c", "start", "", "cswap", "tui"],
+            subprocess.Popen(["cmd", "/c", "start", "", binary, "tui"],
                              **portable.no_window())
         except OSError:
             log.exception("could not open terminal")
@@ -643,6 +657,17 @@ class Tray:
         buf.seek(0)
         image = Image.open(buf)
         image.load()  # decode now, while buf is still alive
+        # Square canvas: pystray saves the image as .ico and Pillow makes
+        # non-square frames, which LoadImage then stretches to the square
+        # tray slot — three pills (46×32) or the update dot (42×32) came out
+        # ~1.4× too wide and the aspect jumped whenever the badge toggled.
+        size = getattr(image, "size", None)
+        if isinstance(size, tuple) and len(size) == 2 and size[0] != size[1]:
+            width, height = size
+            side = max(width, height)
+            square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+            square.paste(image, ((side - width) // 2, (side - height) // 2))
+            image = square
         self.icon.icon = image
 
     def set_title(self, text):
@@ -683,22 +708,37 @@ class Tray:
     def _tick(self):
         """Recurring usage poll. tkinter's `after` has no GLib-style "return
         True to repeat", so each firing re-arms its own next one — always
-        from the tk thread, since `after` callbacks run there."""
-        self.controller._tick()
-        self.root.after(self.interval * 1000, self._tick)
+        from the tk thread, since `after` callbacks run there. Re-armed in
+        `finally`: an exception before the re-arm used to stop polling for
+        the life of the process, silently under pythonw."""
+        try:
+            self.controller._tick()
+        except Exception:
+            log.exception("poll tick failed")
+        finally:
+            self.root.after(self.interval * 1000, self._tick)
 
     def _presence_tick(self):
         """Re-announce this device; the counts land on the next poll. Same
         self-rescheduling shape as _tick, for the same reason."""
-        presence_client.beat(self.controller.snapshot)
-        self.root.after(int(presence.interval()) * 1000, self._presence_tick)
+        try:
+            presence_client.beat(self.controller.snapshot)
+        except Exception:
+            log.exception("presence tick failed")
+        finally:
+            self.root.after(int(presence.interval()) * 1000,
+                            self._presence_tick)
 
     def _sysmon_tick(self):
         """Recurring System-tab poll; same self-rescheduling shape as
         _presence_tick. The controller samples in a worker, so this never
         blocks the tk thread."""
-        self.controller.sysmon_tick()
-        self.root.after(sysmon.interval() * 1000, self._sysmon_tick)
+        try:
+            self.controller.sysmon_tick()
+        except Exception:
+            log.exception("sysmon tick failed")
+        finally:
+            self.root.after(sysmon.interval() * 1000, self._sysmon_tick)
 
     # --- TrayHost: the optional panel triad -------------------------------
 
@@ -841,15 +881,29 @@ def main():
         # stderr fallback, so this is strictly better than the bare `pass`
         # it replaces even before basicConfig runs below.
         log.exception("could not rotate %s", LOG_FILE)
+    # encoding pinned: the log used to open with the ANSI code page, and a
+    # record carrying "✗"/"→" or a non-Latin address raised inside the
+    # FileHandler — silently, because handleError writes to a stderr
+    # pythonw does not have — so the one diagnostic line never landed.
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+                        format="%(asctime)s %(levelname)s %(message)s",
+                        encoding="utf-8")
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
              os.environ.get("SMARTBAR_INTERVAL", "60"))
+    # Under pythonw sys.stderr is None: Tk.report_callback_exception and
+    # threading.excepthook both write there and both then vanish, so a
+    # raising tk callback or a dying worker left an EMPTY tray.log behind.
+    # Route both into the log instead.
+    threading.excepthook = lambda args: log.error(
+        "thread %s died", getattr(args.thread, "name", "?"),
+        exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
     # Must run before the very first Tk widget — see _prime_dpi_awareness's
     # own docstring for why this cannot simply happen inside Tray.__init__.
     _prime_dpi_awareness()
     root = tk.Tk()
     root.withdraw()  # no real main window: the popover is its own Toplevel
+    root.report_callback_exception = lambda exc_type, exc, tb: log.error(
+        "tk callback failed", exc_info=(exc_type, exc, tb))
     tray = Tray(root)
     tray.controller._start_fetch()
     root.after(tray.interval * 1000, tray._tick)

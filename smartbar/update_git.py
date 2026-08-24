@@ -23,7 +23,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from smartbar.core import update
+from smartbar.core import portable, update
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(os.path.abspath(__file__))))
 GIT_TIMEOUT = 180
@@ -92,9 +92,12 @@ def git_binary() -> str:
 def git(*args, check: bool = True, timeout: int = GIT_TIMEOUT) -> str:
     """Run git in the repo; stdout stripped. `check=False` yields "" on error."""
     try:
+        # no_window: from a console-less pythonw tray (the manual check,
+        # the update button) every git call popped a console on Windows.
         proc = subprocess.run([git_binary(), "-C", REPO_ROOT, *args],
                               capture_output=True, text=True,
-                              timeout=timeout, env=env())
+                              timeout=timeout, env=env(),
+                              **portable.no_window())
     # git_binary() is called inside the try above and now raises GitError on
     # win32, so it joins the pair that `check=False` is meant to swallow.
     except (OSError, subprocess.TimeoutExpired, GitError) as exc:

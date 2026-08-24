@@ -45,6 +45,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -536,7 +537,10 @@ class TrayController:
         """One System-tab poll, scheduled by the host on its own timer.
         Samples in a worker (the sample sleeps ~0.5 s, which must never
         block the UI thread) and marshals the payload back."""
-        if not sysmon.enabled():
+        if not sysmon.enabled() or sys.platform == "win32":
+            # Windows has no honest sample yet (no per-process CPU column,
+            # no `ps`): the tab used to appear with fabricated zeros
+            # ("0 cores · 0 GB · load 0.0"). No tab beats a fake one.
             self.system = None
             return
         if self._sysmon_busy:

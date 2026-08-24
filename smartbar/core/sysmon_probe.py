@@ -190,8 +190,12 @@ def _run(cmd) -> str:
     # LC_ALL=C: `ps -o lstart` is locale-formatted; a German LANG turned
     # every start time into "So.  2 Aug." → parse_lstart 0 → the PID-reuse
     # guard silently disabled. C pins the one format the parsers expect.
+    # no_window: on Windows a console child of a console-less pythonw
+    # flashes a black window every tick.
+    from smartbar.core import portable
     return subprocess.check_output(cmd, text=True,
-                                   env={**os.environ, "LC_ALL": "C"})
+                                   env={**os.environ, "LC_ALL": "C"},
+                                   **portable.no_window())
 
 
 def _memsize() -> int:
