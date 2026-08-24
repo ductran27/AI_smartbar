@@ -178,6 +178,23 @@ class TestAutokillSeesEveryJunkRow(unittest.TestCase):
                              ["tree:1:5"])
 
 
+class TestAlertKeysAreStable(unittest.TestCase):
+    def test_burning_alert_key_does_not_embed_the_core_count(self):
+        # Dedupe happens on `key`; the sampled core count flaps between
+        # ticks (5 → 6 → 5 cores) and must not re-arm the notification.
+        rows = [{"token": "tree:1:5", "kind": "junk", "burning": True,
+                 "cores": 5.2, "name": "x", "age": 100}]
+        rows_flap = [dict(rows[0], cores=6.1)]
+        first = sysmon.alerts(rows, [])
+        second = sysmon.alerts(rows_flap, [])
+        self.assertEqual(first[0]["key"], second[0]["key"])
+
+    def test_autokill_alert_carries_a_key(self):
+        out = sysmon.alerts([], [{"name": "esbuild --service", "cores": 2.0,
+                                  "age": 400, "token": "tree:9:9"}])
+        self.assertTrue(out[0]["key"].startswith("killed:"))
+
+
 class TestKillDispatch(unittest.TestCase):
     """sysmon_runner.kill semantics, against a stubbed table + dry-run seam."""
 

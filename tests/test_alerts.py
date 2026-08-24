@@ -84,6 +84,25 @@ class TestAlerts(unittest.TestCase):
         os.environ["SMARTBAR_TEST_THRESHOLD"] = "70"
         self.assertEqual(len(self.mgr.check(snap(75))), 1)  # 75 used >= 70
 
+    def test_subsecond_resets_at_drift_does_not_refire(self):
+        # The API re-stamps resets_at with fresh sub-second values on every
+        # real fetch (observed live: .617540 → .275084 → .916220 for ONE
+        # window). Keyed on the raw string, a ≥90% account notified every
+        # 1-3 minutes until the window closed.
+        self.mgr.check(snap(92, resets="2026-08-24T17:00:00.617540+00:00"))
+        self.assertEqual(
+            self.mgr.check(snap(93, resets="2026-08-24T17:00:00.275084+00:00")),
+            [])
+        # Even across a minute boundary within the same window.
+        self.assertEqual(
+            self.mgr.check(snap(94, resets="2026-08-24T16:59:59.912345+00:00")),
+            [])
+
+    def test_a_genuinely_new_window_still_refires(self):
+        self.mgr.check(snap(92, resets="2026-08-24T17:00:00+00:00"))
+        alerts = self.mgr.check(snap(91, resets="2026-08-24T22:00:00+00:00"))
+        self.assertEqual(len(alerts), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

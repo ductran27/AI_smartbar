@@ -611,6 +611,10 @@ def alerts(rows, autokilled) -> list:
     out = []
     for killed in autokilled:
         out.append({
+            # `key` is the DEDUPE identity every host fires once per: the
+            # sampled numbers in the title flap between ticks (5 → 6 cores)
+            # and must not re-arm a notification.
+            "key": f"killed:{killed.get('token', killed['name'])}",
             "title": f"Killed {killed['name']}",
             "body": (f"{killed['cores']:.1f} cores · "
                      f"{format_age(killed['age'])} — an orphaned process a "
@@ -620,7 +624,9 @@ def alerts(rows, autokilled) -> list:
         burning = [r for r in rows if r.get("burning")]
         if burning:
             cores = sum(r["cores"] for r in burning)
+            tokens = ",".join(sorted(r["token"] for r in burning))
             out.append({
+                "key": f"burning:{tokens}",
                 "title": f"{len(burning)} leftovers burning {cores:.0f} cores",
                 "body": "Dead sessions left processes running. Open the "
                         "System tab to kill them.",

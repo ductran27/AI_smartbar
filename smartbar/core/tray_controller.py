@@ -237,6 +237,7 @@ class TrayController:
         self.check_token = 0     # so a stale timer cannot clear a newer one
 
         self.system = None       # latest System-tab payload, or None (off)
+        self._sysmon_fired = set()   # alert keys already notified (fire-once)
 
     # --- pending-update reading -----------------------------------------
 
@@ -495,11 +496,19 @@ class TrayController:
         self.host.call_on_ui_thread(self._apply_system, payload)
 
     def _apply_system(self, payload) -> None:
-        """UI thread: store the payload, fire any leftover notifications, and
-        repaint the panel if it is open on the System tab."""
+        """UI thread: store the payload, fire any leftover notifications
+        (once per alert key, re-armed when the key disappears), and repaint
+        the panel if it is open on the System tab."""
         self.system = payload
-        for alert in payload.get("alerts", []):
+        alerts = payload.get("alerts", [])
+        current = {a.get("key", a["title"]) for a in alerts}
+        for alert in alerts:
+            key = alert.get("key", alert["title"])
+            if key in self._sysmon_fired:
+                continue    # already notified for this exact situation
+            self._sysmon_fired.add(key)
             self.host.notify(Alert(alert["title"], alert["body"]))
+        self._sysmon_fired &= current   # re-arm what cleared
         if self.host.has_panel and self.host.panel_visible():
             self.host.refresh_panel()
 

@@ -745,7 +745,8 @@ class TestSysmon(ControllerTestCase):
                                 "name": "X", "sub": "", "meta": "", "age": 1,
                                 "cores": 5.0, "burning": True}]},
         "busy": {"caption": "", "rows": []},
-        "alerts": [{"title": "2 leftovers burning 9 cores", "body": "open it"}],
+        "alerts": [{"key": "burning:100:1",
+                    "title": "2 leftovers burning 9 cores", "body": "open it"}],
         "autokilled": [], "live": False,
     }
 
@@ -758,6 +759,28 @@ class TestSysmon(ControllerTestCase):
         self.assertEqual(self.controller.system, self.PAYLOAD)
         self.assertEqual(len(self.host.notify_calls), 1)
         self.assertIn("burning", self.host.notify_calls[0][0].title)
+
+    def test_the_same_alert_fires_once_across_ticks(self):
+        # One burning orphan used to notify EVERY tick (every 60 s) until
+        # killed. Dedupe on the alert's `key`, re-armed when it disappears.
+        with mock.patch.object(tc.sysmon_runner, "background_tick",
+                               return_value=self.PAYLOAD):
+            for _ in range(3):
+                self.controller.sysmon_tick()
+                self.run_last_worker()
+                self.host.drain()
+        self.assertEqual(len(self.host.notify_calls), 1)
+
+    def test_a_cleared_alert_rearms(self):
+        quiet = dict(self.PAYLOAD, alerts=[])
+        with mock.patch.object(tc.sysmon_runner, "background_tick",
+                               side_effect=[self.PAYLOAD, quiet,
+                                            self.PAYLOAD]):
+            for _ in range(3):
+                self.controller.sysmon_tick()
+                self.run_last_worker()
+                self.host.drain()
+        self.assertEqual(len(self.host.notify_calls), 2)
 
     def test_tick_does_nothing_when_disabled(self):
         with mock.patch.object(tc.sysmon, "enabled", return_value=False):
