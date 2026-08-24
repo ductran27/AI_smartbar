@@ -12,10 +12,16 @@ snapshots (there is no per-interval CPU column in `ps`), which is why
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import sys
 import time
+
+from smartbar.core import sysmon
+
+_PS_ARGS = ["ps", "-Axwwo", "pid=,ppid=,uid=,rss=,etime=,time=,lstart=,args="]
 
 
 # --- pure parsers ----------------------------------------------------------
@@ -174,3 +180,140 @@ def _memsize() -> int:
         return int(_run(["sysctl", "-n", "hw.memsize"]).strip())
     except (subprocess.SubprocessError, ValueError, OSError):
         return 0
+
+
+# --- putting a sample together ---------------------------------------------
+
+def _procs_from(prev_rows, cur_rows, wall: float) -> list:
+    """Build sysmon.Proc objects from two ps snapshots, cpu% from the delta."""
+    prev = {r["pid"]: r["cpu_seconds"] for r in prev_rows}
+    cur = {r["pid"]: r["cpu_seconds"] for r in cur_rows}
+    out = []
+    for row in cur_rows:
+        out.append(sysmon.Proc(
+            pid=row["pid"], ppid=row["ppid"], uid=row["uid"],
+            rss_kb=row["rss_kb"], elapsed=row["elapsed"],
+            cpu=cpu_percent(row["pid"], prev, cur, wall),
+            args=row["args"], start=row["start"]))
+    return out
+
+
+def _seam():
+    """(procs, cores, mem, load) from the SMARTBAR_SYSMON_PS/_STATS files, or
+    None when the seam is not set. The whole live pipeline collapses to a
+    deterministic fixture read so the runner and CLI are testable anywhere."""
+    ps_path = os.environ.get("SMARTBAR_SYSMON_PS")
+    if not ps_path:
+        return None
+    with open(ps_path) as handle:
+        rows = parse_ps(handle.read())
+    procs = _procs_from(rows, rows, 1.0)   # one snapshot → every cpu% is 0
+    cores, mem, load = [], {"totalBytes": 0, "usedBytes": 0, "pct": 0.0}, (0, 0, 0)
+    stats_path = os.environ.get("SMARTBAR_SYSMON_STATS")
+    if stats_path:
+        with open(stats_path) as handle:
+            stats = json.load(handle)
+        cores = stats.get("cores", [])
+        mem = stats.get("mem", mem)
+        load = tuple(stats.get("load", load))
+    return procs, cores, mem, load
+
+
+def _read(path: str) -> str:
+    with open(path) as handle:
+        return handle.read()
+
+
+def _linux_core_busy(before: str, after: str) -> list:
+    """Per-core busy% from two /proc/stat reads."""
+    def rows(text):
+        out = {}
+        for line in text.splitlines():
+            if line.startswith("cpu") and line[3:4].isdigit():
+                nums = [int(x) for x in line.split()[1:]]
+                idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+                out[line.split()[0]] = (sum(nums), idle)
+        return out
+    a, b = rows(before), rows(after)
+    busy = []
+    for key in sorted(a, key=lambda k: int(k[3:])):
+        if key not in b:
+            continue
+        total_d = b[key][0] - a[key][0]
+        idle_d = b[key][1] - a[key][1]
+        busy.append(round(100.0 * (total_d - idle_d) / total_d, 1)
+                    if total_d > 0 else 0.0)
+    return busy
+
+
+def _linux_mem() -> dict:
+    info = {}
+    for line in _read("/proc/meminfo").splitlines():
+        name, _, value = line.partition(":")
+        info[name.strip()] = int(value.strip().split()[0]) * 1024
+    total = info.get("MemTotal", 0)
+    available = info.get("MemAvailable", 0)
+    used = total - available
+    return {"totalBytes": total, "usedBytes": used,
+            "compressedBytes": info.get("SwapCached", 0),
+            "pct": round(100.0 * used / total, 1) if total else 0.0}
+
+
+def sample(interval: float = 0.5, my_uid: int = None) -> tuple:
+    """One (procs, cores, mem, load) sample for the current platform.
+
+    Takes two `ps` reads `interval` apart so each process gets a real per-
+    interval CPU%; per-core CPU comes from a matching tick delta. The seam
+    short-circuits all of this to a fixture read (tests, --preview)."""
+    seamed = _seam()
+    if seamed is not None:
+        return seamed
+    if my_uid is None:
+        my_uid = os.getuid() if hasattr(os, "getuid") else -1
+
+    if sys.platform == "darwin":
+        rows1 = parse_ps(_run(_PS_ARGS))
+        ticks1 = core_ticks()
+        time.sleep(interval)
+        rows2 = parse_ps(_run(_PS_ARGS))
+        ticks2 = core_ticks()
+        procs = _procs_from(rows1, rows2, interval or 0.5)
+        cores = core_busy(ticks1, ticks2) if ticks1 and ticks2 else []
+        mem = parse_vm_stat(_run(["vm_stat"]), _memsize())
+        load = os.getloadavg()
+        return procs, cores, mem, load
+
+    if sys.platform.startswith("linux"):
+        stat1 = _read("/proc/stat")
+        rows1 = parse_ps(_run(_PS_ARGS))
+        time.sleep(interval)
+        stat2 = _read("/proc/stat")
+        rows2 = parse_ps(_run(_PS_ARGS))
+        procs = _procs_from(rows1, rows2, interval or 0.5)
+        cores = _linux_core_busy(stat1, stat2)
+        return procs, cores, _linux_mem(), os.getloadavg()
+
+    # Windows / anything else: an honest downgrade — a process list with
+    # memory but no per-core CPU and no per-process CPU delta (no cheap
+    # cumulative-time column). The tab still lists and can kill leftovers.
+    return _fallback_procs(my_uid), [], {"totalBytes": 0, "usedBytes": 0,
+                                          "pct": 0.0}, (0, 0, 0)
+
+
+def _fallback_procs(my_uid: int) -> list:
+    """Best-effort process list where `ps` with our columns is unavailable."""
+    try:
+        text = _run(["ps", "-Axwwo", "pid=,ppid=,rss=,args="])
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
+        return []
+    out = []
+    for line in text.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) < 4:
+            continue
+        try:
+            out.append(sysmon.Proc(int(fields[0]), int(fields[1]), my_uid,
+                                   int(fields[2]), 0, 0.0, fields[3]))
+        except ValueError:
+            continue
+    return out

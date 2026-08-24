@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 from smartbar.core import sysmon_probe as probe
@@ -110,6 +114,49 @@ class TestLiveSampleSmoke(unittest.TestCase):
         self.assertIsNotNone(ticks)
         self.assertGreater(len(ticks), 0)
         self.assertEqual(len(ticks[0]), 4)   # user, system, idle, nice
+
+    @unittest.skipUnless(sys.platform == "darwin", "live sampling on macOS")
+    def test_sample_live_returns_shape(self):
+        procs, cores, mem, load = probe.sample(interval=0.1, my_uid=0)
+        self.assertGreater(len(procs), 10)
+        self.assertGreater(len(cores), 0)
+        self.assertIn("pct", mem)
+        self.assertEqual(len(load), 3)
+        self.assertTrue(all(hasattr(p, "pid") for p in procs))
+
+
+class TestSampleSeam(unittest.TestCase):
+    """The SMARTBAR_SYSMON_PS / _STATS seam replaces the live probe so the
+    runner and CLI can be tested deterministically on any OS."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        ps_path = os.path.join(self.tmp, "ps.txt")
+        with open(ps_path, "w") as handle:
+            handle.write(PS_TEXT)
+        stats_path = os.path.join(self.tmp, "stats.json")
+        with open(stats_path, "w") as handle:
+            json.dump({"cores": [10, 20, 30, 40],
+                       "mem": {"totalBytes": 32 * 2**30,
+                               "usedBytes": 16 * 2**30, "pct": 50.0},
+                       "load": [1.0, 2.0, 3.0]}, handle)
+        os.environ["SMARTBAR_SYSMON_PS"] = ps_path
+        os.environ["SMARTBAR_SYSMON_STATS"] = stats_path
+
+    def tearDown(self):
+        os.environ.pop("SMARTBAR_SYSMON_PS", None)
+        os.environ.pop("SMARTBAR_SYSMON_STATS", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_sample_reads_the_seam(self):
+        procs, cores, mem, load = probe.sample(interval=0.0, my_uid=0)
+        self.assertEqual(len(procs), 3)
+        self.assertEqual(cores, [10, 20, 30, 40])
+        self.assertEqual(mem["pct"], 50.0)
+        self.assertEqual(tuple(load), (1.0, 2.0, 3.0))
+        gpu = next(p for p in procs if p.pid == 22499)
+        self.assertEqual(gpu.ppid, 22493)
+        self.assertIn("Google Chrome Helper (GPU)", gpu.args)
 
 
 if __name__ == "__main__":
