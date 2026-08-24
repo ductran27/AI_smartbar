@@ -374,6 +374,7 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
             "burning": burning,
             "cores": round(cpu / 100, 1),
             "mem": tree_mem_mb(proc.pid, table),
+            "age": proc.elapsed,
         })
     left_rows.sort(key=lambda r: (not r["burning"], -r["cores"]))
     burning_rows = [r for r in left_rows if r["burning"]]
@@ -477,3 +478,74 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         "busy": {"caption": f"≥ {int(hot)}% CPU over two samples",
                  "rows": busy_rows},
     }
+
+
+# --- history ring, auto-kill decision, alerts ------------------------------
+
+AUTOKILL_MIN_AGE = 300      # seconds a junk orphan must persist before auto-kill
+
+
+def history_append(ring, minute: int, pct: int):
+    """Append (minute, pct) to the ring, or update the last entry when it is
+    the same minute (a poll fires more than once a minute); cap at
+    HISTORY_LEN. Returns a NEW list — the caller persists it."""
+    ring = list(ring)
+    if ring and ring[-1][0] == minute:
+        ring[-1] = (minute, pct)
+    else:
+        ring.append((minute, pct))
+    return ring[-HISTORY_LEN:]
+
+
+def history_series(ring, now_minute: int, span: int = HISTORY_LEN) -> list:
+    """The last `span` minutes as a plain list ending at `now_minute`, with a
+    missed minute (sleep, app not running) left as None rather than smeared —
+    a gap is honest about "nothing was sampled then"."""
+    by_minute = dict(ring)
+    start = now_minute - span + 1
+    return [by_minute.get(start + i) for i in range(span)]
+
+
+def autokill_targets(rows, first_seen, now_monotonic: float) -> list:
+    """Kill tokens auto-kill should act on this tick: only `junk` rows, only
+    when they have persisted at least AUTOKILL_MIN_AGE seconds (measured from
+    when this process first saw them, so a fresh start does not insta-kill),
+    and only when SMARTBAR_SYSMON_AUTOKILL=on. Idle dev servers are never
+    automatic."""
+    if not autokill_enabled():
+        return []
+    out = []
+    for row in rows:
+        if row.get("kind") != "junk":
+            continue
+        seen = first_seen.get(row["token"])
+        if seen is not None and now_monotonic - seen >= AUTOKILL_MIN_AGE:
+            out.append(row["token"])
+    return out
+
+
+def alerts(rows, autokilled) -> list:
+    """Notifications for this tick. One per auto-killed process (what and how
+    much it was costing), or — when auto-kill is off and leftovers are
+    burning — a single "come clean these up" nudge. Silent when
+    SMARTBAR_SYSMON_NOTIFY=off."""
+    if not notify_enabled():
+        return []
+    out = []
+    for killed in autokilled:
+        out.append({
+            "title": f"Killed {killed['name']}",
+            "body": (f"{killed['cores']:.1f} cores · "
+                     f"{format_age(killed['age'])} — an orphaned process a "
+                     f"dead session left behind."),
+        })
+    if not autokill_enabled():
+        burning = [r for r in rows if r.get("burning")]
+        if burning:
+            cores = sum(r["cores"] for r in burning)
+            out.append({
+                "title": f"{len(burning)} leftovers burning {cores:.0f} cores",
+                "body": "Dead sessions left processes running. Open the "
+                        "System tab to kill them.",
+            })
+    return out

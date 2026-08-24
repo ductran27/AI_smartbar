@@ -391,5 +391,78 @@ class TestBuildView(unittest.TestCase):
         self.assertIn("Auto-kill off", self.view()["leftovers"]["foot"])
 
 
+class TestHistoryRing(unittest.TestCase):
+    def test_append_grows_then_caps_at_60(self):
+        ring = []
+        for minute in range(70):
+            ring = sysmon.history_append(ring, minute, minute)
+        self.assertEqual(len(ring), sysmon.HISTORY_LEN)
+        self.assertEqual(ring[-1], (69, 69))
+
+    def test_same_minute_updates_not_duplicates(self):
+        ring = sysmon.history_append([], 100, 40)
+        ring = sysmon.history_append(ring, 100, 55)
+        self.assertEqual(ring, [(100, 55)])
+
+    def test_a_gap_between_minutes_is_left_as_none(self):
+        ring = sysmon.history_append([], 100, 40)
+        ring = sysmon.history_append(ring, 103, 50)   # minutes 101,102 missed
+        self.assertEqual(sysmon.history_series(ring, 103, span=4),
+                         [40, None, None, 50])
+
+
+class TestAutokillAndAlerts(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("SMARTBAR_SYSMON_AUTOKILL", None)
+
+    def rows(self):
+        return [
+            {"token": "100:1000", "kind": "junk", "name": "Google Chrome "
+             "(headless)", "burning": True, "cores": 5.8, "age": 6 * 3600},
+            {"token": "210:500", "kind": "idle", "name": "node serve-dist.mjs",
+             "burning": False, "cores": 0.0, "age": 3 * 86400},
+        ]
+
+    def test_autokill_targets_only_aged_junk_when_enabled(self):
+        os.environ["SMARTBAR_SYSMON_AUTOKILL"] = "on"
+        targets = sysmon.autokill_targets(self.rows(), first_seen={
+            "100:1000": 0.0}, now_monotonic=400.0)
+        self.assertEqual(targets, ["100:1000"])   # junk, seen 400s ago
+
+    def test_autokill_skips_junk_seen_under_5_min(self):
+        os.environ["SMARTBAR_SYSMON_AUTOKILL"] = "on"
+        targets = sysmon.autokill_targets(self.rows(), first_seen={
+            "100:1000": 100.0}, now_monotonic=200.0)
+        self.assertEqual(targets, [])   # only 100s old
+
+    def test_autokill_never_touches_idle(self):
+        os.environ["SMARTBAR_SYSMON_AUTOKILL"] = "on"
+        targets = sysmon.autokill_targets(
+            [self.rows()[1]], first_seen={"210:500": 0.0}, now_monotonic=9e9)
+        self.assertEqual(targets, [])
+
+    def test_autokill_disabled_returns_nothing(self):
+        targets = sysmon.autokill_targets(self.rows(), first_seen={
+            "100:1000": 0.0}, now_monotonic=9e9)
+        self.assertEqual(targets, [])
+
+    def test_alert_when_leftovers_burn_and_autokill_off(self):
+        alerts = sysmon.alerts(self.rows(), autokilled=[])
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("burning", alerts[0]["title"].lower())
+
+    def test_no_alert_when_nothing_burns(self):
+        idle_only = [self.rows()[1]]
+        self.assertEqual(sysmon.alerts(idle_only, autokilled=[]), [])
+
+    def test_alert_for_each_autokilled_process(self):
+        killed = [{"name": "Google Chrome (headless)", "cores": 5.8,
+                   "age": 6 * 3600}]
+        alerts = sysmon.alerts([], autokilled=killed)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("Killed", alerts[0]["title"])
+        self.assertIn("Google Chrome", alerts[0]["title"])
+
+
 if __name__ == "__main__":
     unittest.main()
