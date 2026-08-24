@@ -43,7 +43,7 @@ class TestPingArgv(Env):
         argv = warmup_runner.ping_argv(2, ["--model", "haiku"])
         self.assertEqual(argv, ["/mock/bin/cswap", "run", "2", "--",
                                 "--model", "haiku", "-p", ".",
-                                "--max-turns", "1"])
+                                "--max-turns", "1", "--strict-mcp-config"])
         # Regression: the claude binary path must NOT be smuggled in as an
         # argument — cswap resolves the binary itself.
         self.assertFalse(any(token.endswith("/claude") for token in argv))

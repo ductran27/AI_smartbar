@@ -72,6 +72,52 @@ def demo_snapshot():
     return snapshot
 
 
+def demo_system() -> dict:
+    """A System-tab payload covering every row state — two burning junk
+    orphans, an idle dev server, a folded Busy list with a live session and a
+    system process, 16 cores and a 60-minute history with a gap — so the tab
+    is reviewable via --preview-popover without sampling the real machine."""
+    from smartbar.core import sysmon
+    procs = [
+        sysmon.Proc(22493, 1, 501, 50_000, 21600, 5.0,
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google "
+                    "Chrome --headless --user-data-dir=/tmp/cdp-prof-9603",
+                    start=1000),
+        sysmon.Proc(22499, 22493, 501, 400_000, 21600, 575.0,
+                    "Google Chrome Helper (GPU) --type=gpu-process",
+                    start=1000),
+        sysmon.Proc(50914, 1, 501, 60_000, 39600, 4.0,
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google "
+                    "Chrome --headless --user-data-dir=/tmp/cdp-prof-9683",
+                    start=900),
+        sysmon.Proc(50937, 50914, 501, 300_000, 39600, 437.0,
+                    "Google Chrome Helper (GPU) --type=gpu-process",
+                    start=900),
+        sysmon.Proc(41210, 1, 501, 30_000, 3 * 86400, 0.0,
+                    "/usr/local/bin/node /Volumes/x/serve-dist.mjs",
+                    start=500),
+        sysmon.Proc(300, 1, 501, 500_000, 4000, 24.0,
+                    "/Applications/Firefox.app/Contents/MacOS/firefox",
+                    start=100),
+        sysmon.Proc(301, 1, 501, 300_000, 4000, 22.0,
+                    "/Applications/Firefox.app/Contents/MacOS/firefox "
+                    "-contentproc", start=100),
+        sysmon.Proc(400, 1, 501, 900_000, 3600, 32.0,
+                    "/Users/x/.local/bin/claude", start=3000),
+        sysmon.Proc(2, 1, 0, 260_000, 999999, 20.0,
+                    "/System/Library/CoreServices/WindowServer", start=1),
+    ]
+    cores = [43, 38, 33, 29, 15, 5, 5, 2, 8, 2, 0, 0, 1, 0, 0, 0]
+    mem = {"totalBytes": 64 * 2**30, "usedBytes": 35 * 2**30,
+           "pct": 54.4, "compressedBytes": 2 * 2**30 + 2**29}
+    history = [70, 82, 88, 91, 84, 79, 85, None, None, 12, 10, 11, 9, 8, 10,
+               12, 40, 55, 60, 45, 30, 20, 15, 13]
+    return sysmon.build_view(procs=procs, cores=cores, mem=mem,
+                             load=(4.0, 5.7, 6.1), prev_cpu={},
+                             now=datetime.now(timezone.utc), my_uid=501,
+                             own_pids=set(), history=history)
+
+
 def _pending() -> tuple:
     """(pending_version, blocked_reason) from the updater — best effort."""
     try:
@@ -86,15 +132,17 @@ def _pending() -> tuple:
 
 
 def render(path: str = "", *, scale: float = 2.0, demo: bool = False,
-           scheme: str = "dark") -> str:
+           scheme: str = "dark", provider: str = "") -> str:
     from smartbar.core import popover_theme
     from smartbar.paint import popover_draw
 
     appearance = popover_theme.scheme_for(scheme)
 
     error = ""
+    system = None
     if demo:
         snapshot = demo_snapshot()
+        system = demo_system()
     else:
         from smartbar.core import cswap
         try:
@@ -112,7 +160,8 @@ def render(path: str = "", *, scale: float = 2.0, demo: bool = False,
                                   pending_version=pending,
                                   blocked_reason=blocked,
                                   fetched_at=snapshot.fetched_at,
-                                  scheme=appearance)
+                                  scheme=appearance, provider=provider,
+                                  system=system)
     path = path or DEFAULT_PATH
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     # No background argument: the layout carries the scheme's own window

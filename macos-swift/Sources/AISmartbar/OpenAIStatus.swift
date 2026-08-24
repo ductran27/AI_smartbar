@@ -63,32 +63,10 @@ final class OpenAIStatus: ObservableObject {
     /// nil = helper unavailable (missing checkout, bad JSON); keep the
     /// last-good list rather than blanking the tab on a hiccup.
     nonisolated private static func fetchAccounts() -> [Account]? {
-        guard let root = PresenceStatus.repoRoot() else { return nil }
-        let launcher = root + "/bin/ai-smartbar"
-        guard FileManager.default.isExecutableFile(atPath: launcher) else {
-            return nil
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = ["--openai", "--json"]
-        // launchd hands a GUI app a bare PATH, and the launcher's shebang
-        // has to be able to find python3 — same treatment as presence.
-        var environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
-            .joined(separator: ":")
-        process.environment = environment
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard
-            let raw = try? JSONSerialization.jsonObject(with: data)
-                as? [String: Any],
-            let rows = raw["accounts"] as? [[String: Any]]
+        // One shared answer via the shared Launcher (was ~25 lines of
+        // inlined Process setup — see Launcher.swift).
+        guard let raw = Launcher.json(["--openai", "--json"]),
+              let rows = raw["accounts"] as? [[String: Any]]
         else { return nil }
         return rows.enumerated().map { index, row in
             let metrics = (row["metrics"] as? [[String: Any]] ?? []).map {

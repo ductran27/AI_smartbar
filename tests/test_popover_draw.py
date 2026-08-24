@@ -25,6 +25,28 @@ def _demo():
     return demo_snapshot()
 
 
+_SYS_DEMO = {
+    "sampledAt": "21:24",
+    "machine": {"caption": "16 cores · 64 GB · load 1.0 · 2.0 · 3.0"},
+    "cpu": {"pct": 13, "cores": [40, 30, 10, 0, 5, 0],
+            "caption": "13 claude · 1141 procs"},
+    "history": {"pct": [10, None, 84, 91, 12], "peakText": "peak 91%",
+                "lastPct": 12},
+    "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed"},
+    "leftovers": {"chip": "1 burning · 5.8 cores", "more": 0,
+                  "foot": "Auto-kill off · junk rules: 5",
+                  "rows": [{"token": "100:1000", "kind": "junk",
+                            "name": "Google Chrome (headless)",
+                            "sub": "pid 100 · cdp-prof-9603",
+                            "meta": "orphan · 6 h · 580%", "burning": True,
+                            "cores": 5.8, "mem": 440, "age": 21600}]},
+    "busy": {"caption": "≥ 50% CPU over two samples", "rows": [
+        {"token": "400:1", "kind": "session", "name": "claude", "sub": "×12",
+         "count": 12, "cpu": 40, "mem": 9000, "meta": "40% · 8.8 GB",
+         "killable": False}]},
+}
+
+
 @unittest.skipIf(cairo is None, "pycairo not installed")
 class TestFitTruncationMode(unittest.TestCase):
     """popover_draw._fit's two modes, mirroring SwiftUI's two truncation
@@ -179,6 +201,25 @@ class TestPopoverPainter(unittest.TestCase):
 
 
 @unittest.skipIf(cairo is None, "pycairo not installed")
+@unittest.skipIf(cairo is None, "pycairo not installed")
+class TestSystemPreview(unittest.TestCase):
+    def test_demo_system_has_the_payload_shape(self):
+        from smartbar.paint.popover_preview import demo_system
+        payload = demo_system()
+        for key in ("cpu", "mem", "history", "leftovers", "busy"):
+            self.assertIn(key, payload)
+        self.assertTrue(payload["leftovers"]["rows"])
+
+    def test_preview_renders_the_system_tab(self):
+        from smartbar.paint.popover_preview import render
+        for scheme in ("dark", "light"):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, f"sys-{scheme}.png")
+                out = render(path, demo=True, scheme=scheme, provider="system")
+                self.assertTrue(os.path.exists(out))
+                self.assertGreater(os.path.getsize(out), 1000)
+
+
 class TestGlyphDispatchCoversLayout(unittest.TestCase):
     """The test that matters most in stage 04: every Glyph.kind the layout
     can actually emit has to be a kind popover_draw._draw_glyph handles by
@@ -202,6 +243,10 @@ class TestGlyphDispatchCoversLayout(unittest.TestCase):
                         hover="card:claude:1"),
             layout.build(demo, action_error="Switch failed: in use",
                         hover="dismiss-error"),
+            # The System tab: its "system" tab mark and the kill ✕ on a
+            # hovered leftover row.
+            layout.build(demo, provider="system", system=_SYS_DEMO,
+                        hover="row:100:1000"),
         ]
         kinds = set()
         for built in builds:
@@ -223,7 +268,7 @@ class TestGlyphDispatchCoversLayout(unittest.TestCase):
         # if the demo snapshot ever stopped covering one of stage 04's new
         # kinds, "nothing is missing" would stop meaning "nothing broke".
         self.assertEqual(
-            {"claude", "openai", "warn", "pause"}
+            {"claude", "openai", "warn", "pause", "system"}
             - self._emitted_kinds(), set())
 
 

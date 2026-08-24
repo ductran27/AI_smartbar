@@ -19,6 +19,9 @@ MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
 # device counts. (Observed: a test run replaced this Mac's beacon with
 # "no active account" and blanked the live badges.) PRESENCE=off stops the
 # remote write; CACHE_DIR keeps all other state off the user's disk.
+# SYSMON=off is the same rule taken to its strongest case: the System tab can
+# SIGTERM/SIGKILL processes, so a real-binary test must never let it sample or
+# act — off means no tick, no auto-kill, nothing.
 #
 # The guard below watches the ISOLATED cache, not the user's real one. The
 # obvious check — fingerprint ~/.cache/ai-smartbar/presence-state.json before
@@ -37,6 +40,7 @@ run_case() {
     SMARTBAR_INTERVAL=2 \
     SMARTBAR_PRESENCE=off SMARTBAR_CACHE_DIR="$state/cache" \
     SMARTBAR_OPENAI=off \
+    SMARTBAR_SYSMON=off \
     "$BIN" >/dev/null 2>&1 &
   pid=$!
   sleep 9   # ≥4 poll cycles at 2s

@@ -1221,5 +1221,122 @@ class TestDisabledControlsStillExplainThemselves(unittest.TestCase):
         self.assertEqual(self._blocked_layout().tooltip_at(-5, -5), "")
 
 
+def system_payload(burning=True):
+    """A display-ready System payload (the shape sysmon.build_view emits)."""
+    return {
+        "sampledAt": "21:24",
+        "machine": {"caption": "16 cores · 64 GB · load 1.0 · 2.0 · 3.0"},
+        "cpu": {"pct": 13, "cores": [40, 30, 10, 0],
+                "caption": "13 claude · 1141 procs"},
+        "history": {"pct": [10, None, 84, 91, 12], "peakText": "peak 91%",
+                    "lastPct": 12},
+        "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed"},
+        "leftovers": {
+            "chip": "1 burning · 5.8 cores" if burning else "1 leftover",
+            "more": 0, "foot": "Auto-kill off · junk rules: 5",
+            "rows": [{"token": "100:1000", "kind": "junk",
+                      "name": "Google Chrome (headless)",
+                      "sub": "pid 100 · cdp-prof-9603",
+                      "meta": "orphan · 6 h · 580%", "burning": burning,
+                      "cores": 5.8, "mem": 440, "age": 21600}]},
+        "busy": {"caption": "≥ 50% CPU over two samples", "rows": [
+            {"token": "group:300:1,301:1", "kind": "hot", "name": "Firefox",
+             "sub": "×2", "count": 2, "cpu": 38, "mem": 800,
+             "meta": "38% · 800 MB", "killable": True},
+            {"token": "400:1", "kind": "session", "name": "claude", "sub": "",
+             "count": 1, "cpu": 60, "mem": 9000, "meta": "60% · 8.8 GB",
+             "killable": False}]},
+    }
+
+
+class TestSystemTab(unittest.TestCase):
+    def test_claude_only_layout_unchanged_when_no_system_payload(self):
+        built = layout.build(snap(account(active=True)), now=NOW)
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        self.assertNotIn("Leftovers", labels(built))
+
+    def test_system_tab_present_alongside_claude(self):
+        built = layout.build(snap(account(active=True)),
+                             system=system_payload(), now=NOW)
+        names = {h.name for h in built.hits}
+        self.assertIn("tab:claude", names)
+        self.assertIn("tab:system", names)
+
+    def test_system_only_machine_gets_no_tab_row_but_shows_vitals(self):
+        # No Claude/OpenAI accounts: System is the only tab, so no row — and
+        # the view auto-resolves to it (a machine running the bar always has
+        # a System tab, so it must not be left on an empty Claude view).
+        built = layout.build(snap(), system=system_payload(), now=NOW)
+        self.assertFalse(any(h.name.startswith("tab:") for h in built.hits))
+        self.assertIn("Leftovers", labels(built))
+        self.assertIn("Busy", labels(built))
+
+    def test_system_view_renders_the_three_cards(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), now=NOW)
+        text = labels(built)
+        self.assertIn("This Mac", text)
+        self.assertIn("Leftovers", text)
+        self.assertIn("Busy", text)
+        self.assertIn("Google Chrome (headless)", text)
+        # Busy folds same-name processes, so the count rides in the label.
+        self.assertTrue(any(label.startswith("Firefox") for label in text))
+
+    def test_per_core_and_history_columns_are_drawn(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), now=NOW)
+        cores = [b for b in boxes(built) if abs(b.h - t.SYS_CORES_H) < 0.01]
+        # one track + one fill per non-zero core; at least one per core column
+        self.assertGreaterEqual(len(cores), 4)
+        hist = [b for b in boxes(built) if abs(b.h - t.SYS_HIST_H) < 0.01]
+        self.assertGreaterEqual(len(hist), 5)
+
+    def test_kill_target_appears_only_on_hover(self):
+        payload = system_payload()
+        plain = layout.build(snap(account(active=True)), provider="system",
+                             system=payload, now=NOW)
+        self.assertFalse(any(h.name == "kill:100:1000" for h in plain.hits))
+        hovered = layout.build(snap(account(active=True)), provider="system",
+                               system=payload, hover="row:100:1000", now=NOW)
+        self.assertTrue(any(h.name == "kill:100:1000" for h in hovered.hits))
+
+    def test_every_leftover_row_has_a_hover_region(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), now=NOW)
+        self.assertTrue(any(h.name == "row:100:1000" for h in built.hits))
+
+    def test_busy_session_row_is_never_killable(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), hover="row:400:1",
+                             now=NOW)
+        self.assertFalse(any(h.name == "kill:400:1" for h in built.hits))
+
+    def test_confirm_kill_swaps_the_row_to_a_question(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), confirm="100:1000",
+                             now=NOW)
+        names = {h.name for h in built.hits}
+        self.assertIn("confirm-kill:100:1000", names)
+        self.assertIn("cancel-kill", names)
+
+    def test_confirm_kill_button_is_destructive_red(self):
+        built = layout.build(snap(account(active=True)), provider="system",
+                             system=system_payload(), confirm="100:1000",
+                             now=NOW)
+        # the Kill button box is filled with the scheme's danger red
+        self.assertTrue(any(b.fill == t.DARK.danger for b in boxes(built)))
+
+    def test_system_tab_shows_the_burning_count(self):
+        built = layout.build(snap(account(active=True)),
+                             system=system_payload(burning=True), now=NOW)
+        self.assertTrue(any("System" in text and "1" in text
+                            for text in labels(built)))
+
+    def test_system_tab_has_no_count_when_calm(self):
+        built = layout.build(snap(account(active=True)),
+                             system=system_payload(burning=False), now=NOW)
+        self.assertIn("System", labels(built))
+
+
 if __name__ == "__main__":
     unittest.main()

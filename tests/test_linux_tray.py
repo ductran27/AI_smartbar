@@ -571,6 +571,37 @@ class TestControllerDelegation(GuiStubbedTestCase):
             mod.Tray._on_popover_action(tray, "switch:2")
         on_switch.assert_called_once_with(None, 2)
 
+    def test_kill_hit_arms_the_in_row_confirm(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        mod.Tray._on_popover_action(tray, "kill:100:1000")
+        self.assertEqual(tray.confirm, "100:1000")
+
+    def test_confirm_kill_delegates_to_on_kill_and_clears_confirm(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller = mock.MagicMock(name="controller")
+        tray.confirm = "100:1000"
+        mod.Tray._on_popover_action(tray, "confirm-kill:100:1000")
+        tray.controller.on_kill.assert_called_once_with("100:1000")
+        self.assertEqual(tray.confirm, "")
+
+    def test_cancel_kill_clears_confirm(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.confirm = "100:1000"
+        mod.Tray._on_popover_action(tray, "cancel-kill")
+        self.assertEqual(tray.confirm, "")
+
+    def test_popover_layout_forwards_the_system_payload(self):
+        mod = _reimport("smartbar.linux.tray")
+        tray = _bare_tray(mod)
+        tray.controller.system = {"leftovers": {"rows": []},
+                                  "busy": {"rows": []}}
+        with mock.patch.object(mod.popover_layout, "build") as build:
+            mod.Tray._popover_layout(tray)
+        self.assertIs(build.call_args.kwargs["system"], tray.controller.system)
+
 
 class TestQuit(GuiStubbedTestCase):
     def test_leaves_presence_before_stopping_the_loop(self):

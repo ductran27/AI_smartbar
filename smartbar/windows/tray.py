@@ -100,7 +100,7 @@ from PIL import Image
 
 from smartbar import __version__, presence_client
 from smartbar.core import (model, paths, popover_layout, portable,
-                           presence)
+                           presence, sysmon)
 from smartbar.core import update as update_core
 from smartbar.core.tray_controller import TrayController
 from smartbar.paint.tray_icon import render_pills
@@ -272,7 +272,7 @@ class Tray:
             error=c.last_error if c.snapshot is None else "",
             hover=hover, provider=self.provider, confirm=self.confirm,
             action_error=c.action_error, refreshing=c.refreshing,
-            stale_reason=c.last_error)
+            stale_reason=c.last_error, system=c.system)
 
     # --- TrayHost: thread -> UI handoff --------------------------------
 
@@ -348,6 +348,16 @@ class Tray:
         elif name.startswith("remove:"):
             # First click of the two-step removal: arm the in-card confirm.
             self.confirm = name.split(":", 1)[1]
+        elif name.startswith("confirm-kill:"):
+            self.confirm = ""
+            self.controller.on_kill(name.split(":", 1)[1])
+        elif name == "cancel-kill":
+            self.confirm = ""
+        elif name.startswith("kill:"):
+            # First click of the two-step kill: arm the in-row confirm.
+            self.confirm = name.split(":", 1)[1]
+        elif name.startswith("row:"):
+            pass   # hover container — a click on a process row does nothing
         elif name.startswith("card:"):
             pass   # hover container — a click on the card body does nothing
         elif name.startswith("switch:"):
@@ -683,6 +693,13 @@ class Tray:
         presence_client.beat(self.controller.snapshot)
         self.root.after(int(presence.interval()) * 1000, self._presence_tick)
 
+    def _sysmon_tick(self):
+        """Recurring System-tab poll; same self-rescheduling shape as
+        _presence_tick. The controller samples in a worker, so this never
+        blocks the tk thread."""
+        self.controller.sysmon_tick()
+        self.root.after(sysmon.interval() * 1000, self._sysmon_tick)
+
     # --- TrayHost: the optional panel triad -------------------------------
 
     @property
@@ -838,6 +855,9 @@ def main():
     root.after(tray.interval * 1000, tray._tick)
     if presence.enabled():
         root.after(int(presence.interval()) * 1000, tray._presence_tick)
+    if sysmon.enabled():
+        tray.controller.sysmon_tick()
+        root.after(sysmon.interval() * 1000, tray._sysmon_tick)
     # Decision D1: pystray's Icon.run() is only main-thread-mandatory on
     # macOS (confirmed against the pystray FAQ), so on Windows it runs on
     # its own worker thread while root.mainloop() owns the real main
