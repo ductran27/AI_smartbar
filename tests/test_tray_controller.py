@@ -731,5 +731,63 @@ class TestPendingUpdate(ControllerTestCase):
         self.assertEqual(self.controller.update_blocked, "dirty checkout")
 
 
+class TestSysmon(ControllerTestCase):
+    """The System-tab payload the controller holds, its notifications, and
+    the guarded kill it routes to the runner."""
+
+    PAYLOAD = {
+        "cpu": {"pct": 13, "cores": [1], "caption": "x"},
+        "mem": {"pct": 50.0, "caption": "x"},
+        "history": {"pct": [], "peakText": "peak 0%", "lastPct": 0},
+        "machine": {"caption": "x"},
+        "leftovers": {"chip": "", "more": 0, "foot": "",
+                      "rows": [{"token": "100:1", "kind": "junk",
+                                "name": "X", "sub": "", "meta": "", "age": 1,
+                                "cores": 5.0, "burning": True}]},
+        "busy": {"caption": "", "rows": []},
+        "alerts": [{"title": "2 leftovers burning 9 cores", "body": "open it"}],
+        "autokilled": [], "live": False,
+    }
+
+    def test_tick_stores_payload_and_notifies_alerts(self):
+        with mock.patch.object(tc.sysmon_runner, "background_tick",
+                               return_value=self.PAYLOAD):
+            self.controller.sysmon_tick()
+            self.run_last_worker()
+            self.host.drain()
+        self.assertEqual(self.controller.system, self.PAYLOAD)
+        self.assertEqual(len(self.host.notify_calls), 1)
+        self.assertIn("burning", self.host.notify_calls[0][0].title)
+
+    def test_tick_does_nothing_when_disabled(self):
+        with mock.patch.object(tc.sysmon, "enabled", return_value=False):
+            self.controller.sysmon_tick()
+        self.assertIsNone(self.controller.system)
+        self.thread_cls.assert_not_called()
+
+    def test_on_kill_optimistically_drops_the_row_and_calls_the_runner(self):
+        self.controller.system = {"leftovers": {"rows": [
+            {"token": "100:1", "kind": "junk", "name": "X"}]},
+            "busy": {"rows": []}}
+        with mock.patch.object(tc.sysmon_runner, "kill",
+                               return_value=(True, "")) as killer:
+            self.controller.on_kill("100:1")
+            # the row is gone immediately (optimistic)
+            self.assertEqual(
+                self.controller.system["leftovers"]["rows"], [])
+            self.run_last_worker()
+        killer.assert_called_once_with("100:1")
+
+    def test_on_kill_failure_surfaces_an_action_error(self):
+        self.controller.system = {"leftovers": {"rows": []},
+                                  "busy": {"rows": []}}
+        with mock.patch.object(tc.sysmon_runner, "kill",
+                               return_value=(False, "EPERM")):
+            self.controller.on_kill("100:1")
+            self.run_last_worker()
+            self.host.drain()
+        self.assertIn("EPERM", self.controller.action_error)
+
+
 if __name__ == "__main__":
     unittest.main()

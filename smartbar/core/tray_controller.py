@@ -47,8 +47,8 @@ import subprocess
 import threading
 import time
 
-from smartbar import presence_client
-from smartbar.core import codex, cswap, model, plan, portable, presence
+from smartbar import presence_client, sysmon_runner
+from smartbar.core import codex, cswap, model, plan, portable, presence, sysmon
 from smartbar.core import update as update_core
 from smartbar.core.alerts import Alert, AlertManager
 from smartbar.core.recapture import RecapturePolicy
@@ -235,6 +235,8 @@ class TrayController:
         self.checking = False    # a manual update check is in flight
         self.check_result = ""   # its outcome, shown in the row for a while
         self.check_token = 0     # so a stale timer cannot clear a newer one
+
+        self.system = None       # latest System-tab payload, or None (off)
 
     # --- pending-update reading -----------------------------------------
 
@@ -471,6 +473,57 @@ class TrayController:
                 self.host.call_on_ui_thread(
                     self._set_action_error, f"Remove failed: {exc}")
             self._start_fetch()
+        threading.Thread(target=run, daemon=True).start()
+
+    # --- System tab -----------------------------------------------------
+
+    def sysmon_tick(self) -> None:
+        """One System-tab poll, scheduled by the host on its own timer.
+        Samples in a worker (the sample sleeps ~0.5 s, which must never
+        block the UI thread) and marshals the payload back."""
+        if not sysmon.enabled():
+            self.system = None
+            return
+        threading.Thread(target=self._sysmon_fetch, daemon=True).start()
+
+    def _sysmon_fetch(self) -> None:
+        try:
+            payload = sysmon_runner.background_tick()
+        except Exception:                       # a probe hiccup is not fatal
+            log.exception("sysmon tick failed")
+            return
+        self.host.call_on_ui_thread(self._apply_system, payload)
+
+    def _apply_system(self, payload) -> None:
+        """UI thread: store the payload, fire any leftover notifications, and
+        repaint the panel if it is open on the System tab."""
+        self.system = payload
+        for alert in payload.get("alerts", []):
+            self.host.notify(Alert(alert["title"], alert["body"]))
+        if self.host.has_panel and self.host.panel_visible():
+            self.host.refresh_panel()
+
+    def on_kill(self, token: str) -> None:
+        """Confirmed kill: drop the row now (optimistic), signal in the
+        background through the one guarded runner, then re-tick — the truth
+        that restores the row if the kill was refused or failed. Mirrors
+        on_remove's shape."""
+        self.action_error = ""
+        if self.system is not None:
+            for group in ("leftovers", "busy"):
+                block = self.system.get(group)
+                if block:
+                    block["rows"] = [row for row in block["rows"]
+                                     if row.get("token") != token]
+        if self.host.has_panel and self.host.panel_visible():
+            self.host.refresh_panel()
+
+        def run():
+            ok, error = sysmon_runner.kill(token)
+            if not ok:
+                self.host.call_on_ui_thread(self._set_action_error,
+                                            f"Kill failed: {error}")
+            self.host.call_on_ui_thread(self.sysmon_tick)
         threading.Thread(target=run, daemon=True).start()
 
     def _set_action_error(self, message: str) -> None:
