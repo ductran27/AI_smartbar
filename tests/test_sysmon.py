@@ -78,19 +78,19 @@ class TestClassify(unittest.TestCase):
     # A normal Chrome (real profile) — must never be junk.
     CHROME_NORMAL = (
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
-        "--user-data-dir=/Users/ductran/Library/Application Support/"
+        "--user-data-dir=/Users/dev/Library/Application Support/"
         "Google/Chrome")
-    ESBUILD = ("/Users/ductran/.local/vietnamair/node_modules/@esbuild/"
+    ESBUILD = ("/Users/dev/.local/webapp/node_modules/@esbuild/"
                "darwin-arm64/bin/esbuild --service=0.28.1 --ping")
     PUPPETEER = (
-        "/Users/ductran/.cache/puppeteer/chrome/mac_arm-151.0.7922.77/"
+        "/Users/dev/.cache/puppeteer/chrome/mac_arm-151.0.7922.77/"
         "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/"
         "Google Chrome for Testing --allow-pre-commit-input")
-    ZSH_SNAPSHOT = ("/bin/zsh -c source /Users/ductran/.claude/"
+    ZSH_SNAPSHOT = ("/bin/zsh -c source /Users/dev/.claude/"
                     "shell-snapshots/snapshot-zsh-1234.sh")
     VITE = "/usr/local/bin/node /x/node_modules/vite/bin/vite.js --host"
     HTTP_SERVER = "/usr/bin/python3 -m http.server 8931"
-    CLAUDE = "/Users/ductran/.local/bin/claude"
+    CLAUDE = "/Users/dev/.local/bin/claude"
     CODEX = "/usr/local/bin/codex --model gpt-5"
     # The scanner's OWN shell: argv mentions every pattern, exe is a shell.
     SCANNER = ("/bin/zsh -c ps -Axww | grep -E 'esbuild --service|"
@@ -169,7 +169,7 @@ class TestTreeAndKill(unittest.TestCase):
             sysmon.Proc(200, 1, 501, 1000, 10, 0.0, "/usr/bin/pmset",
                         start=2000),
             sysmon.Proc(300, 400, 501, 900_000, 3600, 5.0,
-                        "/Users/ductran/.local/bin/claude", start=3000),
+                        "/Users/dev/.local/bin/claude", start=3000),
             sysmon.Proc(301, 300, 501, 100_000, 3600, 1.0,
                         "/usr/bin/node /x/mcp-server.js", start=3100),
         ]
@@ -298,7 +298,7 @@ class TestBuildView(unittest.TestCase):
                         "-contentproc", start=100),
             # claude session + node MCP child
             sysmon.Proc(400, 1, 501, 900_000, 3600, 60.0,
-                        "/Users/ductran/.local/bin/claude", start=3000),
+                        "/Users/dev/.local/bin/claude", start=3000),
             sysmon.Proc(401, 400, 501, 100_000, 3600, 55.0,
                         "/usr/local/bin/node /x/mcp-server.js", start=3100),
             # another user's process (system)

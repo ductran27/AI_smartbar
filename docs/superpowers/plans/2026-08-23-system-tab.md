@@ -178,7 +178,7 @@ class TestClassify(unittest.TestCase):
     ESBUILD = ("/x/node_modules/@esbuild/darwin-arm64/bin/esbuild "
                "--service=0.28.1 --ping")
     VITE = "/usr/local/bin/node /x/node_modules/vite/bin/vite.js"
-    CLAUDE = "/Users/ductran/.local/bin/claude"
+    CLAUDE = "/Users/dev/.local/bin/claude"
     SCANNER = "grep -E esbuild --service /tmp/cdp-prof- --headless"  # must NOT match
 
     def k(self, args, orphan, cpu=0.0, prev=0.0, uid=0, my=0):
