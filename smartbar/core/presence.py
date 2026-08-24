@@ -33,6 +33,7 @@ device already knows.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import sys
@@ -65,13 +66,19 @@ _REF_RE = re.compile(
 
 
 def enabled() -> bool:
-    """False when SMARTBAR_PRESENCE=off — the kill switch for remote writes."""
-    return os.environ.get("SMARTBAR_PRESENCE", "").strip().lower() != "off"
+    """The kill switch for remote writes. "off", "0", "false" and "no" all
+    disable — a user reaching for any usual falsy spelling must not keep
+    publishing to the remote by surprise."""
+    value = os.environ.get("SMARTBAR_PRESENCE", "").strip().lower()
+    return value not in ("off", "0", "false", "no")
 
 
 def interval() -> float:
     try:
-        return max(60.0, float(os.environ["SMARTBAR_PRESENCE_INTERVAL"]))
+        value = float(os.environ["SMARTBAR_PRESENCE_INTERVAL"])
+        if not math.isfinite(value):
+            raise ValueError(value)     # inf crashed every tray at int()
+        return max(60.0, value)
     except (KeyError, ValueError):
         return DEFAULT_INTERVAL
 
@@ -79,14 +86,22 @@ def interval() -> float:
 def ttl() -> float:
     """How long a device counts after its last beat.
 
-    Three missed beats by default. The floor is two intervals: a TTL below
-    that would drop healthy devices between their own heartbeats.
+    Three missed beats by default. Floors: two LOCAL intervals (a window
+    below that drops this device between its own heartbeats), and three
+    DEFAULT intervals — because this window judges OTHER devices, whose
+    cadence this device's config says nothing about. One machine setting
+    SMARTBAR_PRESENCE_INTERVAL=60 used to compute a 180 s window and
+    declare every default 300 s device dead for two minutes of each cycle.
     """
     beat = interval()
+    floor = 3 * DEFAULT_INTERVAL
     try:
-        return max(2 * beat, float(os.environ["SMARTBAR_PRESENCE_TTL"]))
+        value = float(os.environ["SMARTBAR_PRESENCE_TTL"])
+        if not math.isfinite(value):
+            raise ValueError(value)
+        return max(2 * beat, floor, value)
     except (KeyError, ValueError):
-        return 3 * beat
+        return max(3 * beat, floor)
 
 
 def account_key(email: str) -> str:

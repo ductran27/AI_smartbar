@@ -79,6 +79,18 @@ def _reloaded(module_name, *, platform=None, env=None, fcntl_missing=False):
             sys.modules.pop(module_name, None)
             if saved_module is not None:
                 sys.modules[module_name] = saved_module
+            # Restore the PARENT PACKAGE's attribute too: `from smartbar
+            # import update_runner` resolves through it, so leaving it
+            # bound to the throwaway reload (fake env baked into its
+            # constants) poisoned later tests in the same process even
+            # though sys.modules looked clean (audit B8 flakiness).
+            parent_name, _, child = module_name.rpartition(".")
+            parent = sys.modules.get(parent_name) if parent_name else None
+            if parent is not None:
+                if saved_module is not None:
+                    setattr(parent, child, saved_module)
+                elif hasattr(parent, child):
+                    delattr(parent, child)
 
 
 class TestImportSurvivesWithoutFcntl(unittest.TestCase):
@@ -372,9 +384,12 @@ class TestRunInstallerForPowerShell(unittest.TestCase):
         self.tmp.cleanup()
 
     def _ok_run(self):
-        return mock.patch.object(
-            update_runner.subprocess, "run",
-            return_value=mock.Mock(returncode=0, stdout="", stderr=""))
+        # run_installer moved from subprocess.run to Popen (own process
+        # group + killpg on timeout, audit B4); the fake mirrors that API.
+        fake = mock.Mock(returncode=0)
+        fake.communicate.return_value = ("", "")
+        return mock.patch.object(update_runner.subprocess, "Popen",
+                                 return_value=fake)
 
     def test_a_non_executable_ps1_still_runs(self):
         # The exact regression: os.access(..., os.X_OK) would reject this

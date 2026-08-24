@@ -18,6 +18,18 @@ INTERVAL="$("$REPO/bin/ai-smartbar" --update-interval 2>/dev/null || echo 21600)
 CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 AGENT_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# Plist bodies below splice paths into XML: a checkout under "~/R&D/…" or a
+# HOME with "<" produced a plist launchd rejects (an update-apply rollback
+# loop). Escape once, use the escaped copies inside every heredoc.
+xml_escape() {
+  local s="$1"
+  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
+  printf '%s' "$s"
+}
+XREPO="$(xml_escape "$REPO")"
+XHOME="$(xml_escape "$HOME")"
+XAGENT_PATH="$(xml_escape "$AGENT_PATH")"
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --uninstall)
@@ -57,8 +69,16 @@ CONFIG_PLIST="$("$REPO/bin/ai-smartbar" --print-config plist || true)"
 # just fetched successfully, and a transient network blip must not fail an
 # otherwise good update into a rollback.
 if [[ "${SMARTBAR_UPDATE_APPLY:-}" != "1" ]]; then
+  # The probe must fail exactly where launchd would: BatchMode + no stdin
+  # stops ssh asking for a passphrase on /dev/tty (typed interactively, the
+  # probe passed and the agent then failed forever), and SSH_AUTH_SOCK is
+  # passed through because launchd DOES provide it — env -i alone rejected
+  # every agent-only key.
   if env -i PATH="$AGENT_PATH" HOME="$HOME" GIT_TERMINAL_PROMPT=0 \
-       git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1; then
+       GIT_ASKPASS= SSH_ASKPASS_REQUIRE=never \
+       GIT_SSH_COMMAND="ssh -oBatchMode=yes" \
+       SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
+       git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1 </dev/null; then
     echo "Non-interactive fetch OK."
   else
     ORIGIN="$(git -C "$REPO" remote get-url origin 2>/dev/null || echo '<no origin>')"
@@ -83,22 +103,28 @@ cat > "$NEW" <<EOF
   <key>Label</key><string>com.ductran.ai-smartbar.update</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${REPO}/bin/ai-smartbar</string>
+    <string>${XREPO}/bin/ai-smartbar</string>
     <string>--update</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${AGENT_PATH}</string>
+    <key>PATH</key><string>${XAGENT_PATH}</string>
     <key>SMARTBAR_UPDATE_CHANNEL</key><string>${CHANNEL}</string>${CONFIG_PLIST}
   </dict>
   <key>StartInterval</key><integer>${INTERVAL}</integer>
   <key>RunAtLoad</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/.cache/ai-smartbar/update-agent.log</string>
+  <key>StandardErrorPath</key><string>${XHOME}/.cache/ai-smartbar/update-agent.log</string>
 </dict>
 </plist>
 EOF
 
-if [[ -f "$PLIST" ]] && cmp -s "$NEW" "$PLIST"; then
+# "Already current" needs BOTH an identical plist AND a loaded job: after a
+# failed load (or a manual bootout) the bytes matched, every re-run exited 0
+# here, and nothing was actually scheduled until the next login. Inside the
+# job (APPLY=1) the plist is by definition loaded.
+if [[ -f "$PLIST" ]] && cmp -s "$NEW" "$PLIST" \
+   && { [[ "${SMARTBAR_UPDATE_APPLY:-}" == "1" ]] \
+        || launchctl list com.ductran.ai-smartbar.update >/dev/null 2>&1; }; then
   rm -f "$NEW"
   echo "Update agent already current (channel=$CHANNEL, every $((INTERVAL/3600))h)."
   exit 0

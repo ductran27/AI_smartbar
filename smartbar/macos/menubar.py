@@ -114,7 +114,7 @@ class SmartBarApp(rumps.App):
         self._ui_queue = queue.Queue()
         # 60s harvests cswap's poll plans as they come due; no extra API
         # traffic (the store paces the network).
-        interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
+        interval = TrayController.poll_interval_from_env()
         self.controller._pending_update()
         self._rebuild_menu()
         # Started before the first fetch on purpose: the fetch hands its

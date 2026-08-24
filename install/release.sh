@@ -209,10 +209,31 @@ require_ci_success() {
   echo "GitHub tests workflow passed for $expected_sha ($CI_RUN_URL)"
 }
 
+# A resumed release gates the FIX commit's run, and the `changes` job only
+# runs the Windows/Swift legs for the paths the fix touched — so the leg
+# that just failed may simply have been skipped. Refuse to tag unless both
+# expensive legs actually ran and passed on the gated SHA.
+require_full_legs() {
+  local jobs
+  if ! jobs="$(run_gh run view "$CI_RUN_ID" --repo "$GH_REPO" --json jobs \
+        --jq '[.jobs[] | select(.name == "windows" or .name == "swift")
+               | .conclusion] | join(",")')"; then
+    echo "could not read the gated run's jobs — refusing to tag" >&2
+    return 1
+  fi
+  if [[ "$jobs" != "success,success" && "$jobs" != "success,success," ]]; then
+    echo "the gated run did not exercise both release legs (windows,swift =" \
+         "'${jobs:-none}') — dispatch a full run for $HEAD_SHA (Actions →" \
+         "tests → Run workflow) and resume after it passes" >&2
+    return 1
+  fi
+}
+
 if [[ "$LOCAL_CANDIDATE" == "1" ]]; then
   echo "Resuming local unpushed release candidate v$NEW"
 elif [[ "$RESUMING" == "1" ]]; then
   require_ci_success "$HEAD_SHA" "$CI_DISCOVERY_LIMIT"
+  require_full_legs
   echo "Resuming untagged release v$NEW"
 else
   require_ci_success "$HEAD_SHA" 0

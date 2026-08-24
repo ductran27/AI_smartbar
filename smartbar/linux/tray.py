@@ -51,6 +51,7 @@ import os
 # while GDK reads GDK_BACKEND with the same ordered-fallback semantics, so
 # a session with no X server still falls through to Wayland and keeps
 # compositor placement. setdefault: an explicit GDK_BACKEND always wins.
+_GDK_BACKEND_ORIGINAL = os.environ.get("GDK_BACKEND")   # for child processes
 os.environ.setdefault("GDK_BACKEND", "x11,wayland")
 
 import gi
@@ -67,7 +68,7 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator
 from gi.repository import GLib, Gtk
 
 from smartbar import __version__, presence_client
-from smartbar.core import (model, paths, popover_layout, portable,
+from smartbar.core import (cswap, model, paths, popover_layout, portable,
                            presence, sysmon)
 from smartbar.core import update as update_core
 from smartbar.core.tray_controller import TrayController
@@ -119,7 +120,7 @@ class Tray:
         # 60s harvests cswap's poll plans the moment they come due (incl.
         # the 60s urgent cadence near the limit); the store still paces the
         # real network, so faster polling adds no API traffic.
-        self.interval = int(os.environ.get("SMARTBAR_INTERVAL", "60"))
+        self.interval = TrayController.poll_interval_from_env()
         self.controller = TrayController(self)
         self.provider = ""   # panel tab; "" auto-resolves in the layout
         self.confirm = ""    # card awaiting remove confirmation, or ""
@@ -243,7 +244,11 @@ class Tray:
         try:
             gi.require_version("Notify", "0.7")
             from gi.repository import Notify
-            Notify.init("AI smartbar")
+            # init() returns False (no D-Bus) without raising; treating that
+            # as success left every show() raising and the notify-send
+            # fallback never used.
+            if not Notify.init("AI smartbar"):
+                raise RuntimeError("Notify.init returned False")
             self._libnotify = Notify
         except Exception:
             log.warning("libnotify unavailable; will fall back to notify-send")
@@ -263,8 +268,14 @@ class Tray:
                 self._libnotify.Notification.new(alert.title, alert.body,
                                                  icon).show()
             else:
-                subprocess.run(["notify-send", "-u", urgency,
-                                alert.title, alert.body], timeout=10, check=False)
+                # Fire-and-forget: this runs on the GTK loop, and a
+                # notification daemon being activated (or hung) blocked
+                # the whole UI for up to the timeout.
+                subprocess.Popen(["notify-send", "-u", urgency,
+                                  alert.title, alert.body],
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
         except Exception:
             log.exception("failed to send notification")
 
@@ -275,6 +286,10 @@ class Tray:
         # with the current name, so a single name would never repaint.
         self.flip = not self.flip
         name = f"state-{'a' if self.flip else 'b'}"
+        # Per call: the cache dir is documented as safe to delete while the
+        # tray runs, and a missing ICON_DIR made every poll's set_icon raise
+        # (stranding the controller mid-apply).
+        os.makedirs(ICON_DIR, exist_ok=True)
         render_pills(states, os.path.join(ICON_DIR, name + ".png"),
                      update_pending=update_pending)
         self.indicator.set_icon_full(name, "AI smartbar usage")
@@ -355,9 +370,18 @@ class Tray:
         return menu
 
     def _install_menu(self, menu):
+        old = self.menu
         self.menu = menu
         self.pending_menu = None
         self.indicator.set_menu(menu)
+        # A GtkMenu owns its own popup toplevel, which GTK keeps until the
+        # widget is destroyed; rebuilding one per poll (≥1440/day) without
+        # destroying the previous one grew the tray's RSS for weeks.
+        if old is not None and old is not menu:
+            try:
+                old.destroy()
+            except Exception:
+                log.debug("could not destroy the previous menu")
         # StatusNotifier gives no left-click callback — left-click always
         # shows the menu — so middle-click is the one-gesture way in.
         if self.open_item is not None:
@@ -373,6 +397,13 @@ class Tray:
         if self.menu is not None and self.menu.get_mapped():
             # Swapping the menu out from under the pointer closes it on
             # some shells — hold the rebuild until this open menu hides.
+            # A rebuild that supersedes a still-pending one must destroy
+            # the superseded menu too, or it leaks like the old ones did.
+            if self.pending_menu is not None and self.pending_menu is not new_menu:
+                try:
+                    self.pending_menu.destroy()
+                except Exception:
+                    log.debug("could not destroy the superseded pending menu")
             self.pending_menu = new_menu
         else:
             self._install_menu(new_menu)
@@ -442,10 +473,46 @@ class Tray:
         self.controller._start_fetch()
 
     def _on_tui(self, _item):
+        """Open `cswap tui` in a terminal. x-terminal-emulator is Debian's
+        alternatives name only; Fedora/Arch/openSUSE boxes silently did
+        nothing. Try the user's own $TERMINAL first, then the common ones.
+        The child gets the ORIGINAL GDK_BACKEND (the tray forces x11 first
+        for AppIndicator's sake; a GTK terminal inheriting that runs under
+        XWayland — blurry with fractional scaling, wrong input methods)."""
         try:
-            subprocess.Popen(["x-terminal-emulator", "-e", "cswap", "tui"])
-        except OSError:
-            log.exception("could not open terminal")
+            binary = cswap._binary()
+        except Exception:
+            binary = "cswap"
+        env = dict(os.environ)
+        if _GDK_BACKEND_ORIGINAL is None:
+            env.pop("GDK_BACKEND", None)
+        else:
+            env["GDK_BACKEND"] = _GDK_BACKEND_ORIGINAL
+        candidates = []
+        user_terminal = os.environ.get("TERMINAL", "").strip()
+        if user_terminal:
+            candidates.append([user_terminal, "-e", binary, "tui"])
+        candidates += [
+            ["x-terminal-emulator", "-e", binary, "tui"],
+            ["gnome-terminal", "--", binary, "tui"],
+            ["konsole", "-e", binary, "tui"],
+            ["xfce4-terminal", "-e", f"{binary} tui"],
+            ["xterm", "-e", binary, "tui"],
+        ]
+        for argv in candidates:
+            try:
+                # start_new_session: the terminal is its own process group
+                # and is reaped by init, never a zombie of this tray.
+                subprocess.Popen(argv, env=env, start_new_session=True,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                return
+            except OSError:
+                continue
+        log.error("no terminal emulator found for `cswap tui`")
+        self.controller.action_error = ("No terminal emulator found — run "
+                                        "`cswap tui` in a shell")
+        self.refresh_panel()
 
     def _quit(self):
         """Deliberate quit: stop being counted before going away."""
@@ -502,27 +569,43 @@ def main():
                         format="%(asctime)s %(levelname)s %(message)s")
     log.info("ai-smartbar %s starting (interval %ss)", __version__,
              os.environ.get("SMARTBAR_INTERVAL", "60"))
-    tray = Tray()
-    _write_pid_file()
-    tray.controller._start_fetch()
-    GLib.timeout_add_seconds(tray.interval, tray.controller._tick)
-    if presence.enabled():
-        GLib.timeout_add_seconds(int(presence.interval()), tray._presence_tick)
-    if sysmon.enabled():
-        # Machine vitals + leftover processes on their own cadence; the tick
-        # samples in a worker so it never blocks the GTK loop.
-        tray.controller.sysmon_tick()
-
-        def _sysmon_tick():
+    try:
+        tray = Tray()
+        # GLib.unix_signal_add, not signal.signal: the latter only runs its
+        # handler between bytecode instructions on the MAIN thread and
+        # would have to somehow poke the GTK loop awake itself;
+        # unix_signal_add integrates the signal into the same main loop
+        # everything else here already runs on (self-pipe under the hood),
+        # which is also why the handler is safe to touch GTK/self.popover
+        # directly. Installed BEFORE the PID file is written: SIGUSR1's
+        # default disposition is TERMINATE, so a hotkey press in the gap
+        # between the two used to kill the tray it was meant to open.
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1,
+                             tray._on_open_panel_signal)
+        _write_pid_file()
+        tray.controller._start_fetch()
+        GLib.timeout_add_seconds(tray.interval, tray.controller._tick)
+        if presence.enabled():
+            GLib.timeout_add_seconds(int(presence.interval()),
+                                     tray._presence_tick)
+        if sysmon.enabled():
+            # Machine vitals + leftover processes on their own cadence; the
+            # tick samples in a worker so it never blocks the GTK loop.
             tray.controller.sysmon_tick()
-            return True
-        GLib.timeout_add_seconds(sysmon.interval(), _sysmon_tick)
-    # GLib.unix_signal_add, not signal.signal: the latter only runs its
-    # handler between bytecode instructions on the MAIN thread and would
-    # have to somehow poke the GTK loop awake itself; unix_signal_add
-    # integrates the signal into the same main loop everything else here
-    # already runs on (self-pipe under the hood), which is also why the
-    # handler above is safe to touch GTK/self.popover directly.
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1,
-                         tray._on_open_panel_signal)
-    Gtk.main()
+
+            def _sysmon_tick():
+                try:
+                    tray.controller.sysmon_tick()
+                except Exception:
+                    # A raising GLib callback cancels its timer for good.
+                    log.exception("sysmon tick failed")
+                return True
+            GLib.timeout_add_seconds(sysmon.interval(), _sysmon_tick)
+        Gtk.main()
+    except Exception:
+        # The installer starts this detached with stderr discarded; without
+        # this line a missing AppIndicator typelib or an unwritable icon
+        # dir died invisibly and the "check tray.log" hint pointed at an
+        # empty file.
+        log.exception("tray died")
+        raise

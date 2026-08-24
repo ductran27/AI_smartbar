@@ -13,6 +13,7 @@ import base64
 import glob
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 
 from smartbar.core import model
@@ -149,13 +150,16 @@ def _recent_rollouts(home: str, now) -> list:
 
 
 def _window_key(minutes: int) -> str:
-    if minutes == 300:
+    """Bucket label for a window length — ROUNDED, not floored: real Codex
+    payloads report 299 and 10079 minutes, which flooring mislabelled as
+    4h/6d (and gave the pace math the wrong window length)."""
+    if 290 <= minutes <= 310:
         return "5h"
-    if minutes == 10080:
+    if 10020 <= minutes <= 10140:
         return "7d"
     if minutes >= 1440:
-        return f"{minutes // 1440}d"
-    return f"{max(1, minutes // 60)}h"
+        return f"{max(1, round(minutes / 1440))}d"
+    return f"{max(1, round(minutes / 60))}h"
 
 
 def rate_limits(home=None, cutoff="", now=None):
@@ -171,7 +175,7 @@ def rate_limits(home=None, cutoff="", now=None):
     home = home or codex_home()
     now = now or datetime.now(timezone.utc)
     cutoff_at = parse_iso(cutoff)
-    seen: dict = {}          # (limit_id, minutes) -> (event time, window)
+    seen: dict = {}     # (limit_id, minutes) -> (event time, window, name)
     measured = None          # (event time, raw timestamp string)
     for path in _recent_rollouts(home, now):
         for raw_ts, limits in _events(path):
@@ -179,21 +183,34 @@ def rate_limits(home=None, cutoff="", now=None):
             if at is None or (cutoff_at is not None and at <= cutoff_at):
                 continue
             limit_id = limits.get("limit_id") or "codex"
+            limit_name = limits.get("limit_name") or ""
+            contributed = False
             for window in (limits.get("primary"), limits.get("secondary")):
                 if not isinstance(window, dict):
                     continue
                 minutes = window.get("window_minutes")
                 if not isinstance(minutes, (int, float)):
                     continue
+                contributed = True
                 key = (limit_id, int(minutes))
                 if key not in seen or at > seen[key][0]:
-                    seen[key] = (at, window)
-            if measured is None or at > measured[0]:
+                    seen[key] = (at, window, limit_name)
+            # "when these numbers were measured" must only move when an
+            # event actually carried a window — credits-only events used to
+            # stamp measuredAt days after the real measurement.
+            if contributed and (measured is None or at > measured[0]):
                 measured = (at, raw_ts)
 
-    def entry(label, short, window):
+    def entry(label, short, window, at):
         resets = window.get("resets_at")
         pct = float(window.get("used_percent") or 0.0)
+        # Older Codex payloads carry only resets_in_seconds; deriving the
+        # absolute time from the event stamp keeps them from reading as
+        # already-reset (0%) while the user may be at 90%.
+        if not isinstance(resets, (int, float)):
+            relative = window.get("resets_in_seconds")
+            if isinstance(relative, (int, float)) and at is not None:
+                resets = at.timestamp() + relative
         if isinstance(resets, (int, float)) and resets > now.timestamp():
             resets_at = _iso(resets)
         else:
@@ -202,21 +219,24 @@ def rate_limits(home=None, cutoff="", now=None):
                 "resets_at": resets_at}
 
     metrics: dict = {}
-    scoped: dict = {}        # limit_id -> {minutes: (at, window)}
-    for (limit_id, minutes), (at, window) in seen.items():
+    scoped: dict = {}   # limit_id -> {minutes: (at, window, name)}
+    for (limit_id, minutes), (at, window, name) in seen.items():
         if limit_id == "codex":
             key = _window_key(minutes)
-            metrics[key] = entry(key, key, window)
+            metrics[key] = entry(key, key, window, at)
         else:
-            scoped.setdefault(limit_id, {})[minutes] = (at, window)
+            scoped.setdefault(limit_id, {})[minutes] = (at, window, name)
     for limit_id, windows in scoped.items():
-        name = limit_id[6:] if limit_id.startswith("codex_") else limit_id
-        name = name.title()
+        fallback = limit_id[6:] if limit_id.startswith("codex_") else limit_id
         # The weekly bucket is the scoped row (mirrors the Claude cards);
         # without one, the largest window this limit reported stands in.
         minutes = 10080 if 10080 in windows else max(windows)
-        metrics[f"scoped:{name}"] = entry(name, name[:1].upper(),
-                                          windows[minutes][1])
+        at, window, name = windows[minutes]
+        # Codex supplies the human model name (limit_name); the limit_id is
+        # an internal codename the user never sees in Codex itself.
+        label = name or fallback.title()
+        metrics[f"scoped:{label}"] = entry(label, label[:1].upper(),
+                                           window, at)
     return metrics, (measured[1] if measured else "")
 
 
@@ -245,9 +265,13 @@ def _save_registry(reg: dict) -> None:
     """
     path = _registry_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    # mkstemp, not a pid-keyed name: two threads of ONE process (the UI
+    # thread's sync and a removal worker) shared the same tmp path and one
+    # os.replace could promote the other's half-written file.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix=".openai-accounts-")
     try:
-        with open(tmp, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(reg, sort_keys=True))
         os.replace(tmp, path)
     except OSError:
@@ -342,14 +366,21 @@ def _rows(entry: dict, active: bool, now) -> list:
     for key in keys:
         window = stored[key]
         resets_at = window.get("resets_at") or ""
+        pct = float(window.get("pct") or 0.0)
+        resets = parse_iso(resets_at)
         if not active:
-            resets = parse_iso(resets_at)
             if resets is None or resets <= now:
                 continue
+        elif resets is None or resets <= now:
+            # README: "a window whose reset time passes while idle reads
+            # 0%". rate_limits zeroes this only while rollouts still carry
+            # the event; once they age out (laptop closed over the reset)
+            # the stored 61% would sit on the ACTIVE card forever.
+            pct, resets_at = 0.0, ""
         rows.append(model.Metric(
             key=key, label=window.get("label") or key,
             short=window.get("short") or key,
-            pct=float(window.get("pct") or 0.0), resets_at=resets_at))
+            pct=pct, resets_at=resets_at))
     return rows
 
 

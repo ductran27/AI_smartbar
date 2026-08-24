@@ -317,7 +317,9 @@ class TestRefreshLayoutHeightCap(GuiStubbedTestCase):
         popover.rebuild = _rebuild(theme_mod, height=1100.0)
         popover.refresh_layout()
         self.assertEqual(popover.geometry(), "330x500")
-        self.assertIn("<MouseWheel>", popover.canvas._bindings)
+        # Bound on the focused TOPLEVEL (audit B12): Tk 8.6 routes wheel
+        # events to the focus window, so a canvas binding never fired.
+        self.assertIn("<MouseWheel>", popover._bindings)
 
     def test_shrinking_back_below_the_cap_unbinds_wheel_and_resets_scroll(self):
         mod = _reimport("smartbar.windows.popover_window")

@@ -28,20 +28,38 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            header
-            if showsTabs {
-                providerTabs
+            // The tab row is part of the header block, not a section of its
+            // own: TAB_TOP_GAP (4pt) under the title, as popover_layout
+            // draws it — the plain section gap had crept back in here.
+            VStack(alignment: .leading, spacing: 4) {
+                header
+                if showsTabs {
+                    providerTabs
+                }
             }
-            // One error line for every card action — switching or removing,
-            // whichever failed most recently.
+            // One error line for every card action — switching, removing or
+            // killing, whichever failed most recently (a refused kill used
+            // to set SystemStatus.actionError that nothing displayed).
             if let actionError = store.switchError ?? store.removeError
-                    ?? openai.removeError {
+                    ?? openai.removeError ?? system.actionError {
                 Label(actionError, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 12.5))
                     .foregroundStyle(palette.warning)
                     .lineLimit(2)
             }
             if selectedProvider == "system" {
+                // The System tab must not hide what a first run or a broken
+                // cswap needs the user to SEE (mirror of popover_layout):
+                // the loading/error/onboarding lines render above the vitals.
+                if store.snapshot == nil {
+                    loadingOrError
+                } else if !hasClaudeAccounts && openai.accounts.isEmpty {
+                    Label("No accounts yet — sign in to Claude Code and it will be registered automatically",
+                          systemImage: "person.crop.circle.badge.plus")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(palette.textSecondary)
+                        .lineLimit(2)
+                }
                 if let payload = system.payload {
                     SystemView(payload: payload)
                 }
@@ -130,10 +148,12 @@ struct PopoverView: View {
         switch id {
         case "openai": return "OpenAI"
         case "system":
-            // Show a count while leftovers are burning (red is applied by
-            // the tab's own colour); calm = a plain "System".
-            let burning = system.payload?.leftovers.rows
-                .filter { $0.burning == true }.count ?? 0
+            // Show a count while leftovers are burning; calm = a plain
+            // "System". The payload's own count covers the FULL junk set,
+            // not only the 8 rows displayed (older payloads fall back).
+            let group = system.payload?.leftovers
+            let burning = group?.burning
+                ?? group?.rows.filter { $0.burning == true }.count ?? 0
             return burning > 0 ? "System · \(burning)" : "System"
         default: return "Claude"
         }
@@ -167,6 +187,8 @@ struct PopoverView: View {
                 .fill(selected ? palette.tabBGSelected : palette.tabBG))
         }
         .buttonStyle(.plain)
+        .help(id == "system" ? "Show machine vitals and leftover processes"
+              : "Show \(title) accounts")
     }
 
     /// How tall the card list may grow before it starts scrolling, and how
@@ -213,7 +235,7 @@ struct PopoverView: View {
                         .foregroundStyle(palette.warning)
                         .lineLimit(1)
                 } else if !updates.blockedReason.isEmpty {
-                    Label("Update held", systemImage: "pause.circle")
+                    Label("update held", systemImage: "pause.circle")
                         .font(.system(size: 12.5))
                         .foregroundStyle(palette.textTertiary)
                         .help("Update held back: \(updates.blockedReason)")
@@ -329,7 +351,7 @@ struct PopoverView: View {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.system(size: 12.5))
                 .foregroundStyle(palette.warning)
-                .lineLimit(3)
+                .lineLimit(2)      // popover_layout caps the error at 2 lines
         } else {
             HStack(spacing: 9) {
                 ProgressView()

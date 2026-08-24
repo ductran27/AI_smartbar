@@ -30,26 +30,33 @@ final class PresenceStatus: ObservableObject {
 
     nonisolated private static var interval: TimeInterval {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_PRESENCE_INTERVAL"] ?? ""
-        return max(60, Double(raw) ?? defaultInterval)
+        guard let value = Double(raw), value.isFinite else { return defaultInterval }
+        return max(60, value)
     }
 
-    /// Mirror of core/presence.ttl(): three missed beats by default, and an
-    /// explicit SMARTBAR_PRESENCE_TTL floored at two intervals. Reading the
-    /// override matters — Python honours it, so hardcoding 3x here would make
-    /// this Mac and a Linux box disagree about when a device goes stale while
-    /// both read the same config. tests/test_presence.py pins the two together.
+    /// Mirror of core/presence.ttl(): three missed beats by default, an
+    /// explicit SMARTBAR_PRESENCE_TTL floored at two LOCAL intervals, and
+    /// everything floored at three DEFAULT intervals — the window judges
+    /// OTHER devices' cadence, which this device's config says nothing
+    /// about (a 60s local interval must not declare every 300s device
+    /// dead). tests/test_presence.py pins the two languages together.
     nonisolated private static var ttl: TimeInterval {
         let beat = interval
+        let floorWindow = 3 * defaultInterval
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_PRESENCE_TTL"] ?? ""
-        guard let explicit = Double(raw) else { return 3 * beat }
-        return max(2 * beat, explicit)
+        guard let explicit = Double(raw), explicit.isFinite else {
+            return max(3 * beat, floorWindow)
+        }
+        return max(2 * beat, max(floorWindow, explicit))
     }
 
     /// Mirror of core/presence.enabled() — SMARTBAR_PRESENCE=off is the
     /// kill switch for every remote write this app can make.
     nonisolated private static var isEnabled: Bool {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_PRESENCE"] ?? ""
-        return raw.trimmingCharacters(in: .whitespaces).lowercased() != "off"
+        let value = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        // Same falsy spellings as core/presence.enabled().
+        return !["off", "0", "false", "no"].contains(value)
     }
 
     init() {
@@ -200,14 +207,8 @@ final class PresenceStatus: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
         process.arguments = arguments
-        // launchd hands a GUI app a bare PATH, and the launcher's shebang
-        // has to be able to find python3.
-        var environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
-            .joined(separator: ":")
-        process.environment = environment
+        // One PATH fix for every helper — Launcher.environment().
+        process.environment = Launcher.environment()
         let input = Pipe()
         process.standardInput = input
         process.standardOutput = FileHandle.nullDevice

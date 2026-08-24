@@ -44,14 +44,9 @@ final class PlanStatus: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
         process.arguments = ["--plans", "--json"]
-        // launchd hands a GUI app a bare PATH, and the launcher's shebang
-        // has to be able to find python3 — same treatment as presence.
-        var environment = ProcessInfo.processInfo.environment
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        environment["PATH"] = [home + "/.local/bin", "/opt/homebrew/bin",
-                               "/usr/local/bin", "/usr/bin", "/bin"]
-            .joined(separator: ":")
-        process.environment = environment
+        // One PATH fix for every helper — Launcher.environment() — so the
+        // four inlined copies cannot drift again.
+        process.environment = Launcher.environment()
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice

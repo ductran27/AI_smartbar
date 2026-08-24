@@ -110,8 +110,12 @@ class TestPlatformInTheLabel(unittest.TestCase):
                                return_value="thinkpad.lan"):
             self.assertEqual(presence_runner.device_label(), "linux-thinkpad")
         presence.sys.platform = "darwin"
-        with mock.patch.object(presence_runner.socket, "gethostname",
-                               return_value="Ducs-MacBook.local"):
+        # darwin prefers scutil's stable LocalHostName over gethostname's
+        # DHCP-assigned name (audit B5) — mock it like the hostname.
+        with mock.patch.object(presence_runner.subprocess, "check_output",
+                               return_value="Ducs-MacBook\n"), \
+             mock.patch.object(presence_runner.socket, "gethostname",
+                               return_value="dhcp-172-27-078-158.local"):
             self.assertEqual(presence_runner.device_label(), "mac-ducs-macbook")
 
     def test_the_prefix_survives_a_hostname_too_long_to_fit(self):
@@ -433,10 +437,18 @@ class TestClientFreshness(unittest.TestCase):
         self.saved = presence_runner.STATE_FILE
         self.work = tempfile.mkdtemp()
         presence_runner.STATE_FILE = os.path.join(self.work, "state.json")
+        # tests/__init__.py fences the suite with SMARTBAR_PRESENCE=off;
+        # this class tests the READ side, which that switch also gates.
+        self.saved_enabled = os.environ.get("SMARTBAR_PRESENCE")
+        os.environ["SMARTBAR_PRESENCE"] = "on"
 
     def tearDown(self):
         self.runner.STATE_FILE = self.saved
         shutil.rmtree(self.work, ignore_errors=True)
+        if self.saved_enabled is None:
+            os.environ.pop("SMARTBAR_PRESENCE", None)
+        else:
+            os.environ["SMARTBAR_PRESENCE"] = self.saved_enabled
 
     def write(self, checked_at):
         with open(self.runner.STATE_FILE, "w") as handle:
@@ -508,10 +520,13 @@ class TestKnobs(unittest.TestCase):
         os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "1"
         self.assertEqual(presence.interval(), 60.0)
 
-    def test_a_ttl_below_two_beats_would_drop_healthy_devices(self):
+    def test_a_tiny_ttl_is_floored_at_three_default_intervals(self):
+        # Audit 2026-08-24: the window judges OTHER devices' cadence, so it
+        # never shrinks below 3 × the default beat no matter what this
+        # device's own knobs say.
         os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "300"
         os.environ["SMARTBAR_PRESENCE_TTL"] = "60"
-        self.assertEqual(presence.ttl(), 600.0)
+        self.assertEqual(presence.ttl(), 900.0)
 
 
 SWIFT_SOURCE = os.path.join(
@@ -569,13 +584,15 @@ class TestMacAndLinuxAgree(unittest.TestCase):
 
     def test_the_kill_switch_is_spelled_the_same(self):
         self.assertIn('environment["SMARTBAR_PRESENCE"]', self.swift)
-        self.assertIn(
-            'raw.trimmingCharacters(in: .whitespaces).lowercased() != "off"',
-            self.swift)
-        # …and Python really does trim and lowercase, so " OFF " agrees.
-        for value in ("off", "OFF", " Off "):
+        # Both sides trim, lowercase, and accept the same falsy spellings
+        # (audit B5: "0"/"false"/"no" used to keep publishing on both).
+        self.assertIn('!["off", "0", "false", "no"].contains(value)',
+                      self.swift)
+        self.assertIn("trimmingCharacters(in: .whitespaces).lowercased()",
+                      self.swift)
+        for value in ("off", "OFF", " Off ", "0", "false", "No"):
             os.environ["SMARTBAR_PRESENCE"] = value
-            self.assertFalse(presence.enabled())
+            self.assertFalse(presence.enabled(), value)
         os.environ.pop("SMARTBAR_PRESENCE", None)
 
     def test_the_beat_interval_default_and_floor_match(self):
@@ -583,10 +600,10 @@ class TestMacAndLinuxAgree(unittest.TestCase):
             r"defaultInterval: TimeInterval = (\d+)", self.swift)
         self.assertIsNotNone(default, "Swift default interval not found")
         self.assertEqual(float(default.group(1)), presence.DEFAULT_INTERVAL)
-        floor = re.search(
-            r"return max\((\d+), Double\(raw\) \?\? defaultInterval\)",
-            self.swift)
+        floor = re.search(r"return max\((\d+), value\)", self.swift)
         self.assertIsNotNone(floor, "Swift interval floor not found")
+        # Both sides also refuse non-finite values instead of crashing.
+        self.assertIn("value.isFinite", self.swift)
         os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "1"
         self.assertEqual(presence.interval(), float(floor.group(1)))
         os.environ.pop("SMARTBAR_PRESENCE_INTERVAL", None)
@@ -597,13 +614,13 @@ class TestMacAndLinuxAgree(unittest.TestCase):
         # the Mac's. The regression is that the Swift side reads the variable
         # at all, with the same 3x default and 2x floor.
         self.assertIn('environment["SMARTBAR_PRESENCE_TTL"]', self.swift)
-        self.assertIn("guard let explicit = Double(raw) else { return 3 * beat }",
+        self.assertIn("return max(3 * beat, floorWindow)", self.swift)
+        self.assertIn("return max(2 * beat, max(floorWindow, explicit))",
                       self.swift)
-        self.assertIn("return max(2 * beat, explicit)", self.swift)
         os.environ["SMARTBAR_PRESENCE_INTERVAL"] = "300"
-        os.environ["SMARTBAR_PRESENCE_TTL"] = "60"      # below the 2x floor
-        self.assertEqual(presence.ttl(), 600.0)
-        os.environ["SMARTBAR_PRESENCE_TTL"] = "5000"    # above it
+        os.environ["SMARTBAR_PRESENCE_TTL"] = "60"      # below every floor
+        self.assertEqual(presence.ttl(), 900.0)
+        os.environ["SMARTBAR_PRESENCE_TTL"] = "5000"    # above them all
         self.assertEqual(presence.ttl(), 5000.0)
         for key in ("SMARTBAR_PRESENCE_INTERVAL", "SMARTBAR_PRESENCE_TTL"):
             os.environ.pop(key, None)

@@ -106,11 +106,25 @@ LEFTOVER_RULES = [
     # An interpreter names its script in argv[1..], so the exe token here is
     # "…/node /path/to/vite.js" — match the interpreter followed by a space
     # (or the end), not anchored to the token's end the way a plain binary is.
+    # The keyword must be a script/command name — preceded by a space or a
+    # path separator and followed by an extension, a space or the end — not
+    # a mere path COMPONENT: `node /x/next-app/scripts/watch.js` is not a
+    # Next server just because it lives under a directory named next-app.
     Rule("idle", "dev server", r"(^|/)(node|python[0-9.]*|bun|deno)(\s|$)",
-         r"\b(vite|serve-dist\.mjs|serve\.mjs|http\.server|live-server|"
-         r"next|webpack|uvicorn|flask)\b"),
+         r"(^|[\s/])(vite|serve-dist\.mjs|serve\.mjs|http\.server|"
+         r"live-server|next|webpack|uvicorn|flask)(\.c?m?js)?(\s|$)"),
 ]
-_SESSION_EXE = re.compile(r"(^|/)(claude|codex)$")
+# A session is claude/codex however it is installed: the native binary
+# (argv[0] ends in /claude or /codex) or the npm distribution (node running
+# @anthropic-ai/claude-code/cli.js or @openai/codex/…). Missing the npm
+# shape made those sessions killable Busy rows.
+_SESSION_EXE = re.compile(
+    r"(^|/)(claude|codex)$"
+    r"|@anthropic-ai/claude-code/"
+    r"|@openai/codex(/|\s|$)")
+# The bar's own processes (the app, the launcher, the sampler it spawns) —
+# never listed, never killable, no matter what their CPU reads.
+_SELF_EXE = re.compile(r"/bin/ai-smartbar(\s|$)|/AISmartbar(\s|$)")
 
 
 def exe_token(args: str) -> str:
@@ -136,6 +150,11 @@ def is_session_exe(args: str) -> bool:
     """True for a `claude`/`codex` process itself (its descendants are made
     sessions in build_view, which alone has the process tree)."""
     return bool(_SESSION_EXE.search(exe_token(args)))
+
+
+def is_self_exe(args: str) -> bool:
+    """True for AI smartbar's own executables (launcher or app)."""
+    return bool(_SELF_EXE.search(exe_token(args)))
 
 
 def classify(proc, orphan: bool, cpu: float, prev_cpu: float, my_uid: int):
@@ -231,7 +250,7 @@ def validate_kill(token: str, table, my_uid: int, own_pids) -> tuple:
         return False, "that process is already gone"
     if proc.start and start and proc.start != start:
         return False, "that PID was reused by another process — refusing"
-    if pid in own_pids:
+    if pid in own_pids or proc.ppid in own_pids or is_self_exe(proc.args):
         return False, "refusing to kill AI smartbar itself"
     if my_uid >= 0 and proc.uid != my_uid:
         return False, "that process belongs to another user"
@@ -244,6 +263,7 @@ def validate_kill(token: str, table, my_uid: int, own_pids) -> tuple:
 
 MAX_CORE_COLUMNS = 32
 HISTORY_LEN = 60
+PROC_ROWS_CAP = 8      # leftover rows displayed; the rest fold into "+N more"
 _DEV_KEYWORDS = ("serve-dist.mjs", "serve.mjs", "http.server", "live-server",
                  "vite", "next", "webpack", "uvicorn", "flask")
 
@@ -352,7 +372,25 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
                         my_uid)
         if proc.pid in sessions:
             kind = "session"
+        # The bar's own tree: the app, the launcher and the samplers they
+        # spawn are never rows — a System tab that lists (and can kill) its
+        # own sampler is measuring itself.
+        if proc.pid in own_pids or proc.ppid in own_pids \
+                or is_self_exe(proc.args):
+            kind = "self"
         kinds[proc.pid] = kind
+
+    # A watched root's WHOLE TREE stays out of Busy: a live headless
+    # Chrome's GPU helper would otherwise fold into the user's real
+    # "Google Chrome" row (same display name) and hand Kill a group token
+    # containing the real browser's pid.
+    watch_members: set = set()
+    for proc in procs:
+        if kinds[proc.pid] == "watch":
+            watch_members |= tree_pids(proc.pid, table)
+    for pid in watch_members:
+        if kinds.get(pid) not in ("session", "system", "self"):
+            kinds[pid] = "watch"
 
     # --- leftovers: one row per orphaned junk/idle ROOT (a whole tree) -----
     leftover_members: set = set()
@@ -361,12 +399,26 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
     for proc in procs:
         if kinds[proc.pid] not in ("junk", "idle"):
             continue
-        leftover_members |= tree_pids(proc.pid, table)
+        tree = tree_pids(proc.pid, table)
+        leftover_members |= tree
         cpu = tree_cpu(proc.pid, table)
         burning = kinds[proc.pid] == "junk" and cpu >= hot
         cpu_text = f"{int(cpu)}%" if cpu >= 1 else "idle"
+        # Auto-kill must never take a tree that shelters a live session or
+        # a deliberately started dev server — those are the "intentionally
+        # detached" cases the spec exempts. Manual kills still work (the
+        # per-member filter in sysmon_runner protects the session pids).
+        autokill_safe = (kinds[proc.pid] == "junk"
+                         and not (tree & sessions)
+                         and not any(
+                             (r := _rule_for(table[pid].args)) is not None
+                             and r.kind == "idle"
+                             for pid in tree if pid != proc.pid))
         left_rows.append({
-            "token": kill_token(proc),
+            # "tree:" scopes the kill to the whole descendant tree (with
+            # sessions filtered out at kill time); a bare pid:start token —
+            # a Busy row — kills only that one process.
+            "token": f"tree:{kill_token(proc)}",
             "kind": kinds[proc.pid],
             "name": display_name(proc),
             "sub": display_sub(proc),
@@ -378,6 +430,7 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
             "cores": round(cpu / 100, 1),
             "mem": tree_mem_mb(proc.pid, table),
             "age": proc.elapsed,
+            "autokillSafe": autokill_safe,
         })
     left_rows.sort(key=lambda r: (not r["burning"], -r["cores"]))
     burning_rows = [r for r in left_rows if r["burning"]]
@@ -389,7 +442,13 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         chip = f"{len(left_rows)} leftover{plural}"
     else:
         chip = ""
-    more = max(0, len(left_rows) - 8)
+    more = max(0, len(left_rows) - PROC_ROWS_CAP)
+    # The FULL junk set (uncapped): auto-kill and its grace tracking act on
+    # every junk root, not just the 8 rows the panel shows.
+    junk_all = [{"token": r["token"], "kind": r["kind"], "name": r["name"],
+                 "cores": r["cores"], "age": r["age"],
+                 "autokillSafe": r["autokillSafe"]}
+                for r in left_rows if r["kind"] == "junk"]
     watched = sum(1 for k in kinds.values() if k == "watch")
     foot = (f"Auto-kill {'on' if autokill_enabled() else 'off'} · "
             f"junk rules: {len(JUNK_RULES)}")
@@ -397,9 +456,17 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         foot += f" · {watched} watched"
 
     # --- busy: top folded processes (excludes leftover trees) --------------
+    # Only kinds that belong on the card fold in: "hot" (>= the threshold in
+    # BOTH samples — the caption's promise), plus sessions and other users'
+    # processes when they burn. Unclassified sub-threshold processes and
+    # watched trees stay out; before this filter every fold >= 1% CPU was
+    # labelled "hot", and a watched headless Chrome's helpers merged into
+    # the user's real browser row.
     folds = {}
     for proc in procs:
         if proc.pid in leftover_members:
+            continue
+        if kinds[proc.pid] not in ("hot", "session", "system"):
             continue
         name = display_name(proc)
         fold = folds.setdefault(name, {"cpu": 0.0, "mem": 0, "pids": [],
@@ -419,6 +486,12 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
             kind = "system"
         else:
             kind = "hot"
+        # The card caption promises ">= hot% CPU": session and system folds
+        # are informational (never killable) and appear only when they
+        # actually burn that much — an idle 3% airportd under that caption
+        # reads as a false alarm.
+        if kind in ("session", "system") and fold["cpu"] < hot:
+            continue
         killable = kind not in ("session", "system")
         procs_sorted = sorted(fold["procs"], key=lambda p: -p.cpu)
         if len(procs_sorted) == 1:
@@ -477,7 +550,9 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         "cpu": {"pct": cpu_pct, "cores": folded_cores, "caption": cpu_caption},
         "history": {"pct": hist, "peakText": f"peak {peak}%", "lastPct": last},
         "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption},
-        "leftovers": {"chip": chip, "rows": left_rows[:8], "more": more,
+        "leftovers": {"chip": chip, "rows": left_rows[:PROC_ROWS_CAP],
+                      "more": more,
+                      "burning": len(burning_rows), "junk": junk_all,
                       "foot": foot},
         "busy": {"caption": f"≥ {int(hot)}% CPU over two samples",
                  "rows": busy_rows},
@@ -520,7 +595,7 @@ def autokill_targets(rows, first_seen, now_monotonic: float) -> list:
         return []
     out = []
     for row in rows:
-        if row.get("kind") != "junk":
+        if row.get("kind") != "junk" or not row.get("autokillSafe", True):
             continue
         seen = first_seen.get(row["token"])
         if seen is not None and now_monotonic - seen >= AUTOKILL_MIN_AGE:
@@ -538,6 +613,10 @@ def alerts(rows, autokilled) -> list:
     out = []
     for killed in autokilled:
         out.append({
+            # `key` is the DEDUPE identity every host fires once per: the
+            # sampled numbers in the title flap between ticks (5 → 6 cores)
+            # and must not re-arm a notification.
+            "key": f"killed:{killed.get('token', killed['name'])}",
             "title": f"Killed {killed['name']}",
             "body": (f"{killed['cores']:.1f} cores · "
                      f"{format_age(killed['age'])} — an orphaned process a "
@@ -547,7 +626,9 @@ def alerts(rows, autokilled) -> list:
         burning = [r for r in rows if r.get("burning")]
         if burning:
             cores = sum(r["cores"] for r in burning)
+            tokens = ",".join(sorted(r["token"] for r in burning))
             out.append({
+                "key": f"burning:{tokens}",
                 "title": f"{len(burning)} leftovers burning {cores:.0f} cores",
                 "body": "Dead sessions left processes running. Open the "
                         "System tab to kill them.",

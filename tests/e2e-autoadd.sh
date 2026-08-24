@@ -9,7 +9,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN="macos-swift/.build/release/AISmartbar"
 MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
-[ -x "$BIN" ] || { echo "build first: (cd macos-swift && swift build -c release)"; exit 1; }
+# macOS only (it launches the real Swift app); release.sh --full runs it on
+# every platform, so elsewhere it is a pass, not a "build first" failure.
+[[ "$(uname)" == "Darwin" ]] || { echo "E2E auto-registration: skipped (not macOS)"; exit 0; }
+# Test the code under review, not whatever stale binary is lying around.
+(cd macos-swift && swift build -c release >/dev/null 2>&1) \
+  || { echo "swift build -c release failed"; exit 1; }
+[ -x "$BIN" ] || { echo "build produced no binary at $BIN"; exit 1; }
 
 # This suite launches the REAL app binary, so every way it can reach the
 # outside world has to be fenced off — not just cswap. Presence is the one
@@ -35,6 +41,10 @@ MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
 run_case() {
   local name="$1" add_fail="$2" want_adds="$3" state pid
   state=$(mktemp -d)
+  # An interrupted run (Ctrl-C during the sleep) otherwise orphaned the
+  # REAL app, polling the mock every 2 s forever — the exact burner class
+  # the System tab hunts.
+  trap 'kill "${pid:-}" 2>/dev/null; rm -rf "$state"' EXIT
   : > "$state/calls.log"
   SMARTBAR_CSWAP="$MOCK" MOCK_STATE_DIR="$state" MOCK_ADD_FAIL="$add_fail" \
     SMARTBAR_INTERVAL=2 \

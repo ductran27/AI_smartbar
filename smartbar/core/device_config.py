@@ -84,7 +84,10 @@ def parse(text: str, *, windows: bool = False):
                       "quote, backslash, backtick, $, % or a control character")
     settings: dict = {}
     problems: list = []
-    for number, original in enumerate((text or "").splitlines(), 1):
+    # A UTF-8 BOM (older Notepad, PowerShell Out-File) rode into the first
+    # key name and silently dropped that setting.
+    text = (text or "").lstrip("﻿")
+    for number, original in enumerate(text.splitlines(), 1):
         line = original.strip()
         if not line or line.startswith("#"):
             continue
@@ -99,6 +102,14 @@ def parse(text: str, *, windows: bool = False):
         # accept it and unwrap rather than treating the quotes as content.
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
+        else:
+            # An unquoted trailing "# comment" is .env convention, and it
+            # used to become part of the value ("90  # faster" broke the
+            # int() parse and silently fell back to the default). A # with
+            # no space before it stays content (labels like "box#3").
+            cut = value.find(" #")
+            if cut >= 0:
+                value = value[:cut].rstrip()
         if not KEY_RE.match(key):
             problems.append(
                 "line %d: %r is not a SMARTBAR_* setting" % (number, key))

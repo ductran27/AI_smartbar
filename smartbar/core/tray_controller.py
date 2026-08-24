@@ -43,7 +43,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -237,8 +239,29 @@ class TrayController:
         self.check_token = 0     # so a stale timer cannot clear a newer one
 
         self.system = None       # latest System-tab payload, or None (off)
+        self._sysmon_fired = set()   # alert keys already notified (fire-once)
+        self._sysmon_busy = False    # a sysmon sample is in flight
 
     # --- pending-update reading -----------------------------------------
+
+    @staticmethod
+    def poll_interval_from_env(default: float = 60.0,
+                               floor: float = 15.0) -> int:
+        """SMARTBAR_INTERVAL as the hosts' timer period, in whole seconds.
+
+        One parser for all three painted hosts: a bare int() crashed the
+        tray at startup on "90.0" or an empty line (both accepted by
+        config.env), and 0 made the GLib/tk timer fire continuously. Swift
+        applies the same floor.
+        """
+        raw = os.environ.get("SMARTBAR_INTERVAL", "").strip()
+        try:
+            value = float(raw)
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError(raw)
+        except (TypeError, ValueError):
+            value = default
+        return int(max(floor, value))
 
     def _pending_update(self) -> str:
         """The release the updater found waiting, or "" — never raises.
@@ -275,7 +298,19 @@ class TrayController:
         """One recurring-poll firing. Return value is GLib's "repeat me"
         convention; hosts that reschedule themselves (Windows' root.after,
         macOS's rumps.Timer) simply ignore it."""
-        self._start_fetch()
+        try:
+            # A fetch still in flight means a new one would only supersede
+            # it: every tick bumped the generation, so a fetch slower than
+            # the poll interval ALWAYS landed stale — the snapshot never
+            # advanced, `refreshing` stuck True, and cswap workers piled
+            # up. (Swift's refresh() has the same guard.)
+            if self.refreshing:
+                return True
+            self._start_fetch()
+        except Exception:
+            # A raising tick callback silently cancels a GLib timer for the
+            # life of the process — polling must survive one bad tick.
+            log.exception("poll tick failed")
         return True
 
     def _fetch(self, generation: int) -> None:
@@ -286,6 +321,16 @@ class TrayController:
         except cswap.CswapError as exc:
             log.warning("fetch failed: %s", exc)
             self.host.call_on_ui_thread(self._apply_error, str(exc), generation)
+            return
+        except Exception as exc:
+            # Anything else — a TypeError from a newer cswap's payload
+            # shape, for instance — used to kill this daemon thread
+            # silently: refreshing stayed True (refresh disabled forever),
+            # failures stayed 0, and nothing was logged anywhere a user
+            # could find.
+            log.exception("fetch failed unexpectedly")
+            self.host.call_on_ui_thread(
+                self._apply_error, f"{type(exc).__name__}: {exc}", generation)
             return
         self.host.call_on_ui_thread(self._apply_snapshot, snap, generation)
 
@@ -344,6 +389,10 @@ class TrayController:
         self.refreshing = False
         self.failures += 1
         self.last_error = message
+        # A broken cswap must not hide a WAITING update: the 6-hourly agent
+        # writes releases into the state file regardless, and the badge/row
+        # only appeared on a successful fetch before this.
+        self._pending_update()
         if self.failures >= 3:
             self.host.set_icon([], bool(self.update_pending))
             self.host.set_title(f"AI smartbar — cswap error: {message[:80]}")
@@ -431,7 +480,7 @@ class TrayController:
         def run():
             try:
                 cswap.switch(number)
-            except cswap.CswapError as exc:
+            except Exception as exc:      # any failure must reach the user
                 log.exception("switch failed")
                 self.host.call_on_ui_thread(
                     self._set_action_error, f"Switch failed: {exc}")
@@ -453,6 +502,13 @@ class TrayController:
         """
         provider, _, ident = token.partition(":")
         self.action_error = ""
+        # Same synchronous bump as on_switch, same reason: an in-flight
+        # pre-remove fetch otherwise lands with a matching generation and
+        # resurrects the removed card (with a live Make Active button)
+        # until the removal worker's own refetch drops it again. The Swift
+        # twin (UsageStore.removeAccount) already did this.
+        with self._generation_lock:
+            self.generation += 1
         if self.snapshot is not None:
             if provider == "claude":
                 self.snapshot.accounts = [
@@ -468,7 +524,7 @@ class TrayController:
                     cswap.remove_account(int(ident))
                 else:
                     codex.remove_account(ident)
-            except (cswap.CswapError, ValueError, OSError) as exc:
+            except Exception as exc:      # any failure must reach the user
                 log.exception("remove failed")
                 self.host.call_on_ui_thread(
                     self._set_action_error, f"Remove failed: {exc}")
@@ -481,9 +537,17 @@ class TrayController:
         """One System-tab poll, scheduled by the host on its own timer.
         Samples in a worker (the sample sleeps ~0.5 s, which must never
         block the UI thread) and marshals the payload back."""
-        if not sysmon.enabled():
+        if not sysmon.enabled() or sys.platform == "win32":
+            # Windows has no honest sample yet (no per-process CPU column,
+            # no `ps`): the tab used to appear with fabricated zeros
+            # ("0 cores · 0 GB · load 0.0"). No tab beats a fake one.
             self.system = None
             return
+        if self._sysmon_busy:
+            # A kill's re-tick can overlap the timer's tick; two concurrent
+            # background_tick() calls raced each other's state file.
+            return
+        self._sysmon_busy = True
         threading.Thread(target=self._sysmon_fetch, daemon=True).start()
 
     def _sysmon_fetch(self) -> None:
@@ -491,15 +555,25 @@ class TrayController:
             payload = sysmon_runner.background_tick()
         except Exception:                       # a probe hiccup is not fatal
             log.exception("sysmon tick failed")
+            self._sysmon_busy = False
             return
+        self._sysmon_busy = False
         self.host.call_on_ui_thread(self._apply_system, payload)
 
     def _apply_system(self, payload) -> None:
-        """UI thread: store the payload, fire any leftover notifications, and
-        repaint the panel if it is open on the System tab."""
+        """UI thread: store the payload, fire any leftover notifications
+        (once per alert key, re-armed when the key disappears), and repaint
+        the panel if it is open on the System tab."""
         self.system = payload
-        for alert in payload.get("alerts", []):
+        alerts = payload.get("alerts", [])
+        current = {a.get("key", a["title"]) for a in alerts}
+        for alert in alerts:
+            key = alert.get("key", alert["title"])
+            if key in self._sysmon_fired:
+                continue    # already notified for this exact situation
+            self._sysmon_fired.add(key)
             self.host.notify(Alert(alert["title"], alert["body"]))
+        self._sysmon_fired &= current   # re-arm what cleared
         if self.host.has_panel and self.host.panel_visible():
             self.host.refresh_panel()
 
@@ -519,7 +593,14 @@ class TrayController:
             self.host.refresh_panel()
 
         def run():
-            ok, error = sysmon_runner.kill(token)
+            try:
+                ok, error = sysmon_runner.kill(token)
+            except Exception as exc:
+                # A runner exception (a probe hiccup, a platform gap) used
+                # to kill this thread silently: no error shown, the row
+                # optimistically gone while the process lived, no re-tick.
+                log.exception("kill failed unexpectedly")
+                ok, error = False, f"{type(exc).__name__}: {exc}"
             if not ok:
                 self.host.call_on_ui_thread(self._set_action_error,
                                             f"Kill failed: {error}")
@@ -532,6 +613,12 @@ class TrayController:
         self.action_error = message
         if self.host.has_panel and self.host.panel_visible():
             self.host.refresh_panel()
+        else:
+            # The banner lives in the panel; with it closed (a switch from
+            # the tray MENU, say) the failure was invisible — the optimistic
+            # flip just silently reverted on the next fetch.
+            self.host.rebuild_menu()
+            self.host.notify(Alert("AI smartbar", message), urgency="normal")
 
     # --- the manual "check for updates" row -------------------------------
 
@@ -583,19 +670,25 @@ class TrayController:
             answer = {"label": failure.label, "title": failure.title,
                       "body": failure.body}
         self.check_result = answer["label"]
-        # Clicking a row closes the menu, so the label alone would be
-        # invisible until the user opened it again — the notification is
-        # the real feedback.
-        self.host.notify(Alert(title=answer.get("title", "AI smartbar"),
-                               body=answer.get("body", "")),
-                         urgency="normal")
-        # Repaint: the update-pending badge is driven by update_pending, so
-        # a check that just found a release has to make it appear.
-        account = self.snapshot.active_account if self.snapshot else None
-        self.host.set_icon(model.pill_states(account) if account else [],
-                           bool(self.update_pending))
-        self.host.rebuild_menu()
+        # The clear is scheduled BEFORE any host call: if set_icon or
+        # rebuild_menu raises, the result row must not stay stuck (and
+        # non-clickable) for the life of the process.
         self.host.schedule(CHECK_RESULT_SECONDS, self._clear_check_result, token)
+        try:
+            # Clicking a row closes the menu, so the label alone would be
+            # invisible until the user opened it again — the notification
+            # is the real feedback.
+            self.host.notify(Alert(title=answer.get("title", "AI smartbar"),
+                                   body=answer.get("body", "")),
+                             urgency="normal")
+            # Repaint: the update-pending badge is driven by update_pending,
+            # so a check that just found a release has to make it appear.
+            account = self.snapshot.active_account if self.snapshot else None
+            self.host.set_icon(model.pill_states(account) if account else [],
+                               bool(self.update_pending))
+            self.host.rebuild_menu()
+        except Exception:
+            log.exception("host repaint after the update check failed")
 
     def _clear_check_result(self, token: int) -> None:
         if token == self.check_token and self.check_result:

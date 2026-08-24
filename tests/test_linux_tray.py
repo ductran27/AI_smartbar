@@ -423,17 +423,20 @@ class TestNotify(GuiStubbedTestCase):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         alert = types.SimpleNamespace(title="Low", body="80% used")
-        with mock.patch.object(mod.subprocess, "run") as run:
+        # Fire-and-forget Popen (audit B11): a synchronous run() blocked the
+        # GTK loop while the notification daemon was being activated.
+        with mock.patch.object(mod.subprocess, "Popen") as popen:
             mod.Tray.notify(tray, alert, "critical")
-        run.assert_called_once_with(
-            ["notify-send", "-u", "critical", "Low", "80% used"],
-            timeout=10, check=False)
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0],
+                         ["notify-send", "-u", "critical", "Low", "80% used"])
+        self.assertTrue(popen.call_args.kwargs.get("start_new_session"))
 
     def test_a_notification_failure_is_swallowed_not_raised(self):
         mod = _reimport("smartbar.linux.tray")
         tray = _bare_tray(mod)
         alert = types.SimpleNamespace(title="Low", body="80% used")
-        with mock.patch.object(mod.subprocess, "run",
+        with mock.patch.object(mod.subprocess, "Popen",
                                side_effect=OSError("boom")):
             mod.Tray.notify(tray, alert, "critical")   # must not raise
 

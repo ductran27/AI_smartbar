@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import signal
 import time
 import urllib.request
 
@@ -37,6 +38,7 @@ LOCK_FILE = os.path.join(CACHE_DIR, "update.lock")
 LOG_FILE = os.path.join(CACHE_DIR, "update.log")
 
 INSTALL_TIMEOUT = 1200   # a cold `swift build -c release` is genuinely slow
+FETCH_FAILURE_NOTIFY_AT = 3   # consecutive failed fetches before notifying
 VERIFY_TIMEOUT = 30
 RELEASE_NOTES_TIMEOUT = 5    # a slow GitHub must never stall the update pass
 RELEASE_NOTES_MAX_CHARS = 200
@@ -74,7 +76,16 @@ def save_state(state: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=1)
-        os.replace(tmp, STATE_FILE)
+        for attempt in range(3):
+            try:
+                os.replace(tmp, STATE_FILE)
+                break
+            except PermissionError:
+                # Windows: a tray holding the state file open blocks the
+                # swap; a short retry beats silently keeping stale state.
+                if attempt == 2:
+                    raise
+                time.sleep(0.2)
     except OSError:
         log.exception("could not persist state")
         try:
@@ -453,7 +464,8 @@ def kickstart(label: str) -> None:
         log.exception("could not kickstart %s", label)
 
 
-def run_installer(key: str) -> str:
+def run_installer(key: str, channel: str = "",
+                  no_auto_update: bool = False) -> str:
     """Re-run one installer. Returns "" on success, else the failure detail."""
     relative = update.INSTALLERS[key]
     script = os.path.join(update_git.REPO_ROOT, relative)
@@ -475,17 +487,48 @@ def run_installer(key: str) -> str:
         if not os.access(script, os.X_OK):
             return f"{relative} is missing or not executable"
         argv = [script]
+    if no_auto_update and key in ("macos_swift", "macos_python", "linux",
+                                  "windows"):
+        # This device opted out of the update agent; a bare re-run of the
+        # UI installer defaults AUTO_UPDATE=1 and would silently re-enrol it.
+        argv.append("--no-auto-update")
     env = update_git.env()
     # Signals install/macos-update.sh not to unload the very job we run in.
     env["SMARTBAR_UPDATE_APPLY"] = "1"
+    # The agent's own baked SMARTBAR_UPDATE_INTERVAL is the PREVIOUS value;
+    # letting it through regenerated the timer with the old number, so an
+    # interval change in config.env converged one update late.
+    env.pop("SMARTBAR_UPDATE_INTERVAL", None)
+    if channel:
+        env["SMARTBAR_UPDATE_CHANNEL"] = channel
+    # no_window: a powershell.exe child of a console-less pythonw sat as a
+    # black console on screen for the whole unattended update on Windows.
+    kwargs = dict(portable.no_window())
+    if sys.platform != "win32":
+        # Own process group: on timeout, kill the INSTALLER'S CHILDREN too.
+        # subprocess's timeout kills only bash and orphaned the `swift
+        # build` underneath it — a CPU burner of the exact class the System
+        # tab hunts.
+        kwargs["start_new_session"] = True
     try:
-        proc = subprocess.run(argv, cwd=update_git.REPO_ROOT, env=env,
-                              capture_output=True, text=True,
-                              timeout=INSTALL_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.Popen(argv, cwd=update_git.REPO_ROOT, env=env,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, **kwargs)
+        try:
+            out, err = proc.communicate(timeout=INSTALL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            if sys.platform != "win32":
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (OSError, PermissionError):
+                    pass
+            proc.kill()
+            proc.communicate()
+            return f"{relative}: timed out after {INSTALL_TIMEOUT}s"
+    except OSError as exc:
         return f"{relative}: {exc}"
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()[:200]
+        detail = (err or out or "").strip()[:200]
         return f"{relative} exited {proc.returncode}: {detail}"
     log.info("ran %s", relative)
     return ""
@@ -575,7 +618,18 @@ def check_now():
     only proof a check actually looked is that checkedAt moved.
     """
     from smartbar.core import update as update_core
-    before = str(load_state().get("checkedAt") or "")
+    if not update_core.enabled():
+        return update_core.check_outcome(disabled=True)
+
+    def _stamp():
+        try:
+            return os.stat(STATE_FILE).st_mtime_ns
+        except OSError:
+            return 0
+    # checkedAt has 1-second resolution; pair it with the state file's
+    # mtime_ns so two checks inside the same wall-clock second still count
+    # as "ran".
+    before = (str(load_state().get("checkedAt") or ""), _stamp())
     failed = False
     try:
         # run_once prints a human line to stdout; the caller wants only JSON
@@ -591,7 +645,8 @@ def check_now():
                if state.get("action") == "blocked" else "")
     return update_core.check_outcome(
         pending=update_core.pending_version(state), blocked=blocked,
-        failed=failed, ran=str(state.get("checkedAt") or "") != before,
+        failed=failed,
+        ran=(str(state.get("checkedAt") or ""), _stamp()) != before,
         # What run_once just wrote as this checkout's version. A plan naming
         # it is an upgrade to where we already are, which every UI refuses to
         # draw a button for — so it must not be announced as available.
@@ -628,8 +683,25 @@ def run_once(*, reset: bool = False, force: bool = False,
         update_git.fetch()
         repo = update_git.repo_state()
     except update_git.GitError as exc:
+        # Never silent: this exact arm swallowed five days of failed 6-hour
+        # ticks (moved tags after the history rewrite) with no notification
+        # and no state write — so the popover kept a stale answer and the
+        # manual check said "Check busy" forever.
         log.error("cannot read the repo: %s", exc)
+        streak = int(state.get("fetchFailures") or 0) + 1
+        state["fetchFailures"] = streak
+        state["checkedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                           time.gmtime())
+        state["action"] = update.BLOCKED
+        state["reason"] = f"cannot reach the repo: {str(exc)[:160]}"
+        save_state(state)
+        if streak == FETCH_FAILURE_NOTIFY_AT:
+            notify("AI smartbar update",
+                   f"Update checks are failing ({streak} in a row): "
+                   f"{str(exc)[:120]}")
         return 1
+    if state.pop("fetchFailures", None):
+        save_state(state)   # the streak is over; forget it
 
     plan = _plan(repo, state, channel, force, reset)
     state.update(update.ui_state(plan, repo.version, channel=channel))
@@ -647,7 +719,11 @@ def run_once(*, reset: bool = False, force: bool = False,
             return EXIT_BLOCKED
         return 0
 
-    targets = update.apply_targets(present_installers())
+    present = present_installers()
+    targets = update.apply_targets(present)
+    # Only darwin can cheaply prove the opt-out (the agent is a plist this
+    # probe already read); elsewhere the installers keep their own defaults.
+    no_auto = sys.platform == "darwin" and not present.get("update_agent")
     log.info("applying %s via: %s", plan.target_ref,
              ", ".join(targets) or "no installers detected")
     notify("AI smartbar",
@@ -676,7 +752,7 @@ def run_once(*, reset: bool = False, force: bool = False,
 
     failure = ""
     for key in targets:
-        failure = run_installer(key)
+        failure = run_installer(key, channel=channel, no_auto_update=no_auto)
         if failure:
             break
     if not failure:
@@ -694,7 +770,7 @@ def run_once(*, reset: bool = False, force: bool = False,
                 log.error("app bundle not restored — leaving the agent down")
         else:
             for key in targets:   # cheap for the non-Swift shapes
-                run_installer(key)
+                run_installer(key, channel=channel, no_auto_update=no_auto)
         streak = update.record_failure(state, plan.target_ref)
         state.update(update.ui_state(plan, update_git.version_in_checkout(),
                                      channel=channel))

@@ -138,12 +138,14 @@ class TestTheBundleIsBuiltNotJustCheckedOut(Env):
         # the field and every run after this one is decided on evidence.
         self.assertEqual(self.synced(applied_ref="").action, update.CURRENT)
 
-    def test_the_release_channel_ignores_it(self):
-        # There the target is a tag and appliedVersion already answers this,
-        # so a stale sha must not drag a pinned device into a rebuild.
+    def test_the_release_channel_honours_it_too(self):
+        # Audit 2026-08-24: an apply interrupted between the tag checkout
+        # and the installers left HEAD at the tag with the OLD app, and the
+        # release channel reported "already up to date" forever. A stale
+        # appliedRef now drags the device through a rebuild on BOTH channels.
         plan = update.plan_update(state(head_tags=["v0.3.0"]),
                                   applied_ref="sha-older")
-        self.assertEqual(plan.action, update.CURRENT)
+        self.assertTrue(plan.should_apply)
 
     def test_detached_or_feature_branch_blocks(self):
         for branch in ("", "feature/x"):
@@ -552,9 +554,18 @@ class TestBothUIsShareOneAnswer(unittest.TestCase):
                              "of showing what --check-update --json returned")
 
     def test_the_mac_never_infers_up_to_date_from_an_exit_code(self):
-        # The specific mistake this design exists to prevent.
+        # The specific mistake this design exists to prevent: the CHECK path
+        # (runCheck) must display what --check-update --json said, never an
+        # exit code. launchctl's own exit code is a different matter —
+        # whether `kickstart` even started the job is something Python has
+        # no wording for (audit B10 made that spawn waitable), so the pin is
+        # scoped to the check function rather than the whole file.
         swift = self.source(SWIFT_UPDATE)
-        self.assertNotIn("terminationStatus", swift)
+        start = swift.index("func runCheck(")
+        end = swift.index("func installUpdate(")
+        self.assertNotIn("terminationStatus", swift[start:end])
+        # …and the launch-failure use stays where it belongs.
+        self.assertIn("func spawnAndWait(", swift)
 
 
 class TestTheMacOffersMainChannelUpdatesToo(unittest.TestCase):

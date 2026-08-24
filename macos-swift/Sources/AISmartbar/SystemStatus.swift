@@ -3,9 +3,11 @@
 // final display data (every string, the kill token, the auto-kill and alert
 // decisions all live in smartbar/core/sysmon.py + sysmon_runner.py); this
 // object only decodes it, and — while the tab is open — reads a one-line-per-
-// second live stream. Two cadences mirror the runner: a 60 s background poll
-// (which also runs auto-kill and history in its subprocess) and the 1 s
-// stream. Pinned by tests/test_sysmon_parity.py.
+// second live stream. Two cadences mirror the runner: a background poll
+// (which also runs auto-kill and history in its subprocess; its period is
+// carried IN the payload so the device's configured interval is honoured
+// without this side reading any setting) and the 1 s stream. Pinned by
+// tests/test_sysmon_parity.py.
 import Foundation
 
 @MainActor
@@ -14,19 +16,30 @@ final class SystemStatus: ObservableObject {
     @Published var actionError: String?    // sticky until the next attempt
 
     /// The background poll cadence — matches sysmon_runner's own default and
-    /// is what carries auto-kill + history + notifications. Pinned by tests.
+    /// is what carries auto-kill + history + notifications. Pinned by tests;
+    /// the payload's `pollInterval` (the device's configured period, floored
+    /// by core/sysmon.interval) reschedules it.
     static let pollInterval: TimeInterval = 60
     /// The live-stream tick while the tab is visible. Pinned by tests.
     static let streamInterval: TimeInterval = 1
 
     private var timer: Timer?
+    private var timerInterval: TimeInterval = SystemStatus.pollInterval
     private var streamProcess: Process?
+    private var streamWanted = false
     private var generation = 0
-    private var firedAlerts = Set<String>()   // one notification per burst
+    private var firedAlerts = Set<String>()   // alert keys already notified
+    private var pendingKills = Set<String>()  // rows dropped, awaiting truth
 
     init() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval,
+        schedule(every: Self.pollInterval)
+    }
+
+    private func schedule(every interval: TimeInterval) {
+        timer?.invalidate()
+        timerInterval = interval
+        timer = Timer.scheduledTimer(withTimeInterval: interval,
                                      repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -39,13 +52,33 @@ final class SystemStatus: ObservableObject {
         generation += 1
         let current = generation
         Task.detached(priority: .utility) {
-            let fetched = Launcher.decode(SystemPayload.self,
-                                          ["--sysmon", "--json"])
-            let raw = Launcher.json(["--sysmon", "--json"])   // for alerts[]
+            // ONE run. Decoding the payload and reading alerts[] from two
+            // separate runs meant two side-effecting ticks per poll — and the
+            // auto-kill notification emitted by the first was read from the
+            // second, which no longer saw the process it had killed.
+            let data = Launcher.run(["--sysmon", "--json"])
+            let fetched = data.flatMap {
+                try? JSONDecoder().decode(SystemPayload.self, from: $0)
+            }
+            let raw = data.flatMap {
+                (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+            }
             await MainActor.run { [weak self] in
                 guard let self, current == self.generation else { return }
-                if let fetched, fetched != self.payload {
-                    self.payload = fetched
+                if let fetched {
+                    self.pendingKills.removeAll()
+                    // While the stream runs it owns the display: the poll's
+                    // ~1.5 s-old sample would blink LIVE off and step the
+                    // numbers backwards once a minute.
+                    if self.streamProcess == nil, fetched != self.payload {
+                        self.payload = fetched
+                    }
+                    if let period = fetched.pollInterval,
+                       TimeInterval(period) != self.timerInterval {
+                        self.schedule(every: TimeInterval(period))
+                    }
+                } else if raw?["disabled"] as? Bool == true {
+                    self.payload = nil     // the feature is off: no tab
                 }
                 self.postAlerts(from: raw)
             }
@@ -53,21 +86,27 @@ final class SystemStatus: ObservableObject {
     }
 
     private func postAlerts(from raw: [String: Any]?) {
-        guard let alerts = raw?["alerts"] as? [[String: Any]] else { return }
+        let alerts = raw?["alerts"] as? [[String: Any]] ?? []
+        var current = Set<String>()
         for alert in alerts {
             let title = alert["title"] as? String ?? ""
-            guard !title.isEmpty, !firedAlerts.contains(title) else { continue }
-            firedAlerts.insert(title)
+            guard !title.isEmpty else { continue }
+            // Dedupe on the runner's stable `key`: the title embeds a
+            // sampled core count that flaps between ticks (5 → 6 → 5).
+            let key = alert["key"] as? String ?? title
+            current.insert(key)
+            guard !firedAlerts.contains(key) else { continue }
+            firedAlerts.insert(key)
             UsageStore.notify(title: title,
                               body: alert["body"] as? String ?? "")
         }
-        // Re-arm once the burst clears, so the next round can notify again.
-        if alerts.isEmpty { firedAlerts.removeAll() }
+        firedAlerts.formIntersection(current)   // re-arm what cleared
     }
 
     /// Start the 1 s live stream (the tab became visible). The child exits on
     /// its own when this process dies; stopping it here is the clean path.
     func startStream() {
+        streamWanted = true
         guard streamProcess == nil,
               let process = Launcher.process(["--sysmon", "--stream"])
         else { return }
@@ -76,13 +115,41 @@ final class SystemStatus: ObservableObject {
         process.standardError = FileHandle.nullDevice
         output.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
-            guard !chunk.isEmpty else { return }
+            guard !chunk.isEmpty else {
+                // EOF: the child ended. An installed handler on a closed
+                // pipe fires continuously and spun a core until the tab
+                // was left.
+                handle.readabilityHandler = nil
+                return
+            }
             for line in chunk.split(separator: UInt8(ascii: "\n")) {
-                guard let decoded = try? JSONDecoder().decode(
+                guard var decoded = try? JSONDecoder().decode(
                     SystemPayload.self, from: Data(line)) else { continue }
                 Task { @MainActor [weak self] in
-                    if decoded != self?.payload { self?.payload = decoded }
+                    guard let self else { return }
+                    if !self.pendingKills.isEmpty {
+                        // A row killed a second ago is still listed by the
+                        // stream during the runner's 3 s grace; keep the
+                        // optimistic drop until the next poll is the truth.
+                        decoded.leftovers.rows.removeAll {
+                            self.pendingKills.contains($0.token)
+                        }
+                        decoded.busy.rows.removeAll {
+                            self.pendingKills.contains($0.token)
+                        }
+                    }
+                    if decoded != self.payload { self.payload = decoded }
                 }
+            }
+        }
+        process.terminationHandler = { [weak self] ended in
+            Task { @MainActor [weak self] in
+                guard let self, self.streamProcess === ended else { return }
+                self.streamProcess = nil
+                self.markNotLive()
+                // The runner caps a stream at 30 min; while the tab is
+                // still on screen, LIVE has to mean live.
+                if self.streamWanted { self.startStream() }
             }
         }
         do { try process.run() } catch { return }
@@ -91,18 +158,28 @@ final class SystemStatus: ObservableObject {
 
     /// Stop the live stream (the tab was hidden or the popover closed).
     func stopStream() {
+        streamWanted = false
         guard let process = streamProcess else { return }
         streamProcess = nil
-        process.standardOutput.map {
-            ($0 as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        }
+        process.terminationHandler = nil
+        (process.standardOutput as? Pipe)?
+            .fileHandleForReading.readabilityHandler = nil
         process.terminate()
+        markNotLive()
+    }
+
+    private func markNotLive() {
+        if var current = payload, current.live {
+            current.live = false
+            payload = current
+        }
     }
 
     /// Kill the process a row names, through the one guarded runner.
     /// Optimistic: drop the row now, let the next poll be the truth.
     func kill(_ token: String) {
         actionError = nil
+        pendingKills.insert(token)
         if var current = payload {
             current.leftovers.rows.removeAll { $0.token == token }
             current.busy.rows.removeAll { $0.token == token }

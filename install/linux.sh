@@ -37,9 +37,33 @@ install_icon() {
 UNITS="$HOME/.config/systemd/user"
 CHANNEL="${SMARTBAR_UPDATE_CHANNEL:-}"
 AGENT_PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
-# Matches the no-argument tray only: `--update` / `--warmup-once` invocations
-# must never be caught, or an update would kill itself here.
-TRAY_PATTERN="ai-smartbar\$"
+# Matches the no-argument TRAY only — an interpreter running the launcher
+# with no flags. `--update` / `--warmup-once` invocations must never be
+# caught (an update would kill itself here), and neither must an editor or
+# pager whose argument merely ENDS in ai-smartbar: the old right-anchored
+# "ai-smartbar$" SIGTERM'd `vim bin/ai-smartbar` and `git log -- bin/…` on
+# every apply.
+TRAY_PATTERN='^[^ ]*python[0-9.]* [^ ]*/ai-smartbar$'
+
+# The tray's own PID file is the first choice; the pattern is the fallback.
+stop_tray() {
+  local pid
+  pid="$(cat "$CACHE/tray.pid" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null \
+       | grep -q "ai-smartbar"; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  pkill -f "$TRAY_PATTERN" 2>/dev/null || true
+}
+
+# Paths land unquoted-by-design in a .desktop Exec=, a systemd ExecStart=
+# and a crontab line; whitespace or % in them breaks all three silently.
+case "$REPO$HOME" in
+  *[[:space:]%]*)
+    echo "ERROR: the checkout path or HOME contains whitespace or '%', which" >&2
+    echo "       the autostart entry, systemd unit and crontab cannot carry." >&2
+    exit 2 ;;
+esac
 
 remove_timer() {
   if command -v systemctl >/dev/null; then
@@ -47,7 +71,14 @@ remove_timer() {
   fi
   rm -f "$UNITS/ai-smartbar-update.timer" "$UNITS/ai-smartbar-update.service"
   if command -v crontab >/dev/null; then
-    crontab -l 2>/dev/null | grep -v "ai-smartbar --update" | crontab - 2>/dev/null || true
+    # Capture first, then write: a transient `crontab -l` failure piped
+    # straight into `crontab -` replaced the user's whole crontab with an
+    # empty one.
+    local old
+    if old="$(crontab -l 2>/dev/null)"; then
+      printf '%s\n' "$old" | grep -v "ai-smartbar --update" | crontab - \
+        2>/dev/null || true
+    fi
   fi
 }
 
@@ -55,7 +86,7 @@ AUTO_UPDATE=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --uninstall)
-      pkill -f "$TRAY_PATTERN" 2>/dev/null || true
+      stop_tray
       remove_timer
       rm -f "$BIN" "$AUTOSTART" "$ICON_DIR/$ICON_NAME.png"
       rm -rf "$CACHE"
@@ -135,8 +166,14 @@ install_updater() {
   # the updater is re-running this script (it just fetched, and a network blip
   # must not turn a good update into a rollback).
   if [[ "${SMARTBAR_UPDATE_APPLY:-}" != "1" ]]; then
+    # Fail exactly where the timer would: BatchMode + no stdin stops ssh
+    # asking on the terminal, and SSH_AUTH_SOCK passes through because the
+    # user manager provides it (env -i alone rejected agent-only keys).
     if env -i PATH="$AGENT_PATH" HOME="$HOME" GIT_TERMINAL_PROMPT=0 \
-         git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1; then
+         GIT_ASKPASS= SSH_ASKPASS_REQUIRE=never \
+         GIT_SSH_COMMAND="ssh -oBatchMode=yes" \
+         SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-}" \
+         git -C "$REPO" ls-remote --quiet origin HEAD >/dev/null 2>&1 </dev/null; then
       echo "Non-interactive fetch OK."
     else
       echo "ERROR: cannot fetch origin without a prompt — add an SSH key or a" >&2
@@ -169,13 +206,21 @@ Persistent=true
 WantedBy=timers.target
 EOF
     systemctl --user daemon-reload || return 1
-    systemctl --user enable --now ai-smartbar-update.timer || return 1
+    # `enable` only: `--now` on a fresh install activates a timer whose
+    # OnBootSec=2min has long elapsed, so it fired --update immediately —
+    # a second apply racing the installer that was still running. The timer
+    # is started as the very last step below, after the tray is up.
+    systemctl --user enable ai-smartbar-update.timer || return 1
+    START_TIMER=1
     echo "Update timer enabled (channel=$CHANNEL, every ${INTERVAL_SEC}s)."
   elif command -v crontab >/dev/null; then
     # `crontab -l` legitimately fails when there is no crontab yet, so its
-    # own failure stays tolerated — but the write must not.
-    { crontab -l 2>/dev/null | grep -v "ai-smartbar --update"
-      echo "$INTERVAL_CRON SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
+    # own failure stays tolerated — but the write must not. PATH= travels
+    # with the entry: cron's bare PATH cannot find git or python otherwise.
+    local old
+    old="$(crontab -l 2>/dev/null || true)"
+    { [[ -n "$old" ]] && printf '%s\n' "$old" | grep -v "ai-smartbar --update"
+      echo "$INTERVAL_CRON PATH=$AGENT_PATH SMARTBAR_UPDATE_CHANNEL=$CHANNEL ${CONFIG_EXEC}$REPO/bin/ai-smartbar --update"
     } | crontab - || return 1
     echo "Update cron entry installed (channel=$CHANNEL, '$INTERVAL_CRON')."
   else
@@ -184,15 +229,53 @@ EOF
   fi
 }
 
+START_TIMER=0
 if [[ "$AUTO_UPDATE" == "1" ]]; then
   install_updater || \
     echo "WARNING: this device will not self-update (see above)." >&2
 fi
 
+# The tray needs a display. Under the updater (a systemd timer or cron) this
+# shell has none, and restarting the tray from here KILLED the running one
+# and started a replacement that died on "cannot open display" — the device
+# lost its tray until the next login on every applied update. Borrow the
+# live tray's session variables when they are not already here; when none
+# can be found, leave the running tray alone (autostart re-execs the new
+# code at the next login) rather than take it down.
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  TRAY_PID="$(cat "$CACHE/tray.pid" 2>/dev/null || true)"
+  if [[ -n "$TRAY_PID" && -r "/proc/$TRAY_PID/environ" ]]; then
+    while IFS= read -r -d '' kv; do
+      case "$kv" in
+        DISPLAY=*|WAYLAND_DISPLAY=*|XAUTHORITY=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_RUNTIME_DIR=*)
+          export "$kv" ;;
+      esac
+    done <"/proc/$TRAY_PID/environ"
+  fi
+fi
+if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+  echo "No display in this session — leaving the running tray in place;" \
+       "the new code starts at the next login."
+  if [[ "$START_TIMER" == "1" ]]; then
+    systemctl --user start ai-smartbar-update.timer || true
+  fi
+  exit 0
+fi
+
 # Exactly one tray: stop any previous instance before starting the new code.
-pkill -f "$TRAY_PATTERN" 2>/dev/null || true
+stop_tray
 sleep 1
-setsid nohup "$BIN" >/dev/null 2>&1 &
+# stderr goes to a real file: a missing GI typelib or an unwritable icon
+# dir used to die into /dev/null, and the failure line below pointed at a
+# tray.log the tray never got far enough to open.
+setsid nohup "$BIN" >>"$CACHE/tray-stderr.log" 2>&1 &
 sleep 2
-pgrep -f "$TRAY_PATTERN" >/dev/null && echo "ai-smartbar is running." \
-  || { echo "FAILED to start — check $CACHE/tray.log"; exit 1; }
+if pgrep -f "$TRAY_PATTERN" >/dev/null; then
+  echo "ai-smartbar is running."
+else
+  echo "FAILED to start — check $CACHE/tray-stderr.log and $CACHE/tray.log"
+  exit 1
+fi
+if [[ "$START_TIMER" == "1" ]]; then
+  systemctl --user start ai-smartbar-update.timer || true
+fi

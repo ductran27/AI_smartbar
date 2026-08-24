@@ -43,25 +43,32 @@ def _run(args, timeout=TIMEOUT):
 
 
 def read_remote():
-    """(remote HEAD sha, [presence refs]) in ONE round trip, or None.
+    """([advertised candidate shas], [presence refs]) in ONE round trip,
+    or None.
 
     None means "we could not see the remote", which the caller must keep
     distinct from "the remote listed no devices" — an empty namespace is a
     real answer, an unreachable one is not, and conflating them would make
     every badge vanish on a flaky network.
 
-    HEAD comes back from the same call because the ref we publish has to
-    point at an object the REMOTE already has. Using our own HEAD instead
-    would, on a checkout with unpushed commits, quietly upload that private
-    work as a hidden ref.
+    The candidates are ADVERTISED shas (HEAD first, then branches, then
+    tags) because the ref we publish must point at an object the REMOTE
+    already has — using our own HEAD would quietly upload unpushed private
+    work as a hidden ref. But the push also needs the object in the LOCAL
+    odb, and a clone that has not fetched since origin moved does not have
+    the remote's new HEAD: every beat then failed "bad object" until the
+    six-hourly updater fetched (~16 h invisible in one week on this very
+    machine). Branch tips and tags give publish() older advertised objects
+    a stale clone still has.
     """
-    proc = _run(["ls-remote", "origin", "HEAD", presence.GLOB])
+    proc = _run(["ls-remote", "origin", "HEAD", "refs/heads/*",
+                 "refs/tags/*", presence.GLOB])
     if proc is None or proc.returncode != 0:
         if proc is not None:
             log.info("ls-remote failed: %s",
                      (proc.stderr or proc.stdout or "").strip()[:160])
         return None
-    head, refs = "", []
+    head, heads, tags, refs = "", [], [], []
     for line in proc.stdout.splitlines():
         parts = line.split()
         if len(parts) != 2:
@@ -71,7 +78,20 @@ def read_remote():
             head = sha
         elif ref.startswith("refs/smartbar/"):
             refs.append(ref)
-    return head, refs
+        elif ref.startswith("refs/heads/"):
+            heads.append(sha)
+        elif ref.startswith("refs/tags/") and not ref.endswith("^{}"):
+            tags.append(sha)
+    candidates = []
+    for sha in ([head] if head else []) + heads + tags:
+        if sha and sha not in candidates:
+            candidates.append(sha)
+    return candidates, refs
+
+
+def _have_object(sha: str) -> bool:
+    proc = _run(["cat-file", "-e", sha])
+    return proc is not None and proc.returncode == 0
 
 
 def _push(refspecs, atomic=True, timeout=TIMEOUT) -> bool:
@@ -87,7 +107,7 @@ def _push(refspecs, atomic=True, timeout=TIMEOUT) -> bool:
     return False
 
 
-def publish(sha: str, create: str, delete) -> bool:
+def publish(candidates, create: str, delete) -> bool:
     """Replace this device's ref: create the new one, drop the superseded.
 
     Atomic so the namespace never shows this device twice, and never shows
@@ -95,11 +115,18 @@ def publish(sha: str, create: str, delete) -> bool:
     — for a server that refuses atomic pushes — still creates before it
     deletes, leaving us present rather than absent if it half-lands.
 
-    `sha` must have come from read_remote(): pushing a ref to an object the
-    remote already has transfers no objects at all, which is what makes a
-    beat every five minutes free.
+    `candidates` are ADVERTISED shas from read_remote(), in preference
+    order; the first one the local odb actually has is pushed (zero objects
+    transferred — what makes a beat every five minutes free). Accepts a
+    bare string for compatibility.
     """
+    if isinstance(candidates, str):
+        candidates = [candidates] if candidates else []
+    sha = next((c for c in candidates or [] if _have_object(c)), "")
     if not sha or not create:
+        log.info("publish skipped: no advertised sha present locally "
+                 "(%d candidate(s)) — the clone is behind origin",
+                 len(candidates or []))
         return False
     refspecs = [f"{sha}:{create}"] + [f":{ref}" for ref in delete or ()]
     if _push(refspecs):

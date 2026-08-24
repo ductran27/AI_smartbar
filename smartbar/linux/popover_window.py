@@ -407,7 +407,13 @@ class Popover(Gtk.Window):
         if not self.get_visible():
             self._tick_id = 0
             return False
-        self.refresh_layout()   # countdowns recompute from the reset times
+        try:
+            self.refresh_layout()   # countdowns recompute from the reset times
+        except Exception:
+            # PyGObject treats a raising callback as "remove me", and
+            # _tick_id then held a stale id so show_panel never re-armed:
+            # one bad layout froze every countdown for the process lifetime.
+            log.exception("panel tick failed")
         return True
 
     def _position(self) -> None:

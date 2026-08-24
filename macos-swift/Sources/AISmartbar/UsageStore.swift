@@ -56,7 +56,10 @@ final class UsageStore: ObservableObject {
     /// paces the real network, so faster polling adds no API traffic.
     private let baseInterval: TimeInterval = {
         let raw = ProcessInfo.processInfo.environment["SMARTBAR_INTERVAL"] ?? ""
-        return Double(raw) ?? 60
+        // Floor at 15 s: Timer substitutes 0.1 ms for a non-positive
+        // interval, so "0" pegged the main run loop with ~10k fires/s.
+        guard let value = Double(raw), value.isFinite else { return 60 }
+        return max(15, value)
     }()
 
     /// Relaxed cadence while nothing is near a limit and the last fetch
@@ -71,7 +74,10 @@ final class UsageStore: ObservableObject {
 
     /// Measurement time for the header: when cswap read the usage API, not
     /// when we last ran cswap (its store may have served older data).
-    var dataUpdated: Date? { snapshot?.dataDate ?? lastRefresh }
+    // No lastRefresh fallback: with no measurement at all (every slot
+    // relogin_required) the header printed the cswap POLL time as if it
+    // were the API measurement time; the painted hosts print nothing.
+    var dataUpdated: Date? { snapshot?.dataDate }
 
     var accessibilitySummary: String {
         if consecutiveFailures >= 3 { return "AI smartbar: no data" }
@@ -224,8 +230,12 @@ final class UsageStore: ObservableObject {
             if snap != snapshot {
                 snapshot = snap
                 icon = MenuBarIcon.image(for: snap.activeAccount?.pillStates ?? [])
-                checkAlerts(snap)
             }
+            // Every successful apply, not only a changed one: after an
+            // optimistic switch the confirming fetch usually EQUALS the
+            // optimistic snapshot, so a newly active account already ≥90%
+            // raised no notification. checkAlerts gates itself via `fired`.
+            checkAlerts(snap)
             maybeRecapture(snap)  // paces itself; must run even when unchanged
             presence.update(from: snap)   // ditto: the beat paces itself
             rescheduleTimer(interval: desiredInterval())
@@ -288,23 +298,38 @@ final class UsageStore: ObservableObject {
         return now.timeIntervalSince(last) >= interval
     }
 
+    /// Mirror of core/alerts.window_identity: the usage window a resetsAt
+    /// names, as a 5-minute bucket of the parsed timestamp. The API
+    /// re-stamps resetsAt with fresh sub-seconds on every real fetch, so
+    /// keyed on the raw string a ≥90% account re-notified every 1-3 min.
+    private static func windowIdentity(_ resetsAt: String) -> String {
+        guard let date = TimeRemaining.parseISO(resetsAt) else { return resetsAt }
+        return String(Int((date.timeIntervalSince1970 / 300).rounded()))
+    }
+
     private func checkAlerts(_ snap: Snapshot) {
         guard let account = snap.activeAccount else { return }
         let threshold = Thresholds.red
         for metric in account.metrics {
             let key = "\(account.number)-\(metric.key)"
             if metric.pct >= threshold {
-                if fired[key] == metric.resetsAt { continue }  // held for this window
-                fired[key] = metric.resetsAt
-                var body = metric.countdown.isEmpty ? "" : "Resets in \(metric.countdown). "
+                let window = Self.windowIdentity(metric.resetsAt)
+                if fired[key] == window { continue }  // held for this window
+                fired[key] = window
+                // Same body as core/alerts._build: the live countdown from
+                // resetsAt (cswap's fetch-time string as the fallback), one
+                // line per part.
+                var lines: [String] = []
+                let countdown = metric.liveCountdown()
+                if !countdown.isEmpty { lines.append("Resets in \(countdown).") }
                 var title = "Claude: \(metric.label) — \(metric.usedPct)% used"
                 if let best = snap.bestSwitch {
-                    body += "Best switch: #\(best.number) \(best.email) (\(best.worstUsedPct)% used)"
+                    lines.append("Best switch: #\(best.number) \(best.email) (\(best.worstUsedPct)% used)")
                 } else {
                     title += " — no accounts left"
-                    body += "No other account available — you're on your own until this resets."
+                    lines.append("No other account available — you're on your own until this resets.")
                 }
-                Self.notify(title: title, body: body)
+                Self.notify(title: title, body: lines.joined(separator: "\n"))
             } else {
                 fired.removeValue(forKey: key)  // re-arm after reset
             }

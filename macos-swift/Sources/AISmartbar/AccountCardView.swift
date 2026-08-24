@@ -158,6 +158,11 @@ struct AccountCardView: View {
             }
         }
         .onHover { hovering = $0 }
+        // A fresh open never starts mid-question (the painted trays clear
+        // their confirm on every open): an armed "Remove x?" otherwise
+        // survived closing the popover, and a stray click an hour later
+        // deleted the slot.
+        .onDisappear { confirmToken = nil }
     }
 
     private var cardHeader: some View {
@@ -192,7 +197,9 @@ struct AccountCardView: View {
                         .opacity(hovering ? 1 : 0)
                 }
                 .buttonStyle(.plain)
-                .disabled(!hovering)
+                // Enabled always (only its OPACITY follows the pointer):
+                // .disabled(!hovering) meant a VoiceOver or keyboard user
+                // could never remove an account.
                 .help("Remove \(account.email) from AI smartbar")
                 .accessibilityLabel("Remove \(account.email)")
             }
@@ -299,6 +306,7 @@ struct AccountCardView: View {
             Circle()
                 .fill(account.worstStatus.color(in: colorScheme))
                 .frame(width: 9, height: 9)
+                .accessibilityLabel("status \(account.worstStatus.rawValue)")
         }
     }
 }

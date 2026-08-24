@@ -207,18 +207,29 @@ function Resolve-SystemPython {
     rather than a stack trace -- "no Python" is the single likeliest reason
     this script fails on a clean machine.
     #>
-    $py = Get-Command 'py' -ErrorAction SilentlyContinue
-    if ($py) {
-        $found = & $py.Source -3 -c 'import sys; print(sys.executable)' 2>$null
-        if ($LASTEXITCODE -eq 0 -and $found) { return $found.Trim() }
-    }
-    $python = Get-Command 'python' -ErrorAction SilentlyContinue
-    if ($python) {
-        # A Store stub named python.exe exists on stock Windows purely to open
-        # the Store page; it runs and exits 9009/0 without being an
-        # interpreter. Asking it for sys.executable weeds it out.
-        $found = & $python.Source -c 'import sys; print(sys.executable)' 2>$null
-        if ($LASTEXITCODE -eq 0 -and $found) { return $found.Trim() }
+    # Windows PowerShell 5.1 turns ANY native stderr line into a terminating
+    # error under $ErrorActionPreference = 'Stop' when stderr is redirected,
+    # so the Store stub's "Python was not found" threw a NativeCommandError
+    # instead of reaching the friendly message below. Judge these probes by
+    # $LASTEXITCODE alone.
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $py = Get-Command 'py' -ErrorAction SilentlyContinue
+        if ($py) {
+            $found = & $py.Source -3 -c 'import sys; print(sys.executable)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $found) { return $found.Trim() }
+        }
+        $python = Get-Command 'python' -ErrorAction SilentlyContinue
+        if ($python) {
+            # A Store stub named python.exe exists on stock Windows purely to
+            # open the Store page; it runs and exits 9009/0 without being an
+            # interpreter. Asking it for sys.executable weeds it out.
+            $found = & $python.Source -c 'import sys; print(sys.executable)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $found) { return $found.Trim() }
+        }
+    } finally {
+        $ErrorActionPreference = $savedEap
     }
     throw 'no Python 3 found. Install it from python.org, tick "Add to PATH", then re-run.'
 }
@@ -311,12 +322,19 @@ function Install-Updater {
         }
         $savedPrompt = $env:GIT_TERMINAL_PROMPT
         $savedGcm = $env:GCM_INTERACTIVE
+        $savedEap = $ErrorActionPreference
         $env:GIT_TERMINAL_PROMPT = '0'
         $env:GCM_INTERACTIVE = 'never'
+        # 'Continue' for the native call: under PowerShell 5.1 a harmless
+        # SSH "Warning: Permanently added … to known hosts" on a SUCCESSFUL
+        # first ls-remote was a terminating error, the probe "failed", and
+        # the update task was never registered.
+        $ErrorActionPreference = 'Continue'
         try {
             & git -C $Repo ls-remote --quiet origin HEAD 2>&1 | Out-Null
             $fetchOk = ($LASTEXITCODE -eq 0)
         } finally {
+            $ErrorActionPreference = $savedEap
             $env:GIT_TERMINAL_PROMPT = $savedPrompt
             $env:GCM_INTERACTIVE = $savedGcm
         }
@@ -415,8 +433,17 @@ $link.Save()
 # over the same cache files.
 Stop-Tray
 Start-Sleep -Seconds 1
-Start-Process -FilePath $VenvPythonW -ArgumentList ('"{0}"' -f $Launcher) `
-    -WorkingDirectory $Repo | Out-Null
+if ($env:SMARTBAR_UPDATE_APPLY -eq '1') {
+    # Under the Scheduled Task, a tray started as OUR child lives inside the
+    # task's job object: the task stays "Running" (dropping every repetition
+    # trigger for the 72h execution limit) and then the job kill takes the
+    # tray down with it. Launching through the Startup shortcut via the
+    # shell puts the tray outside the job, exactly as a logon would.
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('"{0}"' -f $Shortcut) | Out-Null
+} else {
+    Start-Process -FilePath $VenvPythonW -ArgumentList ('"{0}"' -f $Launcher) `
+        -WorkingDirectory $Repo | Out-Null
+}
 Start-Sleep -Seconds 2
 if (@(Get-TrayProcess).Count -gt 0) {
     Write-Host 'ai-smartbar is running.'
