@@ -125,6 +125,33 @@ class TestCLI(RunnerBase):
         self.assertFalse(result["ok"])
 
 
+class TestSwiftPayloadContract(RunnerBase):
+    """Pin the exact JSON shape SystemPayload (Models.swift) decodes, from
+    the Python side — so a field renamed or retyped here fails a Linux/CI
+    test instead of only surfacing as a silent nil in the macOS app."""
+
+    def test_payload_matches_the_swift_decodable_shape(self):
+        view = sysmon_runner.background_tick()
+        # top level (SystemPayload)
+        self.assertIsInstance(view["live"], bool)
+        self.assertIsInstance(view["machine"]["caption"], str)
+        # SysCPU: pct Int, cores [Int], caption String
+        self.assertIsInstance(view["cpu"]["pct"], int)
+        self.assertTrue(all(isinstance(c, int) for c in view["cpu"]["cores"]))
+        self.assertIsInstance(view["cpu"]["caption"], str)
+        # SysHistory: pct [Int?], peakText String, lastPct Int
+        for point in view["history"]["pct"]:
+            self.assertTrue(point is None or isinstance(point, int))
+        self.assertIsInstance(view["history"]["lastPct"], int)
+        # SysMem: pct Double, caption String
+        self.assertIsInstance(view["mem"]["pct"], (int, float))
+        # SysGroup + ProcRow
+        for group in ("leftovers", "busy"):
+            for row in view[group]["rows"]:
+                for key in ("token", "kind", "name", "sub", "meta"):
+                    self.assertIsInstance(row[key], str)
+
+
 class TestStream(RunnerBase):
     def test_emits_a_line_then_stops(self):
         buffer = io.StringIO()
