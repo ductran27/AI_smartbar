@@ -263,6 +263,7 @@ def validate_kill(token: str, table, my_uid: int, own_pids) -> tuple:
 
 MAX_CORE_COLUMNS = 32
 HISTORY_LEN = 60
+PROC_ROWS_CAP = 8      # leftover rows displayed; the rest fold into "+N more"
 _DEV_KEYWORDS = ("serve-dist.mjs", "serve.mjs", "http.server", "live-server",
                  "vite", "next", "webpack", "uvicorn", "flask")
 
@@ -441,7 +442,7 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         chip = f"{len(left_rows)} leftover{plural}"
     else:
         chip = ""
-    more = max(0, len(left_rows) - 8)
+    more = max(0, len(left_rows) - PROC_ROWS_CAP)
     # The FULL junk set (uncapped): auto-kill and its grace tracking act on
     # every junk root, not just the 8 rows the panel shows.
     junk_all = [{"token": r["token"], "kind": r["kind"], "name": r["name"],
@@ -549,7 +550,8 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         "cpu": {"pct": cpu_pct, "cores": folded_cores, "caption": cpu_caption},
         "history": {"pct": hist, "peakText": f"peak {peak}%", "lastPct": last},
         "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption},
-        "leftovers": {"chip": chip, "rows": left_rows[:8], "more": more,
+        "leftovers": {"chip": chip, "rows": left_rows[:PROC_ROWS_CAP],
+                      "more": more,
                       "burning": len(burning_rows), "junk": junk_all,
                       "foot": foot},
         "busy": {"caption": f"≥ {int(hot)}% CPU over two samples",

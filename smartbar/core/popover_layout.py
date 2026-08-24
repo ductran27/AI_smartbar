@@ -40,8 +40,15 @@ def pin_origin(workareas, size, margin):
     areas = [a for a in workareas if a and a[2] > 0 and a[3] > 0]
     if not areas:
         return None
-    x0, _y0, width, _height = max(areas, key=lambda a: a[2] * a[3])
-    top = max(a[1] for a in areas)
+    x0, y0, width, _height = max(areas, key=lambda a: a[2] * a[3])
+    # Clear the menu bar/panel strut of the CHOSEN monitor only: taking the
+    # max top across ALL monitors parked the panel hundreds of pixels down
+    # (or fully off-screen) on vertically stacked arrangements, because a
+    # lower monitor's y-origin is not a strut at all.
+    overlapping = [a for a in areas
+                   if a[0] < x0 + width and a[0] + a[2] > x0]
+    top = max([a[1] for a in overlapping
+               if a[1] >= y0 and a[1] - y0 < _height / 2] or [y0])
     panel_w, _panel_h = size
     return (x0 + width - panel_w - margin, top + margin)
 
@@ -598,7 +605,9 @@ def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm,
                           color=_kind_ink(s, row["kind"])))
     name_l = inner_l + chip_w + 8
     on_row = hover in (f"row:{token}", f"kill:{token}")
-    meta_w = t.text_width(row["meta"], t.SIZE_CAPTION)
+    # mono=True — the label below is DRAWN mono; the regular-face estimate
+    # ran ~8% short and the name's truncation edge overlapped the meta.
+    meta_w = t.text_width(row["meta"], t.SIZE_CAPTION, mono=True)
     shapes.append(t.Label(inner_r, line1, row["meta"], size=t.SIZE_CAPTION,
                           mono=True, anchor="right", color=s.text_secondary))
     avail_r = inner_r - meta_w - 10
@@ -633,10 +642,13 @@ def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm,
 
 
 def _proc_card(shapes, hits, s, title, caption, block, top, hover, confirm,
-               foot="", tall=False):
+               foot="", tall=False,
+               empty="Nothing left behind — every orphan is gone."):
     """A card of process rows (Leftovers or Busy), with a header chip and an
     optional foot line. Leftover rows are `tall` (two lines: name+meta, then
-    the pid/profile sub); Busy rows are single-line."""
+    the pid/profile sub); Busy rows are single-line. `empty` is the card's
+    own no-rows line — the Busy card used to borrow the Leftovers wording
+    ("every orphan is gone") on an idle machine."""
     left, right = t.PAD, t.WIDTH - t.PAD
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
     rows = block.get("rows", [])
@@ -679,8 +691,7 @@ def _proc_card(shapes, hits, s, title, caption, block, top, hover, confirm,
                       confirm, tall=tall)
             y += row_h
     else:
-        shapes.append(t.Label(inner_l, y + t.STATE_ROW_H / 2,
-                              "Nothing left behind — every orphan is gone.",
+        shapes.append(t.Label(inner_l, y + t.STATE_ROW_H / 2, empty,
                               size=t.SIZE_CAPTION, color=s.text_secondary))
         y += t.STATE_ROW_H
     if foot:
@@ -704,7 +715,8 @@ def _system_view(shapes, hits, s, system, top, hover, confirm):
                          confirm, foot=foot, tall=True) + t.CARD_GAP
     cursor += _proc_card(shapes, hits, s, "Busy",
                          system["busy"].get("caption", ""), system["busy"],
-                         cursor, hover, confirm)
+                         cursor, hover, confirm,
+                         empty="Nothing busy right now.")
     return cursor
 
 
@@ -813,8 +825,13 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
     if openai:
         tabs.append(("openai", "OpenAI"))
     if system is not None:
-        burning = sum(1 for row in system["leftovers"]["rows"]
-                      if row.get("burning"))
+        # The payload's own count (from the FULL junk set), not a count of
+        # the 8 rows the panel displays — 9 burning orphans read "System · 8"
+        # before this. Older payloads without the field fall back.
+        left_block = system["leftovers"]
+        burning = left_block.get("burning",
+                                 sum(1 for row in left_block["rows"]
+                                     if row.get("burning")))
         tabs.append(("system", f"System · {burning}" if burning else "System"))
     tab_names = [name for name, _ in tabs]
     if provider in tab_names:
@@ -890,6 +907,27 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
                           t.REMOVE_HIT, tooltip="Dismiss"))
         cursor += block_h + t.CARD_GAP
     if selected == "system":
+        # The System tab must not hide what a first run or a broken cswap
+        # needs the user to SEE: with no accounts the tab list collapsed to
+        # [system], auto-selected it, and the loading/error/onboarding
+        # lines lived only in the account branch — the user was never told
+        # to sign in, and a cswap failure was invisible (audit E-1). The
+        # same state lines render above the vitals here.
+        state_text = ""
+        if snapshot is None:
+            state_text = error or "Loading usage…"
+        elif not accounts and not openai:
+            state_text = NO_ACCOUNTS
+        if state_text:
+            lines = _lines_for_width(state_text, right - t.PAD)
+            block_h = t.STATE_ROW_H + (lines - 1) * t.STATE_LINE_H
+            shapes.append(t.Label(t.PAD, cursor + block_h / 2, state_text,
+                                  size=t.SIZE_CAPTION,
+                                  color=s.warning if (snapshot is None
+                                                      and error)
+                                  else s.text_secondary,
+                                  max_width=right - t.PAD, max_lines=lines))
+            cursor += block_h + t.CARD_GAP
         # The System tab renders machine vitals + process rows instead of
         # account cards; the footer below is shared with the account path.
         cursor = _system_view(shapes, hits, s, system, cursor, hover, confirm)

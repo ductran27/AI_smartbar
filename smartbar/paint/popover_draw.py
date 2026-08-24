@@ -91,12 +91,35 @@ def _draw_dot(ctx, dot) -> None:
     ctx.new_path()
 
 
+def _split_long_word(ctx, word: str, max_width: float) -> list:
+    """A single token wider than the line, character-split into fitting
+    chunks — SwiftUI's Text does this, and without it an unbroken path in
+    an error message drew straight past the panel edge."""
+    chunks, current = [], ""
+    for char in word:
+        candidate = current + char
+        if current and ctx.text_extents(candidate).x_advance > max_width:
+            chunks.append(current)
+            current = char
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks or [word]
+
+
 def _wrap(ctx, text: str, max_width: float, max_lines: int,
           mode: str = "tail") -> list:
     """Word-wrap to at most max_lines, truncating the last — .lineLimit(n)."""
     if max_lines <= 1 or max_width <= 0:
         return [_fit(ctx, text, max_width, mode)]
-    words, lines, current = text.split(), [], ""
+    words = []
+    for word in text.split():
+        if ctx.text_extents(word).x_advance > max_width:
+            words.extend(_split_long_word(ctx, word, max_width))
+        else:
+            words.append(word)
+    lines, current = [], ""
     for index, word in enumerate(words):
         candidate = (current + " " + word).strip()
         if current and ctx.text_extents(candidate).x_advance > max_width:
@@ -108,7 +131,9 @@ def _wrap(ctx, text: str, max_width: float, max_lines: int,
         else:
             current = candidate
     lines.append(_fit(ctx, current, max_width, mode))
-    return lines[:max_lines]
+    # Every emitted line fits — not only the last: a char-split chunk is
+    # exact, but a rejoined tail can still be wide.
+    return [_fit(ctx, line, max_width, mode) for line in lines[:max_lines]]
 
 
 def _draw_label(ctx, label) -> None:

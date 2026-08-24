@@ -87,7 +87,10 @@ def render_pills(states, target, update_pending: bool = False,
         ctx.arc(width - dot_d / 2.0, dot_d / 2.0, dot_d / 2.0, 0, 6.283185)
         ctx.fill()
     if not states:
-        ctx.set_source_rgba(1, 1, 1, 0.85)
+        # Mid-gray, not white: the no-data "?" was invisible on a light
+        # taskbar/menu bar (white on transparent), making "loading",
+        # "cswap broken" and "empty" indistinguishable there.
+        ctx.set_source_rgba(0.55, 0.55, 0.58, 0.95)
         ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
                              cairo.FONT_WEIGHT_BOLD)
         ctx.set_font_size(px(_FONT))
