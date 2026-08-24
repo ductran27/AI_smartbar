@@ -95,6 +95,11 @@ def git(*args, check: bool = True, timeout: int = GIT_TIMEOUT) -> str:
     if proc.returncode != 0:
         if check:
             detail = (proc.stderr or proc.stdout or "").strip()[:200]
+            if not detail:
+                # --quiet git calls fail with EMPTY output; five days of
+                # "fetch failed: " with no reason came from exactly this.
+                # A negative code names the signal that killed git.
+                detail = f"exit {proc.returncode}"
             raise GitError(f"git {' '.join(args)} failed: {detail}")
         return ""
     return proc.stdout.strip()
@@ -111,8 +116,17 @@ def version_in_checkout() -> str:
 
 
 def fetch() -> None:
-    """Refresh remote refs AND tags; tags are how releases are discovered."""
-    git("fetch", "--tags", "--prune", "--quiet", "origin")
+    """Refresh remote refs AND tags; tags are how releases are discovered.
+
+    --force: git >= 2.20 refuses to move an existing local tag, and a tag
+    that HAS moved on origin (a re-cut release, the pre-public history
+    rewrite) otherwise wedges every device's updater with exit 1 forever —
+    the 08-18→08-23 silent failure on this very machine. Releases are
+    discovered from local tags, so the moved tag must win.
+    --prune-tags: a tag deleted on origin (a yanked release) must also stop
+    being "newest" here, or devices keep re-applying it."""
+    git("fetch", "--tags", "--force", "--prune", "--prune-tags", "--quiet",
+        "origin")
 
 
 def repo_state() -> update.RepoState:
@@ -145,12 +159,17 @@ def rescue_ref(now=None) -> str:
     a global git identity it would otherwise fail — silently turning --reset
     into "discard without a rescue".
     """
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+    # Park HEAD itself first: on channel=main a --reset discards UNPUSHED
+    # COMMITS, which `stash create` (uncommitted changes only) never saved —
+    # recovery was reflog-only. `git branch recover <ref>` brings them back.
+    head_ref = RESCUE_PREFIX + stamp + "-head"
+    git("update-ref", head_ref, "HEAD", check=False)
     sha = git("-c", "user.name=AI smartbar", "-c",
               "user.email=ai-smartbar@localhost", "stash", "create",
               check=False)
     if not sha:
-        return ""
-    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
+        return head_ref
     ref = RESCUE_PREFIX + stamp
     git("update-ref", ref, sha, check=False)
     return ref

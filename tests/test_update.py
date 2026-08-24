@@ -138,12 +138,14 @@ class TestTheBundleIsBuiltNotJustCheckedOut(Env):
         # the field and every run after this one is decided on evidence.
         self.assertEqual(self.synced(applied_ref="").action, update.CURRENT)
 
-    def test_the_release_channel_ignores_it(self):
-        # There the target is a tag and appliedVersion already answers this,
-        # so a stale sha must not drag a pinned device into a rebuild.
+    def test_the_release_channel_honours_it_too(self):
+        # Audit 2026-08-24: an apply interrupted between the tag checkout
+        # and the installers left HEAD at the tag with the OLD app, and the
+        # release channel reported "already up to date" forever. A stale
+        # appliedRef now drags the device through a rebuild on BOTH channels.
         plan = update.plan_update(state(head_tags=["v0.3.0"]),
                                   applied_ref="sha-older")
-        self.assertEqual(plan.action, update.CURRENT)
+        self.assertTrue(plan.should_apply)
 
     def test_detached_or_feature_branch_blocks(self):
         for branch in ("", "feature/x"):

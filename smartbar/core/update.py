@@ -207,7 +207,14 @@ def plan_update(state, *, channel=CHANNEL_RELEASE, force=False, reset=False,
         if tag is None:
             return UpdatePlan(BLOCKED, reason="no vX.Y.Z release tags found")
         target_ref, target_version, detach = tag, tag.lstrip("v"), True
-        at_target = tag in (state.head_tags or ())
+        # Same built-vs-checked-out rule as channel=main: an apply that died
+        # between the checkout and the installers (power loss mid-build, the
+        # agent killed) leaves HEAD at the tag with the OLD app installed —
+        # "tag in head_tags" alone then said "already up to date" forever.
+        # An unrecorded applied_ref still counts as converged (a state file
+        # that predates the field; the first apply backfills it).
+        at_target = (tag in (state.head_tags or ())
+                     and applied_ref in ("", state.head))
         # Never walk a device backwards: a checkout whose own version is
         # newer than the newest tag is ahead of the release line (the dev
         # box between a version bump and its tag).
@@ -219,7 +226,10 @@ def plan_update(state, *, channel=CHANNEL_RELEASE, force=False, reset=False,
                               reason=f"local {state.version} is ahead of "
                                      f"newest release {tag}")
 
-    if at_target and not force:
+    # --reset behaves like force here: the README sells it as "discard local
+    # drift and re-install from scratch", and a device already sitting on
+    # the target is exactly where a re-install is being asked for.
+    if at_target and not force and not reset:
         return UpdatePlan(CURRENT, target_ref=target_ref,
                           target_version=target_version,
                           reason="already up to date")
@@ -331,7 +341,7 @@ class CheckOutcome:
 
 def check_outcome(*, pending: str = "", blocked: str = "",
                   failed: bool = False, ran: bool = True,
-                  current: str = "") -> CheckOutcome:
+                  current: str = "", disabled: bool = False) -> CheckOutcome:
     """Turn a finished manual check into something honest to show.
 
     `ran` exists because a check that never happened must not be reported as
@@ -349,6 +359,13 @@ def check_outcome(*, pending: str = "", blocked: str = "",
     wording and the rule cannot drift apart: if there is nothing to click,
     this must not say there is.
     """
+    if disabled:
+        # Distinct from every other outcome: with SMARTBAR_UPDATE=off,
+        # run_once returns before writing state, and the checkedAt-moved
+        # heuristic below misread that as "another run is in progress".
+        return CheckOutcome("✕ Updates off", "AI smartbar",
+                            "Updates are off on this device "
+                            "(SMARTBAR_UPDATE=off in config.env).")
     if failed:
         return CheckOutcome("✕ Check failed", "AI smartbar",
                             "Could not check for updates. See "

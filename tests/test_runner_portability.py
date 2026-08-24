@@ -372,9 +372,12 @@ class TestRunInstallerForPowerShell(unittest.TestCase):
         self.tmp.cleanup()
 
     def _ok_run(self):
-        return mock.patch.object(
-            update_runner.subprocess, "run",
-            return_value=mock.Mock(returncode=0, stdout="", stderr=""))
+        # run_installer moved from subprocess.run to Popen (own process
+        # group + killpg on timeout, audit B4); the fake mirrors that API.
+        fake = mock.Mock(returncode=0)
+        fake.communicate.return_value = ("", "")
+        return mock.patch.object(update_runner.subprocess, "Popen",
+                                 return_value=fake)
 
     def test_a_non_executable_ps1_still_runs(self):
         # The exact regression: os.access(..., os.X_OK) would reject this
