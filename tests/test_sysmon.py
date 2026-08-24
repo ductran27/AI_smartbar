@@ -337,6 +337,18 @@ class TestBuildView(unittest.TestCase):
     def test_leftovers_chip_counts_burning_cores(self):
         self.assertIn("burning", self.view()["leftovers"]["chip"])
 
+    def test_calm_leftovers_chip_says_leftover_not_idle(self):
+        # A non-burning junk orphan (e.g. a shell snapshot) is a "leftover",
+        # never "idle" — "idle" belongs to dev servers, and calling a junk row
+        # idle in the header chip is misleading (found in live verification).
+        procs = [sysmon.Proc(50, 1, 501, 1000, 240, 4.0,
+                             "/bin/zsh -c source /x/shell-snapshots/s.sh",
+                             start=1)]
+        view = sysmon.build_view(procs=procs, cores=[1], mem={
+            "totalBytes": 1, "usedBytes": 0, "pct": 0.0}, load=(0, 0, 0),
+            prev_cpu={}, now=self.now, my_uid=501, own_pids=set(), history=[])
+        self.assertEqual(view["leftovers"]["chip"], "1 leftover")
+
     def test_leftovers_sorted_burning_first(self):
         kinds = [r["kind"] for r in self.view()["leftovers"]["rows"]]
         self.assertEqual(kinds[0], "junk")       # burning before idle

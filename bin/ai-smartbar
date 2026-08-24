@@ -346,7 +346,7 @@ def main() -> int:
         import json as _json
         print(_json.dumps(sysmon_runner.background_tick()))
         return 0
-    if args.kill:
+    if args.kill is not None:
         import json as _json
         from smartbar import sysmon_runner
         ok, error = sysmon_runner.kill(args.kill)

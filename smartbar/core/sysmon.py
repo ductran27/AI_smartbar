@@ -382,7 +382,8 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         chip = (f"{len(burning_rows)} burning · "
                 f"{sum(r['cores'] for r in burning_rows):.1f} cores")
     elif left_rows:
-        chip = f"{len(left_rows)} idle"
+        plural = "" if len(left_rows) == 1 else "s"
+        chip = f"{len(left_rows)} leftover{plural}"
     else:
         chip = ""
     more = max(0, len(left_rows) - 8)
