@@ -65,6 +65,11 @@ class TestFetchFailureIsNotSilent(unittest.TestCase):
             mock.patch.object(update_git, "fetch",
                               side_effect=update_git.GitError("git fetch "
                                                               "failed: exit 1")),
+            # portable.lock keeps its handle alive for the process lifetime
+            # (by design — real runs are separate processes); sequential
+            # in-process run_once calls need a fresh dummy per call.
+            mock.patch.object(update_runner.portable, "lock",
+                              lambda path: object()),
         ]
         for p in patches:
             p.start()
