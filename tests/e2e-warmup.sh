@@ -16,7 +16,10 @@ export SMARTBAR_WARMUP_NOTIFY=off SMARTBAR_CACHE_DIR="$WORK/cache"
 BIN="$HERE/../bin/ai-smartbar"
 
 "$BIN" --warmup-once
-grep -q "warmed #1" "$WORK/cache/warmup.log" && grep -q "warmed #2" "$WORK/cache/warmup.log" \
+# "pinged", not "warmed": the immediate re-fetch verification was removed
+# (cswap's serve TTL made it a structural false negative); the next run's
+# gate — exercised by run B below — is the real verification.
+grep -q "pinged #1" "$WORK/cache/warmup.log" && grep -q "pinged #2" "$WORK/cache/warmup.log" \
   || { echo "FAIL: run A did not warm both accounts"; exit 1; }
 
 CALLS=$(wc -l < "$WORK/warmup-claude-calls.log")
