@@ -39,12 +39,19 @@ MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
 # directory we handed the child is the race-free form of the same assertion.
 
 run_case() {
-  local name="$1" add_fail="$2" want_adds="$3" state pid
+  local name="$1" add_fail="$2" want_adds="$3"
+  # `state` and `pid` are deliberately NOT local: the EXIT trap below
+  # outlives this function, and with locals it saw empty strings after a
+  # clean run — `kill ""` failed, and under `set -e` a failing command in
+  # the trap turned an ALL PASS run into exit 1 (caught by the v1.3.1
+  # release gate). Every step in the trap is guarded so it can only ever
+  # clean up, never decide the exit status.
   state=$(mktemp -d)
+  pid=""
   # An interrupted run (Ctrl-C during the sleep) otherwise orphaned the
   # REAL app, polling the mock every 2 s forever — the exact burner class
   # the System tab hunts.
-  trap 'kill "${pid:-}" 2>/dev/null; rm -rf "$state"' EXIT
+  trap '[ -z "${pid:-}" ] || kill "$pid" 2>/dev/null || true; [ -z "${state:-}" ] || rm -rf "$state"; true' EXIT
   : > "$state/calls.log"
   SMARTBAR_CSWAP="$MOCK" MOCK_STATE_DIR="$state" MOCK_ADD_FAIL="$add_fail" \
     SMARTBAR_INTERVAL=2 \
