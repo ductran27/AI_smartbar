@@ -41,6 +41,21 @@ class TestParsing(unittest.TestCase):
         settings, _ = cfg.parse("  SMARTBAR_INTERVAL  =  90  \n")
         self.assertEqual(settings, {"SMARTBAR_INTERVAL": "90"})
 
+    def test_a_quoted_value_may_carry_a_trailing_inline_comment(self):
+        # Quoting AND an inline "# comment" are each documented .env syntax;
+        # used together they left the quote characters on the value, which
+        # then tripped the charset check and silently dropped the setting.
+        settings, problems = cfg.parse(
+            'SMARTBAR_CSWAP="/usr/local/bin/cswap"  # custom path\n')
+        self.assertEqual(settings, {"SMARTBAR_CSWAP": "/usr/local/bin/cswap"})
+        self.assertEqual(problems, [])
+
+    def test_a_hash_inside_a_quoted_value_stays_content(self):
+        # The closing quote, not " #", bounds a quoted value: a # between the
+        # quotes is data, not a comment.
+        settings, _ = cfg.parse('SMARTBAR_PRESENCE_LABEL="box #3"\n')
+        self.assertEqual(settings, {"SMARTBAR_PRESENCE_LABEL": "box #3"})
+
     def test_an_empty_value_is_a_value(self):
         # SMARTBAR_PRESENCE_LABEL= deliberately means "publish no name".
         settings, problems = cfg.parse("SMARTBAR_PRESENCE_LABEL=\n")

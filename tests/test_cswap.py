@@ -81,6 +81,23 @@ class TestParse(unittest.TestCase):
         with self.assertRaises(cswap.CswapError):
             cswap.parse_snapshot("not json {")
 
+    def test_explicit_null_fields_degrade_instead_of_crashing(self):
+        # cswap emits a literal null for a reading it has no value for yet.
+        # The two-arg .get default only substitutes an ABSENT key, so a
+        # present null used to crash the entire parse (float(None)/int(None))
+        # rather than degrading the one field. codex.py already guards these.
+        data = {"schemaVersion": 1, "accounts": [{
+            "number": None, "email": None, "organizationName": None,
+            "active": True, "usageStatus": "ok",
+            "usage": {"fiveHour": {"pct": None, "resetsAt": None,
+                                   "countdown": None}}}]}
+        snap = cswap.parse_snapshot(json.dumps(data))
+        acct = snap.accounts[0]
+        self.assertEqual((acct.number, acct.email, acct.org), (0, "?", ""))
+        self.assertEqual(acct.metrics[0].pct, 0.0)
+        self.assertEqual(acct.metrics[0].resets_at, "")
+        self.assertEqual(acct.metrics[0].countdown, "")
+
 
 OLD = "2026-07-20T01:00:00Z"
 MID = "2026-07-20T02:00:00Z"
