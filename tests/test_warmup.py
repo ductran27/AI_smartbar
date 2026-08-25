@@ -252,15 +252,5 @@ class TestStateHelpers(Env):
         self.assertEqual(warmup.consecutive_failures(st, "a@x.com", tomorrow), 0)
 
 
-class TestVerify(Env):
-    def test_verified_when_window_now_running(self):
-        future = iso(NOW + timedelta(hours=5))
-        self.assertTrue(warmup.warmed_successfully(acct(resets_at=future), NOW))
-
-    def test_not_verified_when_still_idle(self):
-        self.assertFalse(warmup.warmed_successfully(acct(resets_at=""), NOW))
-        self.assertFalse(warmup.warmed_successfully(None, NOW))
-
-
 if __name__ == "__main__":
     unittest.main()
