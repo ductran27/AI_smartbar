@@ -162,34 +162,41 @@ def repo_state() -> update.RepoState:
     )
 
 
-def rescue_ref(now=None) -> str:
-    """Park local work in a ref so --reset never truly destroys anything.
+def rescue_ref(now=None):
+    """Park local work in refs so --reset never truly destroys anything.
 
-    Recover with `git stash apply <ref>` — the ref is named for the moment
-    it was taken and printed to update.log. The identity is forced inline:
-    `stash create` writes a commit, and on a device where the user never set
-    a global git identity it would otherwise fail — silently turning --reset
-    into "discard without a rescue".
+    Returns `(head_ref, stash_ref)`. The two kinds of local work a --reset
+    can discard need two DIFFERENT recovery verbs, so they are parked — and
+    reported — separately:
+
+    * `head_ref` always points at the HEAD commit. On channel=main a --reset
+      discards UNPUSHED COMMITS, which `stash create` (uncommitted changes
+      only) never saved. Recover them with `git branch <name> <head_ref>` —
+      NOT `git stash apply`, which rejects a plain commit.
+    * `stash_ref` is a `git stash create` object, or "" when the working tree
+      was clean. Recover uncommitted changes with `git stash apply <stash_ref>`.
+
+    The identity is forced inline: `stash create` writes a commit, and on a
+    device where the user never set a global git identity it would otherwise
+    fail — silently turning --reset into "discard without a rescue".
     """
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
-    # Park HEAD itself first: on channel=main a --reset discards UNPUSHED
-    # COMMITS, which `stash create` (uncommitted changes only) never saved —
-    # recovery was reflog-only. `git branch recover <ref>` brings them back.
     head_ref = RESCUE_PREFIX + stamp + "-head"
     git("update-ref", head_ref, "HEAD", check=False)
     sha = git("-c", "user.name=AI smartbar", "-c",
               "user.email=ai-smartbar@localhost", "stash", "create",
               check=False)
-    if not sha:
-        return head_ref
-    ref = RESCUE_PREFIX + stamp
-    git("update-ref", ref, sha, check=False)
-    return ref
+    stash_ref = ""
+    if sha:
+        stash_ref = RESCUE_PREFIX + stamp
+        git("update-ref", stash_ref, sha, check=False)
+    return head_ref, stash_ref
 
 
-def checkout(plan, *, reset: bool = False) -> str:
-    """Move the checkout onto plan.target_ref; returns any rescue ref made."""
-    rescue = rescue_ref() if reset else ""
+def checkout(plan, *, reset: bool = False):
+    """Move the checkout onto plan.target_ref; returns the (head_ref,
+    stash_ref) a --reset parked, or ("", "") when nothing was parked."""
+    rescue = rescue_ref() if reset else ("", "")
     if plan.detach:
         # A release device is *pinned*: detached HEAD names its release.
         args = ["checkout"] + (["--force"] if reset else []) + \
