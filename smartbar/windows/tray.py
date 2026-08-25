@@ -418,6 +418,15 @@ class Tray:
                 else:
                     action = _account_switch_action(self, acct.number)
                     rows.append(pystray.MenuItem(label, action))
+            if c.snapshot.openai:
+                # Read-only rows: no switcher exists for ChatGPT logins. Kept
+                # in step with linux/tray.py's fallback menu so the text menu
+                # is informationally equivalent across platforms.
+                rows.append(pystray.Menu.SEPARATOR)
+                rows.append(pystray.MenuItem("OpenAI", _noop, enabled=False))
+                for acct in c.snapshot.openai:
+                    rows.append(pystray.MenuItem(model.menu_row(acct),
+                                                 _noop, enabled=False))
         rows.append(pystray.Menu.SEPARATOR)
         if c.update_pending:
             rows.append(pystray.MenuItem(f"⬆ Update to {c.update_pending}",
