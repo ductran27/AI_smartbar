@@ -151,7 +151,9 @@ def _build(side_effects: bool):
                 autokilled.append({"name": row["name"], "cores": row["cores"],
                                    "age": row["age"]})
                 first_seen.pop(token, None)
-        alerts = sysmon.alerts(view["leftovers"]["rows"], autokilled)
+        # The uncapped burning set, not the 8 display rows, so the
+        # notification's count/cores agree with the on-screen chip.
+        alerts = sysmon.alerts(view["leftovers"]["burningRows"], autokilled)
 
         save_state({"history": [list(entry) for entry in ring],
                     "prevCpu": {str(proc.pid): proc.cpu for proc in procs},

@@ -425,6 +425,29 @@ class TestBuildView(unittest.TestCase):
     def test_foot_reports_autokill_state(self):
         self.assertIn("Auto-kill off", self.view()["leftovers"]["foot"])
 
+    def test_notification_counts_every_burning_leftover_not_just_shown(self):
+        # >8 burning orphans at once: the panel caps its rows at
+        # PROC_ROWS_CAP, but the chip counts them all — so the OS
+        # notification must too. Feeding alerts() the capped display rows
+        # made its count/cores fall short of the chip (the FINDING); the
+        # uncapped `burningRows` set keeps the two in agreement.
+        n = sysmon.PROC_ROWS_CAP + 2
+        procs = [sysmon.Proc(500 + i, 1, 501, 50_000, 21600, 60.0,
+                             "/Applications/Google Chrome.app/Contents/MacOS/"
+                             "Google Chrome --headless --user-data-dir=/tmp/"
+                             "cdp-prof-%d" % i, start=500 + i)
+                 for i in range(n)]
+        view = sysmon.build_view(procs=procs, cores=[60], mem={
+            "totalBytes": 1, "usedBytes": 0, "pct": 0.0}, load=(0, 0, 0),
+            prev_cpu={}, now=self.now, my_uid=501, own_pids=set(), history=[])
+        left = view["leftovers"]
+        self.assertEqual(len(left["rows"]), sysmon.PROC_ROWS_CAP)  # display cap
+        self.assertEqual(left["burning"], n)                       # chip: all
+        self.assertEqual(len(left["burningRows"]), n)              # feeds alerts
+        alerts = sysmon.alerts(left["burningRows"], autokilled=[])
+        self.assertEqual(len(alerts), 1)
+        self.assertIn(str(n), alerts[0]["title"])   # notification agrees
+
 
 class TestHistoryRing(unittest.TestCase):
     def test_append_grows_then_caps_at_60(self):
