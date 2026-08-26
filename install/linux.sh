@@ -244,7 +244,14 @@ fi
 # code at the next login) rather than take it down.
 if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   TRAY_PID="$(cat "$CACHE/tray.pid" 2>/dev/null || true)"
-  if [[ -n "$TRAY_PID" && -r "/proc/$TRAY_PID/environ" ]]; then
+  # Verify the cached PID is actually the tray before importing its session
+  # credentials: a SIGKILLed tray leaves a stale tray.pid the OS can reuse
+  # for an unrelated same-user process, and borrowing THAT process's X11/
+  # D-Bus vars is worse than falling through to the "no display" branch. Same
+  # guard stop_tray() applies a few lines above before it kills the PID.
+  if [[ -n "$TRAY_PID" && -r "/proc/$TRAY_PID/environ" ]] \
+     && tr '\0' ' ' <"/proc/$TRAY_PID/cmdline" 2>/dev/null \
+        | grep -q "ai-smartbar"; then
     while IFS= read -r -d '' kv; do
       case "$kv" in
         DISPLAY=*|WAYLAND_DISPLAY=*|XAUTHORITY=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_RUNTIME_DIR=*)

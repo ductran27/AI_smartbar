@@ -611,15 +611,20 @@ def _proc_row(shapes, hits, s, row, top, inner_l, inner_r, hover, confirm,
     shapes.append(t.Label(inner_r, line1, row["meta"], size=t.SIZE_CAPTION,
                           mono=True, anchor="right", color=s.text_secondary))
     avail_r = inner_r - meta_w - 10
-    if killable and on_row:
+    # Reserve the ✕ gutter for EVERY killable row, hovered or not, so the
+    # name's truncation width never changes the instant the pointer arrives
+    # (the account-card fix at label_r above; FINDING 4). Only the glyph and
+    # its hit are gated on hover.
+    if killable:
         cx = avail_r - t.REMOVE_HIT / 2
-        shapes.append(t.Glyph("close", cx, line1, t.REMOVE_ICON,
-                              s.text if hover == f"kill:{token}"
-                              else s.text_tertiary))
-        hits.append(t.Hit(f"kill:{token}", cx - t.REMOVE_HIT / 2,
-                          line1 - t.REMOVE_HIT / 2, t.REMOVE_HIT,
-                          t.REMOVE_HIT, tooltip=f"Kill {row['name']}"))
         avail_r -= t.REMOVE_HIT + 7
+        if on_row:
+            shapes.append(t.Glyph("close", cx, line1, t.REMOVE_ICON,
+                                  s.text if hover == f"kill:{token}"
+                                  else s.text_tertiary))
+            hits.append(t.Hit(f"kill:{token}", cx - t.REMOVE_HIT / 2,
+                              line1 - t.REMOVE_HIT / 2, t.REMOVE_HIT,
+                              t.REMOVE_HIT, tooltip=f"Kill {row['name']}"))
     sub = row.get("sub") or ""
     if tall:
         # Name+meta on line 1 (the name gets the whole width up to the ✕/

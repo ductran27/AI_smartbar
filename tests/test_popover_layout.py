@@ -1300,6 +1300,22 @@ class TestSystemTab(unittest.TestCase):
                                system=payload, hover="row:100:1000", now=NOW)
         self.assertTrue(any(h.name == "kill:100:1000" for h in hovered.hits))
 
+    def test_hovering_does_not_reflow_a_process_name(self):
+        # FINDING 4, process-row variant: the kill (✕) gutter used to be
+        # reserved only while hovering, so a leftover/busy name re-wrapped —
+        # and could re-truncate — the instant the pointer arrived. The gutter
+        # must be reserved unconditionally on any killable row.
+        payload = system_payload()
+        plain = layout.build(snap(account(active=True)), provider="system",
+                             system=payload, now=NOW)
+        hovered = layout.build(snap(account(active=True)), provider="system",
+                               system=payload, hover="row:100:1000", now=NOW)
+        name_plain = next(s for s in plain.shapes if isinstance(s, t.Label)
+                          and s.text == "Google Chrome (headless)")
+        name_hovered = next(s for s in hovered.shapes if isinstance(s, t.Label)
+                            and s.text == "Google Chrome (headless)")
+        self.assertEqual(name_plain.max_width, name_hovered.max_width)
+
     def test_every_leftover_row_has_a_hover_region(self):
         built = layout.build(snap(account(active=True)), provider="system",
                              system=system_payload(), now=NOW)

@@ -327,23 +327,35 @@ class Popover(tk.Toplevel):
         """(Un)bind the mouse wheel to match whether there is anything to
         scroll -- avoids a bound handler quietly consuming wheel events
         over a panel that has nothing to scroll."""
-        # Bound on the TOPLEVEL, not the canvas: Tk 8.6 routes <MouseWheel>
-        # like key events, to the window that has focus — and show_panel
-        # focus_force()s this Toplevel, whose bindtags never include the
-        # canvas. A canvas binding therefore never fired, and a capped
-        # panel's lower cards were unreachable.
+        # Bound on BOTH the Toplevel and the canvas. Tk 8.6 delivers
+        # <MouseWheel> to the FOCUS window, so the Toplevel binding is what
+        # fires for a popover — show_panel() focus_force()s it. A PINNED
+        # panel deliberately never takes focus (a permanent readout must not
+        # steal it), so that delivery path never reaches it; the Toplevel
+        # binding alone left a pinned+overflowing panel's lower cards
+        # unreachable (the FINDING). Windows' "scroll inactive windows on
+        # hover" (default since Win10) still delivers the wheel to the widget
+        # under the pointer — the canvas — whose bindtags do not include the
+        # focus-bound Toplevel, so the canvas needs its own binding.
+        # _on_scroll returns "break" so a canvas-delivered event does not also
+        # bubble up to the Toplevel binding and scroll twice.
         if scrollable and not self._scroll_bound:
             self.bind("<MouseWheel>", self._on_scroll)
+            self.canvas.bind("<MouseWheel>", self._on_scroll)
             self._scroll_bound = True
         elif not scrollable and self._scroll_bound:
             self.unbind("<MouseWheel>")
+            self.canvas.unbind("<MouseWheel>")
             self._scroll_bound = False
             self.canvas.yview_moveto(0.0)
 
-    def _on_scroll(self, event) -> None:
+    def _on_scroll(self, event) -> str:
         # Windows wheel deltas are multiples of 120 per notch; positive
         # means "scroll up" (matches yview_scroll's own sign convention).
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # Bound on both the canvas and the Toplevel: stop a canvas-delivered
+        # event from also bubbling to the Toplevel binding (a double scroll).
+        return "break"
 
     def _paint(self, layout, width: int, height: int) -> None:
         if ImageTk is None:

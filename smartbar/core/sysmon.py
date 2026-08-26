@@ -552,7 +552,15 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption},
         "leftovers": {"chip": chip, "rows": left_rows[:PROC_ROWS_CAP],
                       "more": more,
-                      "burning": len(burning_rows), "junk": junk_all,
+                      "burning": len(burning_rows),
+                      # The UNCAPPED burning set (like `junk` above): the
+                      # notification counts and sums every burning tree, not
+                      # just the 8 the panel shows, so its figures always
+                      # match the chip even when >8 burn at once.
+                      "burningRows": [{"token": r["token"],
+                                       "cores": r["cores"], "burning": True}
+                                      for r in burning_rows],
+                      "junk": junk_all,
                       "foot": foot},
         "busy": {"caption": f"≥ {int(hot)}% CPU over two samples",
                  "rows": busy_rows},

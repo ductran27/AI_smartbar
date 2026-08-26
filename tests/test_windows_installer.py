@@ -25,10 +25,16 @@ from smartbar.core import update
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "install", "windows.ps1")
 LAUNCHER = os.path.join(REPO, "bin", "ai-smartbar")
+CMD_SHIM = os.path.join(REPO, "bin", "ai-smartbar.cmd")
 
 
 def script_text():
     with open(SCRIPT, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def cmd_shim_text():
+    with open(CMD_SHIM, encoding="utf-8") as handle:
         return handle.read()
 
 
@@ -178,6 +184,33 @@ class TestTheLauncherAcceptsWhatTheInstallerCalls(unittest.TestCase):
             self.assertIn(flag, proc.stdout,
                           "windows.ps1 calls %s, which the launcher does not "
                           "accept" % flag)
+
+
+class TestTheCmdShimRunsTheVenvInterpreter(unittest.TestCase):
+    r"""windows.ps1 pip-installs the GUI deps (pystray, tkinter, Pillow) ONLY
+    into venv\Scripts. A PATH-based caller (Start Menu shortcut, scheduled
+    task) reaches the tray through bin\ai-smartbar.cmd, so the shim must invoke
+    that same venv interpreter — running the launcher under the ambient
+    `python`, which only bootstrapped the venv and never got those packages,
+    dies with an ImportError."""
+
+    def test_the_shim_invokes_the_venv_interpreter(self):
+        shim = cmd_shim_text()
+        # The exact leaf windows.ps1 builds the deps into ($VenvPython).
+        self.assertIn(r"venv\Scripts\python.exe", shim)
+        self.assertIn(r"Scripts\python.exe", script_text())
+
+    def test_the_venv_is_preferred_over_ambient_python(self):
+        shim = cmd_shim_text()
+        # An `if exist` on the venv interpreter must precede the bare `python`
+        # fallback, or the deps-less ambient interpreter wins whenever it is
+        # on PATH.
+        guard = shim.lower().find("if exist")
+        fallback = re.search(r"(?m)^\s*python\b", shim)
+        self.assertNotEqual(guard, -1, "shim has no venv-exists guard")
+        self.assertIsNotNone(fallback, "shim never falls back to ambient python")
+        self.assertLess(guard, fallback.start(),
+                        "the ambient python fallback precedes the venv guard")
 
 
 if __name__ == "__main__":
