@@ -66,7 +66,15 @@ final class SystemStatus: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, current == self.generation else { return }
                 if let fetched {
-                    self.pendingKills.removeAll()
+                    // Clear a pending token only when THIS poll confirms the
+                    // process is actually gone. Wiping every token on any
+                    // successful poll dropped the optimistic filter while the
+                    // runner's 3 s grace could still list the just-killed row,
+                    // so it flashed back into the live stream. Keep tokens
+                    // still present; drop the rest.
+                    let stillListed = Set(fetched.leftovers.rows.map(\.token))
+                        .union(fetched.busy.rows.map(\.token))
+                    self.pendingKills.formIntersection(stillListed)
                     // While the stream runs it owns the display: the poll's
                     // ~1.5 s-old sample would blink LIVE off and step the
                     // numbers backwards once a minute.
@@ -191,6 +199,11 @@ final class SystemStatus: ObservableObject {
                 if (raw?["ok"] as? Bool) != true {
                     let detail = raw?["error"] as? String ?? "kill failed"
                     self?.actionError = "Kill failed: \(detail)"
+                    // The kill was refused, so the process is still alive and
+                    // still listed. Undo the optimistic drop now — otherwise
+                    // the token stays pending (the poll keeps seeing the row)
+                    // and the row stays hidden as if it had died.
+                    self?.pendingKills.remove(token)
                 }
                 self?.refresh()
             }
