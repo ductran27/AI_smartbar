@@ -235,14 +235,25 @@ class SmartBarApp(rumps.App):
             items.append(rumps.MenuItem(f"✕ {self.switch_error}"))
             items.append(None)  # separator
         if c.snapshot is None:
-            items.append(rumps.MenuItem("Loading…"))
+            # Mirror Linux/Windows: a fetch that is failing with no snapshot
+            # yet must say so, not sit on "Loading…" forever. The title only
+            # flips to "⚪ ?" at failures >= 3, so below that this menu (macOS
+            # has no popover) is the only surface that can surface the error.
+            items.append(rumps.MenuItem(
+                "Loading…" if c.failures == 0
+                else "cswap error — see tray.log"))
         else:
+            # A recent failure on top of an existing snapshot: the numbers are
+            # stale. Mark the active row, as Linux/Windows do.
+            stale = "  (stale)" if c.failures else ""
             for acct in c.snapshot.accounts:
                 # No callback for the active row or a dead stored credential
                 # (switching to one restores a login Anthropic rejected).
                 blocked = acct.active or model.switch_blocked(acct)
                 callback = None if blocked else self._make_switch(acct.number)
-                items.append(rumps.MenuItem(model.menu_row(acct), callback=callback))
+                items.append(rumps.MenuItem(
+                    model.menu_row(acct) + (stale if acct.active else ""),
+                    callback=callback))
             if c.snapshot.openai:
                 items.append(None)
                 items.append(rumps.MenuItem("OpenAI"))

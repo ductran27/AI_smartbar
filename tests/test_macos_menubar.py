@@ -377,6 +377,31 @@ class TestMenuConstruction(MenubarTestCase):
         app._rebuild_menu()
         self.assertEqual(app.menu[0].title, "Loading…")
 
+    def test_a_failing_fetch_with_no_snapshot_shows_the_error(self):
+        # Below the failures>=3 title flip, the menu is macOS's only surface
+        # for a failing fetch — it must not sit on "Loading…" like a healthy
+        # first launch (mirrors Linux/Windows).
+        app = self.build()
+        app.controller.snapshot = None
+        app.controller.failures = 1
+        app._rebuild_menu()
+        self.assertEqual(app.menu[0].title, "cswap error — see tray.log")
+
+    def test_the_active_row_is_marked_stale_after_a_failed_refresh(self):
+        from smartbar.core import model
+        app = self.build()
+        app.controller.snapshot = snapshot(
+            account(1, "active@x.com", active=True),
+            account(2, "other@x.com"))
+        app.controller.failures = 2      # stale numbers on a kept snapshot
+        app._rebuild_menu()
+        titles = [item.title for item in app.menu
+                  if isinstance(item, self.menubar.rumps.MenuItem)]
+        active_row = model.menu_row(app.controller.snapshot.accounts[0])
+        other_row = model.menu_row(app.controller.snapshot.accounts[1])
+        self.assertIn(active_row + "  (stale)", titles)   # active row marked
+        self.assertIn(other_row, titles)                  # others untouched
+
     def test_the_active_row_and_a_dead_credential_are_not_clickable(self):
         from smartbar.core import model
         app = self.build()
