@@ -25,7 +25,7 @@ import tempfile
 import time
 from datetime import datetime
 
-from smartbar.core import paths, sysmon, sysmon_probe
+from smartbar.core import paths, portable, sysmon, sysmon_probe
 
 STREAM_MAX_SECONDS = 1800     # backstop: never stream longer than 30 min
 
@@ -37,6 +37,12 @@ def _state_file() -> str:
     by tests and e2e fences after this module is already loaded (the exact
     trap paths.py was written to avoid)."""
     return os.path.join(paths.cache_dir(), "sysmon-state.json")
+
+
+def _lock_file() -> str:
+    """Mutex for the read-modify-write of sysmon-state.json — resolved per
+    call for the same SMARTBAR_CACHE_DIR reason as _state_file()."""
+    return os.path.join(paths.cache_dir(), "sysmon.lock")
 
 
 def load_state() -> dict:
@@ -95,49 +101,65 @@ def _build(side_effects: bool):
     # A short window is enough to read per-process CPU%; the 60 s cadence is
     # the runner's schedule, not this in-tick sample's width.
     procs, cores, mem, load = sysmon_probe.sample(interval=0.5)
-    state = load_state()
-    prev_cpu = {int(k): v for k, v in state.get("prevCpu", {}).items()}
-    ring = [tuple(entry) for entry in state.get("history", [])]
-    minute = int(time.time() // 60)
-    if side_effects:
-        # Append THIS tick's point before building the series, or the
-        # newest history column is always a gap and lastPct lags one poll.
-        pct = round(sum(cores) / len(cores)) if cores else 0
-        ring = sysmon.history_append(ring, minute, pct)
-    series = sysmon.history_series(ring, minute)
-    view = sysmon.build_view(procs, cores, mem, load, prev_cpu,
-                             datetime.now(), _my_uid(),
-                             _own_pids(), series)
-    if not side_effects:
-        return view, [], []
+    # Hold a lock across the load_state → compute → save_state window (the
+    # auto-kill wait alone spans up to 3 s). A kill's re-poll can spawn a
+    # second background_tick while the 60 s timer's own tick is still in
+    # flight; both blind-save the whole state object, so the loser's
+    # os.replace silently clobbers the winner's history sample or reverts a
+    # firstSeen entry (resetting the auto-kill grace clock). If another tick
+    # holds it, degrade to a read-only build — a display payload with no side
+    # effects — exactly as presence skips an overlapping beat.
+    handle = portable.lock(_lock_file()) if side_effects else None
+    if side_effects and handle is None:
+        side_effects = False
+    try:
+        state = load_state()
+        prev_cpu = {int(k): v for k, v in state.get("prevCpu", {}).items()}
+        ring = [tuple(entry) for entry in state.get("history", [])]
+        minute = int(time.time() // 60)
+        if side_effects:
+            # Append THIS tick's point before building the series, or the
+            # newest history column is always a gap and lastPct lags one poll.
+            pct = round(sum(cores) / len(cores)) if cores else 0
+            ring = sysmon.history_append(ring, minute, pct)
+        series = sysmon.history_series(ring, minute)
+        view = sysmon.build_view(procs, cores, mem, load, prev_cpu,
+                                 datetime.now(), _my_uid(),
+                                 _own_pids(), series)
+        if not side_effects:
+            return view, [], []
 
-    # Auto-kill and its grace tracking act on the FULL junk set the view
-    # carries, not the 8 rows the panel displays — a 9th junk orphan used
-    # to fall off the tracked set every tick and never age into eligibility.
-    first_seen = dict(state.get("firstSeen", {}))
-    now_epoch = time.time()
-    junk_rows = view["leftovers"]["junk"]
-    junk = {row["token"] for row in junk_rows}
-    for token in junk:
-        first_seen.setdefault(token, now_epoch)
-    for token in list(first_seen):
-        if token not in junk:
-            del first_seen[token]
+        # Auto-kill and its grace tracking act on the FULL junk set the view
+        # carries, not the 8 rows the panel displays — a 9th junk orphan used
+        # to fall off the tracked set every tick and never age into
+        # eligibility.
+        first_seen = dict(state.get("firstSeen", {}))
+        now_epoch = time.time()
+        junk_rows = view["leftovers"]["junk"]
+        junk = {row["token"] for row in junk_rows}
+        for token in junk:
+            first_seen.setdefault(token, now_epoch)
+        for token in list(first_seen):
+            if token not in junk:
+                del first_seen[token]
 
-    autokilled = []
-    for token in sysmon.autokill_targets(junk_rows, first_seen, now_epoch):
-        row = next((r for r in junk_rows if r["token"] == token), None)
-        ok, _ = kill(token)
-        if ok and row is not None:
-            autokilled.append({"name": row["name"], "cores": row["cores"],
-                               "age": row["age"]})
-            first_seen.pop(token, None)
-    alerts = sysmon.alerts(view["leftovers"]["rows"], autokilled)
+        autokilled = []
+        for token in sysmon.autokill_targets(junk_rows, first_seen, now_epoch):
+            row = next((r for r in junk_rows if r["token"] == token), None)
+            ok, _ = kill(token)
+            if ok and row is not None:
+                autokilled.append({"name": row["name"], "cores": row["cores"],
+                                   "age": row["age"]})
+                first_seen.pop(token, None)
+        alerts = sysmon.alerts(view["leftovers"]["rows"], autokilled)
 
-    save_state({"history": [list(entry) for entry in ring],
-                "prevCpu": {str(proc.pid): proc.cpu for proc in procs},
-                "firstSeen": first_seen})
-    return view, alerts, autokilled
+        save_state({"history": [list(entry) for entry in ring],
+                    "prevCpu": {str(proc.pid): proc.cpu for proc in procs},
+                    "firstSeen": first_seen})
+        return view, alerts, autokilled
+    finally:
+        if handle is not None:
+            handle.close()
 
 
 def background_tick() -> dict:

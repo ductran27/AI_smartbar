@@ -74,6 +74,24 @@ class TestBackgroundTick(RunnerBase):
         first = len(sysmon_runner.load_state()["history"])
         self.assertGreaterEqual(first, 1)
 
+    def test_a_held_lock_makes_the_tick_read_only(self):
+        # A second background_tick racing an in-flight one (a kill's re-poll
+        # vs. the 60s timer) must not blind-clobber the state the first tick
+        # owns. With the lock held it degrades to a display-only build: it
+        # still returns a usable payload but writes nothing.
+        from smartbar.core import portable
+        seeded = {"history": [[123, 55]], "prevCpu": {}, "firstSeen": {}}
+        sysmon_runner.save_state(seeded)
+        held = portable.lock(sysmon_runner._lock_file())
+        self.assertIsNotNone(held)
+        try:
+            view = sysmon_runner.background_tick()
+        finally:
+            held.close()
+        self.assertEqual(view["cpu"]["cores"], [40, 10])   # payload intact
+        # State is exactly what we seeded — the racing tick left it alone.
+        self.assertEqual(sysmon_runner.load_state()["history"], [[123, 55]])
+
 
 class TestKill(RunnerBase):
     def token_for(self, pid):
