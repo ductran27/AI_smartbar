@@ -131,6 +131,24 @@ class TestResetSemantics(unittest.TestCase):
         self.assertTrue(any("HEAD" in c for c in update_refs),
                         f"no HEAD rescue ref recorded: {calls}")
 
+    def test_rescue_ref_returns_both_the_head_and_the_stash_ref(self):
+        # Unpushed commits (head ref) and uncommitted changes (stash ref) need
+        # DIFFERENT recovery verbs, so the stash ref must not shadow the head
+        # ref in the return value — the caller reports each separately.
+        calls = []
+
+        def fake_git(*a, **k):
+            calls.append(a)
+            return "stashsha" if "stash" in a else ""  # the tree is dirty
+
+        with mock.patch.object(update_git, "git", fake_git):
+            head_ref, stash_ref = update_git.rescue_ref()
+        self.assertTrue(head_ref.endswith("-head"))
+        self.assertTrue(stash_ref and not stash_ref.endswith("-head"))
+        parked = [c[1] for c in calls if c and c[0] == "update-ref"]
+        self.assertIn(head_ref, parked)
+        self.assertIn(stash_ref, parked)
+
 
 class TestRunInstallerHardening(unittest.TestCase):
     def test_interval_env_is_dropped_so_config_env_wins(self):

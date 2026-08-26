@@ -246,10 +246,15 @@ def _run(args, feed=None):
 
 
 def _metric(key, label, short, raw) -> Metric:
+    # `or <default>` rather than `.get(key, default)`: cswap emits an explicit
+    # null for a metric it has no reading for yet, and the two-arg .get only
+    # substitutes an ABSENT key, so float(None)/str(None) would otherwise
+    # crash the whole snapshot parse. The sibling codex.py parser guards the
+    # identical fields the same way.
     return Metric(key=key, label=label, short=short,
-                  pct=float(raw.get("pct", 0.0)),
-                  resets_at=raw.get("resetsAt", ""),
-                  countdown=raw.get("countdown", ""))
+                  pct=float(raw.get("pct") or 0.0),
+                  resets_at=raw.get("resetsAt") or "",
+                  countdown=raw.get("countdown") or "")
 
 
 def snapshot_stamp(accounts) -> str:
@@ -295,9 +300,9 @@ def parse_snapshot(text: str) -> Snapshot:
     for raw in data.get("accounts", []):
         usage = raw.get("usage")
         status = raw.get("usageStatus") or ""
-        acct = Account(number=int(raw.get("number", 0)),
-                       email=raw.get("email", "?"),
-                       org=raw.get("organizationName", ""),
+        acct = Account(number=int(raw.get("number") or 0),
+                       email=raw.get("email") or "?",
+                       org=raw.get("organizationName") or "",
                        active=bool(raw.get("active", False)),
                        ok=status == "ok" and isinstance(usage, dict),
                        status=status,

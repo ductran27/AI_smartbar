@@ -512,7 +512,12 @@ class Tray:
         log.error("no terminal emulator found for `cswap tui`")
         self.controller.action_error = ("No terminal emulator found — run "
                                         "`cswap tui` in a shell")
-        self.refresh_panel()
+        # refresh_panel() dereferences self.popover, which is legitimately
+        # None when the popover failed to build (_make_popover is "never
+        # fatal"). Every other touch of it in this file is guarded; this one
+        # was not. The error still reaches the menu fallback either way.
+        if self.has_panel:
+            self.refresh_panel()
 
     def _quit(self):
         """Deliberate quit: stop being counted before going away."""

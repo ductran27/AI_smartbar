@@ -182,8 +182,8 @@ install_updater() {
     fi
   fi
   if command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-    mkdir -p "$UNITS"
-    cat > "$UNITS/ai-smartbar-update.service" <<EOF
+    mkdir -p "$UNITS" || return 1
+    cat > "$UNITS/ai-smartbar-update.service" <<EOF || return 1
 [Unit]
 Description=AI smartbar self-update
 [Service]
@@ -195,7 +195,7 @@ Environment=PATH=$AGENT_PATH
 Environment=SMARTBAR_UPDATE_CHANNEL=$CHANNEL${CONFIG_SYSTEMD}
 ExecStart=$REPO/bin/ai-smartbar --update
 EOF
-    cat > "$UNITS/ai-smartbar-update.timer" <<EOF
+    cat > "$UNITS/ai-smartbar-update.timer" <<EOF || return 1
 [Unit]
 Description=AI smartbar update check
 [Timer]

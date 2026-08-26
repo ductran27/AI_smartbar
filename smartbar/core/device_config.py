@@ -65,6 +65,18 @@ _BAD_VALUE_WIN = re.compile(r"[\x00-\x1f\x7f]")
 _XML = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
 
 
+def _strip_comment(value: str) -> str:
+    """Drop an unquoted trailing "# comment".
+
+    .env convention: `90  # faster` means the value 90, and the tail used to
+    become part of it (breaking the int() parse and silently falling back to
+    the default). A `#` with no space before it stays content (labels like
+    "box#3").
+    """
+    cut = value.find(" #")
+    return value[:cut].rstrip() if cut >= 0 else value
+
+
 def parse(text: str, *, windows: bool = False):
     """(settings, problems) — the accepted keys, and why anything was dropped.
 
@@ -100,16 +112,20 @@ def parse(text: str, *, windows: bool = False):
             continue
         # Quoting a value is the natural thing to write in a .env file, so
         # accept it and unwrap rather than treating the quotes as content.
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        # The closing quote is found by scanning FROM THE FRONT, not by
+        # looking at the last character: a quoted value may carry a trailing
+        # inline "# comment", whose final character is part of the comment,
+        # not the closing quote. Testing value[-1] there left the quotes on
+        # the value, which then tripped _BAD_VALUE and silently dropped an
+        # otherwise-valid setting.
+        if value[:1] in ("\"", "'"):
+            close = value.find(value[0], 1)
+            if close != -1:
+                value = value[1:close]
+            else:
+                value = _strip_comment(value)  # a lone opening quote: not quoted
         else:
-            # An unquoted trailing "# comment" is .env convention, and it
-            # used to become part of the value ("90  # faster" broke the
-            # int() parse and silently fell back to the default). A # with
-            # no space before it stays content (labels like "box#3").
-            cut = value.find(" #")
-            if cut >= 0:
-                value = value[:cut].rstrip()
+            value = _strip_comment(value)
         if not KEY_RE.match(key):
             problems.append(
                 "line %d: %r is not a SMARTBAR_* setting" % (number, key))

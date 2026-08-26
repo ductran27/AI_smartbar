@@ -658,6 +658,37 @@ class TestBuildMenuAccountRows(GuiStubbedTestCase):
         tray._on_switch.assert_called_once_with(3)
 
 
+class TestBuildMenuOpenAIRows(GuiStubbedTestCase):
+    """_build_menu's fallback (popover is None) must also list OpenAI/ChatGPT
+    accounts as read-only rows -- the same block linux/tray.py's fallback has.
+    Windows dropped them entirely, so a Windows device that fell back to the
+    text menu never saw its ChatGPT usage at all."""
+
+    def test_openai_accounts_appear_as_readonly_rows_in_the_fallback_menu(self):
+        from smartbar.core import model as core_model
+
+        mod = _reimport("smartbar.windows.tray")
+        active = core_model.Account(number=1, email="active@example.com",
+                                    active=True)
+        openai = core_model.Account(number=0, email="chatgpt@example.com",
+                                    provider="openai")
+        snapshot = core_model.Snapshot(accounts=[active], openai=[openai])
+
+        with mock.patch.object(mod.update_core, "enabled", return_value=False):
+            tray = _bare_tray(mod, snapshot=snapshot)
+            tray.popover = None
+            menu = tray._build_menu()
+
+        by_text = {item.text: item for item in menu.items
+                   if item is not mod.pystray.Menu.SEPARATOR}
+        openai_row = mod.model.menu_row(openai)
+        self.assertIn("OpenAI", by_text)
+        self.assertIn(openai_row, by_text)
+        # Read-only: no switcher exists for ChatGPT logins.
+        self.assertFalse(by_text["OpenAI"].enabled)
+        self.assertFalse(by_text[openai_row].enabled)
+
+
 class TestIconRequestsTargetPixelSize(GuiStubbedTestCase):
     """set_icon must ask render_pills to draw at the tray's own target
     pixel size via `scale=`, not accept the historical 6x-bitmap default

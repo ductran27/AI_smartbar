@@ -744,11 +744,21 @@ def run_once(*, reset: bool = False, force: bool = False,
                f"{plan.target_ref}: could not check out — {str(exc)[:110]} "
                f"(attempt {streak} of {update.MAX_REF_FAILURES})")
         return 1
-    if rescue:
-        log.warning("local work parked — recover with: git stash apply %s", rescue)
-    elif reset and repo.dirty:
-        log.error("--reset could not park local changes (git stash create "
-                  "failed); they are gone")
+    if reset:
+        # Two kinds of local work, two recovery verbs — a commit ref is not a
+        # stash, so `git stash apply <head_ref>` would just fail. Report each
+        # only when that kind of work actually existed.
+        head_ref, stash_ref = rescue
+        if repo.unpushed:
+            log.warning("unpushed commits parked before --reset — recover with: "
+                        "git branch smartbar-recovered %s", head_ref)
+        if repo.dirty:
+            if stash_ref:
+                log.warning("uncommitted changes parked before --reset — recover "
+                            "with: git stash apply %s", stash_ref)
+            else:
+                log.error("--reset could not park local changes (git stash create "
+                          "failed); they are gone")
 
     failure = ""
     for key in targets:

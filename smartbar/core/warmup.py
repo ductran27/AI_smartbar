@@ -173,12 +173,3 @@ def prune_state(state: dict, current_emails, now) -> None:
         entries = state.get(section, {})
         for email in [e for e in entries if e not in known]:
             del entries[email]
-
-
-def warmed_successfully(account, now) -> bool:
-    """Post-ping verification: the 5h window is now running."""
-    metric = five_hour_metric(account)
-    if metric is None:
-        return False
-    resets = parse_iso(metric.resets_at)
-    return resets is not None and resets > now
