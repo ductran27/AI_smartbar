@@ -317,9 +317,12 @@ class TestRefreshLayoutHeightCap(GuiStubbedTestCase):
         popover.rebuild = _rebuild(theme_mod, height=1100.0)
         popover.refresh_layout()
         self.assertEqual(popover.geometry(), "330x500")
-        # Bound on the focused TOPLEVEL (audit B12): Tk 8.6 routes wheel
-        # events to the focus window, so a canvas binding never fired.
+        # Bound on the focused TOPLEVEL (audit B12) AND the canvas: Tk 8.6
+        # routes wheel events to the focus window (the Toplevel, for a
+        # popover), but a pin never takes focus, so the canvas binding is what
+        # makes a pinned panel scrollable via hover delivery.
         self.assertIn("<MouseWheel>", popover._bindings)
+        self.assertIn("<MouseWheel>", popover.canvas._bindings)
 
     def test_shrinking_back_below_the_cap_unbinds_wheel_and_resets_scroll(self):
         mod = _reimport("smartbar.windows.popover_window")
@@ -351,6 +354,30 @@ class TestMouseWheelScroll(GuiStubbedTestCase):
         popover = mod.Popover(lambda hover: None, lambda name: None)
         popover._on_scroll(types.SimpleNamespace(delta=-120))
         self.assertEqual(popover.canvas.scroll_calls, [(1, "units")])
+
+    def test_scroll_handler_breaks_so_a_dual_binding_fires_once(self):
+        # _on_scroll is bound on both the canvas and the Toplevel; it returns
+        # "break" so a canvas-delivered wheel event does not also bubble to
+        # the Toplevel binding and scroll a second time.
+        mod = _reimport("smartbar.windows.popover_window")
+        popover = mod.Popover(lambda hover: None, lambda name: None)
+        result = popover._on_scroll(types.SimpleNamespace(delta=-120))
+        self.assertEqual(result, "break")
+
+    def test_a_pinned_overflowing_panel_scrolls_without_focus(self):
+        # The FINDING: a pin never takes focus (show_panel skips
+        # focus_force), so the focus-routed Toplevel binding alone could
+        # never fire for it — its lower cards were unreachable. The canvas
+        # binding is what lets a pinned+overflowing panel scroll via Windows'
+        # hover-scroll delivery.
+        mod = _reimport("smartbar.windows.popover_window")
+        theme_mod = mod.t
+        popover = mod.Popover(lambda hover: None, lambda name: None,
+                              pinned=True)
+        popover._max_panel_height_px = lambda: 500
+        popover.rebuild = _rebuild(theme_mod, height=1100.0)
+        popover.refresh_layout()
+        self.assertIn("<MouseWheel>", popover.canvas._bindings)
 
 
 class TestHitTestingUsesCanvasCoordinates(GuiStubbedTestCase):
