@@ -359,9 +359,14 @@ def _session_pids(procs, table) -> set:
 
 
 def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
-               history) -> dict:
+               history, mem_history=None) -> dict:
     """Turn one sample into the FINAL display payload the renderers draw and
-    Swift decodes verbatim. Every string is formed here; no consumer maps."""
+    Swift decodes verbatim. Every string is formed here; no consumer maps.
+
+    `history` and `mem_history` are the projected 60-minute series (see
+    history_series) for CPU and memory — the same shape, so both draw as the
+    same trend chart. mem_history is optional only so older callers that
+    predate the memory trend keep working; the runner always supplies it."""
     table = {p.pid: p for p in procs}
     sessions = _session_pids(procs, table)
 
@@ -535,10 +540,8 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
     if comp:
         mem_caption += f" · {comp / 2**30:.1f} GB compressed"
 
-    hist = list(history)
-    present = [p for p in hist if p is not None]
-    peak = max(present) if present else 0
-    last = present[-1] if present else 0
+    cpu_hist = history_block(history)
+    mem_hist = history_block(mem_history if mem_history is not None else [])
 
     load0, load1, load2 = (list(load) + [0, 0, 0])[:3]
     machine_caption = (f"{len(cores)} cores · {total_gb:.0f} GB · "
@@ -548,8 +551,9 @@ def build_view(procs, cores, mem, load, prev_cpu, now, my_uid, own_pids,
         "sampledAt": now.strftime("%H:%M"),
         "machine": {"caption": machine_caption},
         "cpu": {"pct": cpu_pct, "cores": folded_cores, "caption": cpu_caption},
-        "history": {"pct": hist, "peakText": f"peak {peak}%", "lastPct": last},
-        "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption},
+        "history": cpu_hist,
+        "mem": {"pct": mem.get("pct", 0.0), "caption": mem_caption,
+                "history": mem_hist},
         "leftovers": {"chip": chip, "rows": left_rows[:PROC_ROWS_CAP],
                       "more": more,
                       "burning": len(burning_rows),
@@ -591,6 +595,18 @@ def history_series(ring, now_minute: int, span: int = HISTORY_LEN) -> list:
     by_minute = dict(ring)
     start = now_minute - span + 1
     return [by_minute.get(start + i) for i in range(span)]
+
+
+def history_block(series) -> dict:
+    """The trend-chart payload for one 60-minute series: the samples plus the
+    peak and latest readings the row shows. CPU and memory build the same
+    block from the same shape, so both draw (and Swift decodes) as one chart.
+    A None (a missing minute) counts for neither peak nor last."""
+    points = list(series)
+    present = [p for p in points if p is not None]
+    peak = max(present) if present else 0
+    last = present[-1] if present else 0
+    return {"pct": points, "peakText": f"peak {peak}%", "lastPct": last}
 
 
 def autokill_targets(rows, first_seen, now_monotonic: float) -> list:

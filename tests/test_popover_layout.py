@@ -40,6 +40,10 @@ def boxes(built):
     return [s for s in built.shapes if isinstance(s, t.Box)]
 
 
+def areas(built):
+    return [s for s in built.shapes if isinstance(s, t.Area)]
+
+
 def bars(built):
     """Bar track/fill boxes, picked by height so button boxes can't be
     mistaken for them (indices shift with the ACTIVE chip / switch button)."""
@@ -1230,7 +1234,9 @@ def system_payload(burning=True):
                 "caption": "13 claude · 1141 procs"},
         "history": {"pct": [10, None, 84, 91, 12], "peakText": "peak 91%",
                     "lastPct": 12},
-        "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed"},
+        "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed",
+                "history": {"pct": [50, None, 58, 61, 55],
+                            "peakText": "peak 61%", "lastPct": 55}},
         "leftovers": {
             "chip": "1 burning · 5.8 cores" if burning else "1 leftover",
             "more": 0, "foot": "Auto-kill off · junk rules: 5",
@@ -1282,14 +1288,29 @@ class TestSystemTab(unittest.TestCase):
         # Busy folds same-name processes, so the count rides in the label.
         self.assertTrue(any(label.startswith("Firefox") for label in text))
 
-    def test_per_core_and_history_columns_are_drawn(self):
+    def test_per_core_strip_is_bars_and_the_two_histories_are_trend_charts(self):
+        # The grammar: per-core CPU is a snapshot across space, so it stays a
+        # strip of Boxes; the CPU and memory histories are values over time, so
+        # each is one Area chart (not a column of bars).
         built = layout.build(snap(account(active=True)), provider="system",
                              system=system_payload(), now=NOW)
         cores = [b for b in boxes(built) if abs(b.h - t.SYS_CORES_H) < 0.01]
         # one track + one fill per non-zero core; at least one per core column
         self.assertGreaterEqual(len(cores), 4)
-        hist = [b for b in boxes(built) if abs(b.h - t.SYS_HIST_H) < 0.01]
-        self.assertGreaterEqual(len(hist), 5)
+        # Exactly two trend charts (CPU history + memory), both the same height,
+        # and the history is no longer drawn as bars.
+        trends = [a for a in areas(built) if abs(a.h - t.SYS_HIST_H) < 0.01]
+        self.assertEqual(len(trends), 2)
+        self.assertEqual([a.values for a in trends],
+                         [[10, None, 84, 91, 12], [50, None, 58, 61, 55]])
+        self.assertTrue(all(a.stops for a in trends))
+        self.assertFalse([b for b in boxes(built)
+                          if abs(b.h - t.SYS_HIST_H) < 0.01])
+        # A trend chart, like every shape, stays inside the panel.
+        for a in areas(built):
+            self.assertGreaterEqual(round(a.x, 3), 0)
+            self.assertLessEqual(round(a.x + a.w, 3), built.width)
+            self.assertLessEqual(round(a.y + a.h, 3), built.height)
 
     def test_kill_target_appears_only_on_hover(self):
         payload = system_payload()

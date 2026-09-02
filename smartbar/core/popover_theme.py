@@ -206,15 +206,29 @@ FOOTER_H = 25.5
 ICON_BUTTON_W = 27.5
 
 # --- System tab (machine vitals + process rows) ----------------------------
-# Per-core CPU and the 60-minute history are drawn as Boxes — one filled
-# column each — so the three painters need no new shape kind for a "graph";
-# an htop meter IS a bar, and a btop history IS a column of bars. Each column
-# takes the used-ramp colour of its own value, so the panel keeps its one
-# rule: saturation only ever means "how much is spent".
+# Two shapes carry two different questions, and the split is deliberate:
+#
+#  * Per-core CPU is a snapshot ACROSS SPACE — one column per core, right now —
+#    so it stays a strip of Boxes (an htop meter IS a bar). Each column takes
+#    the used-ramp colour of its own value.
+#  * The 60-minute CPU and memory histories are one value OVER TIME, so they
+#    are Area charts: a filled trend under a stroked top edge, the way
+#    Activity Monitor draws a load graph. The fill is a VERTICAL used-ramp
+#    gradient (green low, amber, red high), so the curve's height at any
+#    minute sits at exactly the colour a bar of that value would be — the
+#    Area is the old column strip made continuous, and the panel keeps its
+#    one rule: saturation only ever means "how much is spent".
+#
+# Bars-for-space, a line-for-time is also how the eye tells the two apart at a
+# glance without reading a label.
 SYS_CORES_H = 22.0         # height of the per-core column strip
 SYS_CORE_GAP = 2.0         # gap between core columns
-SYS_HIST_H = 34.0          # height of the 60-minute history strip
-SYS_HIST_GAP = 1.0         # gap between history columns
+SYS_HIST_H = 34.0          # height of a 60-minute trend chart (CPU and memory)
+SYS_AREA_RADIUS = 3.0      # corner radius of a trend chart's track panel
+SYS_AREA_LINE = 1.5        # stroke width of the trend's top edge
+SYS_AREA_FILL_ALPHA = 0.32  # the fill is a wash under a full-strength edge, so
+                            # the ramp reads as a glow and the top line stays
+                            # the crisp, unambiguous readout of the value
 SYS_ROW_H = 26.0           # one-line process row (Busy: name · meta · ✕)
 SYS_ROW_TALL = 38.0        # two-line leftover row: name+meta, then sub below
 SYS_MAX_CORES = 32         # cores past this are averaged into columns (model)
@@ -430,6 +444,34 @@ class Box:
     fill: tuple = None
     stroke: tuple = None
     line_width: float = 1.0
+
+
+@dataclass
+class Area:
+    """A value-over-time trend chart: a rounded track panel, the area under
+    the sampled curve filled with a vertical gradient, and the curve's top
+    edge stroked in that same gradient.
+
+    `values` are 0..100 (or None), oldest first, mapped evenly left→right so
+    the newest sample sits at the right edge — time flows the one way on every
+    render. A None is an honest gap: the curve BREAKS there (the run splits)
+    and only the track shows, never a line smeared across missing minutes.
+
+    `stops` is the vertical gradient as [(offset, rgba)] with offset 0 at the
+    BOTTOM (value 0) and 1 at the top (value 100); the layout builds it from
+    the shared used-ramp so both painters glow the same colour at the same
+    height. `track` is the empty-panel fill. Colours live on the shape (never
+    a painter default) for the same reason Label.color does — the appearance
+    is baked in when the layout is built."""
+    x: float
+    y: float
+    w: float
+    h: float
+    values: list
+    stops: list
+    track: tuple
+    line_width: float = SYS_AREA_LINE
+    radius: float = SYS_AREA_RADIUS
 
 
 @dataclass

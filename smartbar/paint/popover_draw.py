@@ -91,6 +91,82 @@ def _draw_dot(ctx, dot) -> None:
     ctx.new_path()
 
 
+def _area_gradient(area, alpha: float):
+    """A vertical cairo gradient from the shape's shared ramp stops (offset 0
+    at the bottom), scaled by `alpha` — full strength for the edge, a wash for
+    the fill."""
+    grad = cairo.LinearGradient(0, area.y + area.h, 0, area.y)  # bottom → top
+    for offset, (red, green, blue, a) in area.stops:
+        grad.add_color_stop_rgba(offset, red, green, blue, a * alpha)
+    return grad
+
+
+def _draw_area(ctx, area) -> None:
+    """A value-over-time trend: a rounded track, the area under the sampled
+    curve washed in the used-ramp gradient, and the curve's top edge stroked
+    in that ramp at full strength. Samples map evenly left→right (newest at the
+    right edge); a None BREAKS the run so a gap shows only the track, never a
+    line smeared across minutes that were never sampled."""
+    rounded_rect(ctx, area.x, area.y, area.w, area.h, area.radius)
+    _set(ctx, area.track)
+    ctx.fill()
+    ctx.new_path()
+
+    values = area.values
+    count = len(values)
+    if count == 0:
+        return
+    baseline = area.y + area.h
+
+    def px(i):
+        return area.x + (area.w * i / (count - 1) if count > 1 else area.w / 2)
+
+    def py(value):
+        return baseline - area.h * max(0.0, min(100.0, value)) / 100.0
+
+    # Consecutive present samples; the curve is one run per unbroken stretch.
+    runs, run = [], []
+    for i, value in enumerate(values):
+        if value is None:
+            if run:
+                runs.append(run)
+                run = []
+        else:
+            run.append((i, value))
+    if run:
+        runs.append(run)
+
+    fill = _area_gradient(area, t.SYS_AREA_FILL_ALPHA)
+    edge = _area_gradient(area, 1.0)
+    ctx.save()
+    rounded_rect(ctx, area.x, area.y, area.w, area.h, area.radius)
+    ctx.clip()                                   # keep fill/edge in the panel
+    ctx.set_line_width(area.line_width)
+    ctx.set_line_join(cairo.LINE_JOIN_ROUND)
+    ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+    for run in runs:
+        if len(run) == 1:                        # an isolated minute: a dot
+            i, value = run[0]
+            ctx.set_source(edge)
+            ctx.arc(px(i), py(value), area.line_width, 0, TAU)
+            ctx.fill()
+            ctx.new_path()
+            continue
+        ctx.move_to(px(run[0][0]), baseline)
+        for i, value in run:
+            ctx.line_to(px(i), py(value))
+        ctx.line_to(px(run[-1][0]), baseline)
+        ctx.close_path()
+        ctx.set_source(fill)
+        ctx.fill()
+        for order, (i, value) in enumerate(run):
+            (ctx.line_to if order else ctx.move_to)(px(i), py(value))
+        ctx.set_source(edge)
+        ctx.stroke()
+        ctx.new_path()
+    ctx.restore()
+
+
 def _split_long_word(ctx, word: str, max_width: float) -> list:
     """A single token wider than the line, character-split into fitting
     chunks — SwiftUI's Text does this, and without it an unbroken path in
@@ -354,6 +430,8 @@ def draw(layout, ctx, background=None, radius: float = 14.0) -> None:
     for shape in layout.shapes:
         if isinstance(shape, t.Box):
             _draw_box(ctx, shape)
+        elif isinstance(shape, t.Area):
+            _draw_area(ctx, shape)
         elif isinstance(shape, t.Dot):
             _draw_dot(ctx, shape)
         elif isinstance(shape, t.Label):

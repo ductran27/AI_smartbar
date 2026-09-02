@@ -66,23 +66,11 @@ struct SystemView: View {
             }
             vitalRow(label: "60 min", caption: payload.history.peakText,
                      value: "\(payload.history.lastPct)%") {
-                HStack(spacing: 1) {
-                    ForEach(Array(payload.history.pct.enumerated()),
-                            id: \.offset) { _, value in
-                        columnBar(pct: value.map(Double.init), height: 34)
-                    }
-                }
+                TrendChart(values: payload.history.pct)
             }
             vitalRow(label: "MEM", caption: payload.mem.caption,
                      value: "\(Int(payload.mem.pct.rounded()))%") {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(palette.barTrack)
-                        Capsule().fill(ramp(payload.mem.pct))
-                            .frame(width: max(7.5, geo.size.width
-                                              * min(payload.mem.pct, 100) / 100))
-                    }
-                }.frame(height: 7.5)
+                TrendChart(values: payload.mem.history.pct)
             }
         }
     }
@@ -282,5 +270,131 @@ struct SystemView: View {
             .background(RoundedRectangle(cornerRadius: 15.5).fill(palette.cardBG))
             .overlay(RoundedRectangle(cornerRadius: 15.5)
                 .stroke(palette.cardBorder, lineWidth: 1))
+    }
+}
+
+// MARK: - trend chart
+
+/// A 60-minute history as a filled area chart — the time-over counterpart to
+/// the per-core bar strip, and the same instrument the cairo painter draws
+/// (popover_draw._draw_area / the System note in popover_theme.py). The area
+/// under the curve is washed in the vertical used-ramp gradient and the top
+/// edge is stroked in that same ramp, so the curve's height reads in exactly
+/// the colour a bar of that value would: the panel keeps its one rule, that
+/// colour only ever means "how much is spent". Samples map evenly left→right
+/// (newest at the right edge); a nil is an honest gap that breaks the curve.
+///
+/// Geometry mirrors popover_theme: SYS_HIST_H 34, SYS_AREA_RADIUS 3,
+/// SYS_AREA_LINE 1.5, SYS_AREA_FILL_ALPHA 0.32.
+struct TrendChart: View {
+    let values: [Int?]
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: Palette { Palette.of(colorScheme) }
+
+    // Colour 0 at the bottom (value 0) to 1 at the top (value 100), built from
+    // the SAME thresholds and status colours the bars use — no rule of its
+    // own. Capped at critical: "full" purple is a discrete "limit spent" state
+    // for an account pill, not a band a CPU/memory line climbs through.
+    private var rampStops: [Gradient.Stop] {
+        func ink(_ status: Status) -> Color { status.color(in: colorScheme) }
+        return [.init(color: ink(.green), location: 0),
+                .init(color: ink(.yellow), location: Thresholds.yellow / 100),
+                .init(color: ink(.low), location: Thresholds.low / 100),
+                .init(color: ink(.critical), location: Thresholds.red / 100),
+                .init(color: ink(.critical), location: 1)]
+    }
+
+    private var gradient: LinearGradient {
+        LinearGradient(stops: rampStops, startPoint: .bottom, endPoint: .top)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 3).fill(palette.barTrack)
+            gradient.opacity(0.32).mask(TrendArea(values: values))
+            gradient.mask(TrendLine(values: values).stroke(
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round,
+                                   lineJoin: .round)))
+        }
+        .frame(height: 34)
+        .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+/// Consecutive present samples as [(index, value)] runs — the curve is one run
+/// per unbroken stretch, so a gap simply ends a run and starts the next.
+private func trendRuns(_ values: [Int?]) -> [[(Int, Double)]] {
+    var runs: [[(Int, Double)]] = []
+    var run: [(Int, Double)] = []
+    for (index, value) in values.enumerated() {
+        if let value {
+            run.append((index, Double(value)))
+        } else if !run.isEmpty {
+            runs.append(run)
+            run = []
+        }
+    }
+    if !run.isEmpty { runs.append(run) }
+    return runs
+}
+
+private func trendX(_ index: Int, count: Int, in rect: CGRect) -> CGFloat {
+    count > 1 ? rect.minX + rect.width * CGFloat(index) / CGFloat(count - 1)
+              : rect.midX
+}
+
+private func trendY(_ value: Double, in rect: CGRect) -> CGFloat {
+    rect.maxY - rect.height * CGFloat(min(max(value, 0), 100) / 100)
+}
+
+/// The area under each run, closed down to the baseline (filled by the wash).
+private struct TrendArea: Shape {
+    let values: [Int?]
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let count = values.count
+        for run in trendRuns(values) where run.count >= 2 {
+            path.move(to: CGPoint(x: trendX(run[0].0, count: count, in: rect),
+                                  y: rect.maxY))
+            for (index, value) in run {
+                path.addLine(to: CGPoint(
+                    x: trendX(index, count: count, in: rect),
+                    y: trendY(value, in: rect)))
+            }
+            path.addLine(to: CGPoint(
+                x: trendX(run[run.count - 1].0, count: count, in: rect),
+                y: rect.maxY))
+            path.closeSubpath()
+        }
+        return path
+    }
+}
+
+/// The curve's top edge (stroked at full strength). An isolated minute between
+/// gaps has no line, so it is drawn as a small dot instead.
+private struct TrendLine: Shape {
+    let values: [Int?]
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let count = values.count
+        for run in trendRuns(values) {
+            if run.count == 1 {
+                let point = CGPoint(
+                    x: trendX(run[0].0, count: count, in: rect),
+                    y: trendY(run[0].1, in: rect))
+                path.addEllipse(in: CGRect(x: point.x - 1.5, y: point.y - 1.5,
+                                           width: 3, height: 3))
+                continue
+            }
+            for (order, sample) in run.enumerated() {
+                let point = CGPoint(
+                    x: trendX(sample.0, count: count, in: rect),
+                    y: trendY(sample.1, in: rect))
+                if order == 0 { path.move(to: point) }
+                else { path.addLine(to: point) }
+            }
+        }
+        return path
     }
 }

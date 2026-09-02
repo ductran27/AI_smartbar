@@ -72,6 +72,22 @@ class TestSystemViewDecodesTheSharedShape(unittest.TestCase):
                        "struct SysCPU", "struct SysHistory"):
             self.assertIn(symbol, models)
 
+    def test_memory_carries_a_history_of_the_same_shape_as_cpu(self):
+        # Memory now has its own 60-minute trend, decoded as the same
+        # SysHistory the CPU history uses (core/sysmon emits both from
+        # history_block), so both draw as one chart.
+        models = _swift("Models.swift")
+        mem = models.split("struct SysMem", 1)[1].split("}", 1)[0]
+        self.assertIn("history: SysHistory", mem)
+
+    def test_the_two_histories_draw_as_trend_charts_not_bars(self):
+        # Swift maps nothing: it lays the payload out. The 60-minute CPU and
+        # memory rows are the TrendChart (an area chart), the time-over-time
+        # counterpart to the per-core bar strip.
+        view = _swift("SystemView.swift")
+        self.assertIn("TrendChart(values: payload.history.pct)", view)
+        self.assertIn("TrendChart(values: payload.mem.history.pct)", view)
+
     def test_stream_stops_when_the_tab_leaves(self):
         # The stream must be tied to the view's lifetime so a closed popover
         # never leaves a sampler running — the exact leak this feature exists

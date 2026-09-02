@@ -32,7 +32,9 @@ _SYS_DEMO = {
             "caption": "13 claude · 1141 procs"},
     "history": {"pct": [10, None, 84, 91, 12], "peakText": "peak 91%",
                 "lastPct": 12},
-    "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed"},
+    "mem": {"pct": 54.9, "caption": "34.8 / 64 GB · 2.3 GB compressed",
+            "history": {"pct": [50, None, 58, 61, 55], "peakText": "peak 61%",
+                        "lastPct": 55}},
     "leftovers": {"chip": "1 burning · 5.8 cores", "more": 0,
                   "foot": "Auto-kill off · junk rules: 5",
                   "rows": [{"token": "100:1000", "kind": "junk",
@@ -209,6 +211,45 @@ class TestSystemPreview(unittest.TestCase):
         for key in ("cpu", "mem", "history", "leftovers", "busy"):
             self.assertIn(key, payload)
         self.assertTrue(payload["leftovers"]["rows"])
+        # Memory carries its own trend, so the preview actually draws one.
+        self.assertIn("history", payload["mem"])
+        self.assertTrue(payload["mem"]["history"]["pct"])
+
+
+@unittest.skipIf(cairo is None, "pycairo not installed")
+class TestAreaChart(unittest.TestCase):
+    """_draw_area's branches: a normal run, a gap that breaks the curve, an
+    isolated minute (drawn as a dot), a single sample, and an all-gap series —
+    every one must render without raising."""
+
+    _STOPS = [(0.0, (0.24, 0.75, 0.55, 1.0)), (0.5, (0.85, 0.65, 0.29, 1.0)),
+              (1.0, (0.85, 0.33, 0.31, 1.0))]
+    _TRACK = (1.0, 1.0, 1.0, 0.09)
+
+    def _render(self, values):
+        from smartbar.paint import popover_draw
+        area = t.Area(10, 10, 300, 34, values, self._STOPS, self._TRACK)
+        built = t.Layout(width=320, height=54, shapes=[area])
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 320, 54)
+        popover_draw.draw(built, cairo.Context(surface))
+
+    def test_a_continuous_run_renders(self):
+        self._render([5, 20, 55, 91, 40, 12])
+
+    def test_a_gap_breaks_the_run(self):
+        self._render([80, 90, None, None, 10, 15])
+
+    def test_an_isolated_minute_between_gaps_renders(self):
+        self._render([None, 42, None, 88, None])
+
+    def test_a_single_sample_renders(self):
+        self._render([73])
+
+    def test_an_all_gap_series_is_just_the_track(self):
+        self._render([None, None, None])
+
+    def test_an_empty_series_is_just_the_track(self):
+        self._render([])
 
     def test_preview_renders_the_system_tab(self):
         from smartbar.paint.popover_preview import render
