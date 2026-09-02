@@ -66,8 +66,25 @@ class TestBackgroundTick(RunnerBase):
         sysmon_runner.background_tick()
         state = sysmon_runner.load_state()
         self.assertIn("history", state)
+        # The memory trend persists in its own bounded ring beside CPU's.
+        self.assertIn("memHistory", state)
         self.assertTrue(os.path.exists(
             os.path.join(self.tmp, "sysmon-state.json")))
+
+    def test_both_rings_stay_bounded_to_history_len(self):
+        # The long-run / OOM guarantee: no matter how many minutes accrue,
+        # neither ring can exceed HISTORY_LEN, so the state file and this
+        # process's memory stay flat. Seed both rings already at the cap with
+        # distinct past minutes, tick once, and they are still exactly capped.
+        cap = sysmon.HISTORY_LEN
+        seeded = {"history": [[m, 1] for m in range(cap)],
+                  "memHistory": [[m, 1] for m in range(cap)],
+                  "prevCpu": {}, "firstSeen": {}}
+        sysmon_runner.save_state(seeded)
+        sysmon_runner.background_tick()
+        state = sysmon_runner.load_state()
+        self.assertEqual(len(state["history"]), cap)
+        self.assertEqual(len(state["memHistory"]), cap)
 
     def test_history_grows_across_ticks(self):
         sysmon_runner.background_tick()
@@ -162,11 +179,14 @@ class TestSwiftPayloadContract(RunnerBase):
         self.assertTrue(all(isinstance(c, int) for c in view["cpu"]["cores"]))
         self.assertIsInstance(view["cpu"]["caption"], str)
         # SysHistory: pct [Int?], peakText String, lastPct Int
-        for point in view["history"]["pct"]:
-            self.assertTrue(point is None or isinstance(point, int))
-        self.assertIsInstance(view["history"]["lastPct"], int)
-        # SysMem: pct Double, caption String
+        for history in (view["history"], view["mem"]["history"]):
+            for point in history["pct"]:
+                self.assertTrue(point is None or isinstance(point, int))
+            self.assertIsInstance(history["lastPct"], int)
+            self.assertIsInstance(history["peakText"], str)
+        # SysMem: pct Double, caption String, history SysHistory
         self.assertIsInstance(view["mem"]["pct"], (int, float))
+        self.assertIsInstance(view["mem"]["caption"], str)
         # SysGroup + ProcRow
         for group in ("leftovers", "busy"):
             for row in view[group]["rows"]:
@@ -189,6 +209,25 @@ class TestStream(RunnerBase):
         payload = json.loads(lines[0])
         self.assertTrue(payload["live"])
         self.assertIn("cpu", payload)
+        # The stream carries the memory trend for display like everything else.
+        self.assertIn("history", payload["mem"])
+
+    def test_stream_writes_no_state(self):
+        # The 1 s display stream must have no side effects: if it appended
+        # history it would write state 60× a minute and defeat the whole point
+        # of the ring being a once-a-minute, bounded record. A full iteration
+        # of the stream still creates no state file.
+        buffer = io.StringIO()
+        calls = {"n": 0}
+
+        def stop():
+            calls["n"] += 1
+            return calls["n"] > 1     # run one real iteration, then stop
+
+        sysmon_runner.stream(out=buffer, interval=0.0, stop=stop)
+        self.assertTrue(buffer.getvalue().strip())   # it did emit a sample
+        self.assertFalse(os.path.exists(
+            os.path.join(self.tmp, "sysmon-state.json")))
 
 
 if __name__ == "__main__":

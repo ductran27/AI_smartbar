@@ -362,6 +362,9 @@ struct SysHistory: Decodable, Equatable {
 struct SysMem: Decodable, Equatable {
     var pct: Double
     var caption: String
+    // Memory now carries its own 60-minute trend, the same SysHistory shape as
+    // CPU (core/sysmon.build_view), so both draw as one chart.
+    var history: SysHistory
 }
 
 struct SysGroup: Decodable, Equatable {

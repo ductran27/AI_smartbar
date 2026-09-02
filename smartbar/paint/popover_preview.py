@@ -112,10 +112,16 @@ def demo_system() -> dict:
            "pct": 54.4, "compressedBytes": 2 * 2**30 + 2**29}
     history = [70, 82, 88, 91, 84, 79, 85, None, None, 12, 10, 11, 9, 8, 10,
                12, 40, 55, 60, 45, 30, 20, 15, 13]
+    # Memory drifts, where CPU spikes: a gentler line that shares CPU's sleep
+    # gap (the machine was asleep those minutes for both), so the pair reads as
+    # one timeline and the trend chart is reviewable with real-looking data.
+    mem_history = [48, 50, 52, 55, 58, 60, 57, None, None, 44, 45, 46, 44, 43,
+                   45, 47, 50, 54, 56, 53, 50, 49, 52, 55]
     return sysmon.build_view(procs=procs, cores=cores, mem=mem,
                              load=(4.0, 5.7, 6.1), prev_cpu={},
                              now=datetime.now(timezone.utc), my_uid=501,
-                             own_pids=set(), history=history)
+                             own_pids=set(), history=history,
+                             mem_history=mem_history)
 
 
 def _pending() -> tuple:

@@ -312,7 +312,8 @@ class TestBuildView(unittest.TestCase):
                 "totalBytes": 32 * 2**30, "usedBytes": 17 * 2**30 + 2**29,
                 "pct": 54.9, "compressedBytes": 3 * 2**30},
             load=(5.2, 8.2, 23.4), prev_cpu=prev or {}, now=self.now,
-            my_uid=501, own_pids={9999}, history=[10, None, 84, 91, 12])
+            my_uid=501, own_pids={9999}, history=[10, None, 84, 91, 12],
+            mem_history=[50, None, 58, 61, 55])
 
     def test_leftovers_lists_orphan_junk_and_idle(self):
         view = self.view()
@@ -408,6 +409,26 @@ class TestBuildView(unittest.TestCase):
         view = self.view()
         self.assertEqual(view["mem"]["pct"], 54.9)
         self.assertIn("GB", view["mem"]["caption"])
+
+    def test_mem_history_is_the_same_block_shape_as_cpu(self):
+        # Memory carries its own trend, built by the same history_block, so
+        # both renderers draw (and Swift decodes) it as one chart shape.
+        view = self.view()
+        mem_hist = view["mem"]["history"]
+        self.assertEqual(mem_hist["pct"], [50, None, 58, 61, 55])
+        self.assertEqual(mem_hist["lastPct"], 55)
+        self.assertIn("61", mem_hist["peakText"])
+
+    def test_mem_history_absent_is_an_empty_block_not_a_crash(self):
+        # An older caller that passes no mem_history still gets a well-formed
+        # (empty) block rather than a missing key or an exception.
+        view = sysmon.build_view(
+            procs=[], cores=[1], mem={"totalBytes": 1, "usedBytes": 0,
+                                      "pct": 0.0},
+            load=(0, 0, 0), prev_cpu={}, now=self.now, my_uid=501,
+            own_pids=set(), history=[])
+        self.assertEqual(view["mem"]["history"],
+                         {"pct": [], "peakText": "peak 0%", "lastPct": 0})
 
     def test_history_block(self):
         view = self.view()

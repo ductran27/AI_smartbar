@@ -517,17 +517,42 @@ def _column_strip(shapes, s, x, y, w, values, height, gap):
                                 fill=s.status_rgba(model.color(value))))
 
 
+def _ramp_stops(s):
+    """The vertical used-ramp as gradient stops, offset 0 at the bottom (value
+    0) to 1 at the top (value 100). Built from the SAME thresholds and colours
+    the bars use (model.color), so a trend's height reads in exactly the ink a
+    bar of that value would — green climbing to amber to red. The ramp is
+    capped at critical: "full" purple is a discrete "limit spent" state for an
+    account pill, not a band a CPU/memory line passes through on its way up."""
+    yellow = model.yellow_threshold() / 100.0
+    low = model.low_threshold() / 100.0
+    red = model.red_threshold() / 100.0
+    return [(0.0, s.status_rgba("green")), (yellow, s.status_rgba("yellow")),
+            (low, s.status_rgba("low")), (red, s.status_rgba("critical")),
+            (1.0, s.status_rgba("critical"))]
+
+
+def _history_area(shapes, s, x, y, w, values, height):
+    """A 60-minute trend as an Area chart (see t.Area / popover_theme's System
+    note): the used-ramp gradient under a stroked top edge, on a track panel.
+    Shared by the CPU and memory histories so they are the one chart twice."""
+    shapes.append(t.Area(x, y, w, height, list(values), _ramp_stops(s),
+                         s.bar_track))
+
+
 def _vitals_card(shapes, s, system, top):
-    """The "This Mac" card: CPU total over a per-core strip, a 60-minute
-    history strip, and a memory bar — the machine's context for reading the
-    process lists below."""
+    """The "This Mac" card: CPU total over a per-core strip, then two 60-minute
+    trend charts — CPU history and memory — the machine's context for reading
+    the process lists below."""
     left, right = t.PAD, t.WIDTH - t.PAD
     inner_l, inner_r = left + t.CARD_PAD_H, right - t.CARD_PAD_H
     inner_w = inner_r - inner_l
     cpu, mem = system["cpu"], system["mem"]
     cpu_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.SYS_CORES_H
     hist_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.SYS_HIST_H
-    mem_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.BAR_H
+    # Memory is now its own trend chart, the same height as the CPU history —
+    # the two read as a matched pair rather than a chart over a lone bar.
+    mem_block = t.ROW_LABEL_H + t.ROW_LABEL_GAP + t.SYS_HIST_H
     height = (t.CARD_PAD_V * 2 + t.CARD_HEADER_H + t.CARD_INNER_GAP
               + cpu_block + t.ROW_GAP + hist_block + t.ROW_GAP + mem_block)
     shapes.append(t.Box(left, top, right - left, height, radius=t.CARD_RADIUS,
@@ -554,18 +579,18 @@ def _vitals_card(shapes, s, system, top):
     hist = system["history"]
     _metric_line(shapes, s, inner_l, inner_r, y, "60 min", hist["peakText"],
                  f"{hist['lastPct']}%")
-    _column_strip(shapes, s, inner_l, y + t.ROW_LABEL_H + t.ROW_LABEL_GAP,
-                  inner_w, hist["pct"], t.SYS_HIST_H, t.SYS_HIST_GAP)
+    _history_area(shapes, s, inner_l, y + t.ROW_LABEL_H + t.ROW_LABEL_GAP,
+                  inner_w, hist["pct"], t.SYS_HIST_H)
 
     y += hist_block + t.ROW_GAP
+    # Memory shows its GB caption and current %, with the 60-minute trend
+    # under it — the same chart as CPU history, so the two sit as a pair. The
+    # current reading is the row's own %, not the last minute's sample.
+    mem_hist = mem.get("history", {}).get("pct", [])
     _metric_line(shapes, s, inner_l, inner_r, y, "MEM", mem["caption"],
                  f"{round(mem['pct'])}%")
-    bar_y = y + t.ROW_LABEL_H + t.ROW_LABEL_GAP
-    shapes.append(t.Box(inner_l, bar_y, inner_w, t.BAR_H, radius=t.BAR_H / 2,
-                        fill=s.bar_track))
-    fill_w = max(t.BAR_H, inner_w * min(max(mem["pct"], 0.0), 100.0) / 100.0)
-    shapes.append(t.Box(inner_l, bar_y, fill_w, t.BAR_H, radius=t.BAR_H / 2,
-                        fill=s.status_rgba(model.color(mem["pct"]))))
+    _history_area(shapes, s, inner_l, y + t.ROW_LABEL_H + t.ROW_LABEL_GAP,
+                  inner_w, mem_hist, t.SYS_HIST_H)
     return height
 
 

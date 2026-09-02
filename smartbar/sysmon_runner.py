@@ -116,16 +116,27 @@ def _build(side_effects: bool):
         state = load_state()
         prev_cpu = {int(k): v for k, v in state.get("prevCpu", {}).items()}
         ring = [tuple(entry) for entry in state.get("history", [])]
+        # The memory trend rides a SECOND ring through the very same bounded
+        # append — cap HISTORY_LEN, one point a minute — so the state file (and
+        # this process's memory) stays flat no matter how long the app runs;
+        # a machine left on for a week holds 60 CPU points and 60 memory ones,
+        # never more. Old state predating the memory trend has no "memHistory"
+        # key and loads as an empty ring, which simply draws as gaps until it
+        # fills.
+        mem_ring = [tuple(entry) for entry in state.get("memHistory", [])]
         minute = int(time.time() // 60)
         if side_effects:
             # Append THIS tick's point before building the series, or the
             # newest history column is always a gap and lastPct lags one poll.
             pct = round(sum(cores) / len(cores)) if cores else 0
             ring = sysmon.history_append(ring, minute, pct)
+            mem_ring = sysmon.history_append(mem_ring, minute,
+                                             round(mem.get("pct", 0.0)))
         series = sysmon.history_series(ring, minute)
+        mem_series = sysmon.history_series(mem_ring, minute)
         view = sysmon.build_view(procs, cores, mem, load, prev_cpu,
                                  datetime.now(), _my_uid(),
-                                 _own_pids(), series)
+                                 _own_pids(), series, mem_series)
         if not side_effects:
             return view, [], []
 
@@ -156,6 +167,7 @@ def _build(side_effects: bool):
         alerts = sysmon.alerts(view["leftovers"]["burningRows"], autokilled)
 
         save_state({"history": [list(entry) for entry in ring],
+                    "memHistory": [list(entry) for entry in mem_ring],
                     "prevCpu": {str(proc.pid): proc.cpu for proc in procs},
                     "firstSeen": first_seen})
         return view, alerts, autokilled
