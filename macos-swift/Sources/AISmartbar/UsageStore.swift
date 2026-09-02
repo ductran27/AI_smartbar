@@ -238,6 +238,7 @@ final class UsageStore: ObservableObject {
             checkAlerts(snap)
             maybeRecapture(snap)  // paces itself; must run even when unchanged
             presence.update(from: snap)   // ditto: the beat paces itself
+            recordHistory(snap)   // every success, so a flat window still logs
             rescheduleTimer(interval: desiredInterval())
         case .failure(let error):
             consecutiveFailures += 1
@@ -289,6 +290,22 @@ final class UsageStore: ObservableObject {
                 // Registration/heal changes what we show; a routine
                 // refresh doesn't warrant an extra fetch.
                 if succeeded && action != "refresh" { self?.refresh(force: true) }
+            }
+        }
+    }
+
+    /// Feed each account's per-metric % into the rolling history behind the
+    /// hover-reveal trend. Runs on every successful poll — including the ones
+    /// whose snapshot equals the last — so a window sitting still still leaves
+    /// a flat, honest line rather than a hole.
+    private func recordHistory(_ snap: Snapshot) {
+        let now = Date()
+        for account in snap.accounts where !account.metrics.isEmpty {
+            for metric in account.metrics {
+                UsageHistory.shared.record(provider: account.provider,
+                                           email: account.email,
+                                           metric: metric.key,
+                                           pct: metric.pct, at: now)
             }
         }
     }

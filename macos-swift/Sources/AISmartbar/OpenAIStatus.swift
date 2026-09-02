@@ -35,6 +35,18 @@ final class OpenAIStatus: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self, let fetched,
                       current == self.generation else { return }
+                // Record before the change gate: these numbers hold still
+                // between Codex uses, and a flat stretch is still history the
+                // hover-reveal trend should show (as a flat line, not a hole).
+                let now = Date()
+                for account in fetched where !account.metrics.isEmpty {
+                    for metric in account.metrics {
+                        UsageHistory.shared.record(provider: account.provider,
+                                                   email: account.email,
+                                                   metric: metric.key,
+                                                   pct: metric.pct, at: now)
+                    }
+                }
                 if fetched != self.accounts { self.accounts = fetched }
             }
         }

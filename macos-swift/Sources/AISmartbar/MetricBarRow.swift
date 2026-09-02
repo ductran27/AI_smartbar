@@ -15,7 +15,14 @@ import SwiftUI
 
 struct MetricBarRow: View {
     let metric: Metric
+    // Identity for the hover-reveal history lookup (UsageHistory is keyed by
+    // provider+email+metric). Defaulted so existing call sites and previews
+    // that don't care about the trend keep compiling.
+    var provider: String = "claude"
+    var accountEmail: String = ""
     @Environment(\.colorScheme) private var colorScheme
+    @State private var showTrend = false
+    @State private var hoverTask: Task<Void, Never>?
 
     private var palette: Palette { Palette.of(colorScheme) }
 
@@ -103,6 +110,26 @@ struct MetricBarRow: View {
             .frame(height: 7.5)
             .animation(.easeOut(duration: 0.6), value: metric.pct)
         }
+        // Hover-reveal trend: dwell ~350ms anywhere on the row, then a small
+        // popover draws this metric's recent %-used history with the same
+        // TrendChart the System tab uses. The card itself gains no height —
+        // the whole point of choosing hover over an inline sparkline.
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hoverTask?.cancel()
+            if inside {
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    if !Task.isCancelled { showTrend = true }
+                }
+            } else {
+                showTrend = false
+            }
+        }
+        .popover(isPresented: $showTrend, arrowEdge: .trailing) {
+            UsageTrendPopover(metric: metric, provider: provider,
+                              accountEmail: accountEmail)
+        }
     }
 
     /// "resets in 1h 37m", beside the window name it belongs to.
@@ -119,5 +146,44 @@ struct MetricBarRow: View {
             .font(.system(size: 13))
             .foregroundStyle(palette.textSecondary)
             .lineLimit(1)
+    }
+}
+
+/// The hover popover: this metric's rolling %-used history as a TrendChart,
+/// with a peak/now caption. Reads UsageHistory (recorded by UsageStore and
+/// OpenAIStatus on every poll); the numbers and the retention/gap rules are
+/// core's — this view only lays them out. Sparse data (a fresh install, or a
+/// metric only just seen) says so rather than drawing a one-point line.
+private struct UsageTrendPopover: View {
+    let metric: Metric
+    let provider: String
+    let accountEmail: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: Palette { Palette.of(colorScheme) }
+
+    var body: some View {
+        let series = UsageHistory.shared.series(
+            provider: provider, email: accountEmail, metric: metric.key)
+        let sum = UsageHistory.shared.summary(
+            provider: provider, email: accountEmail, metric: metric.key)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("\(metric.label) · usage trend")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.text)
+            if sum.points >= 2 {
+                TrendChart(values: series)
+                    .frame(width: 240)
+                Text("peak \(sum.peak)% · now \(sum.last)%")
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.textSecondary)
+            } else {
+                Text("Collecting history — check back after a few polls")
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.textSecondary)
+                    .frame(width: 240, alignment: .leading)
+            }
+        }
+        .padding(12)
     }
 }
