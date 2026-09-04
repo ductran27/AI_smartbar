@@ -923,6 +923,16 @@ Committing it is what lets those installers place an icon before any of
 this project's Python dependencies exist — macOS never `pip install`s
 anything, and Windows needs the icon while it is still building the venv.
 
+**Releasing a signed macOS DMG.** Alongside the checkout install there is a
+signed, notarized DMG for people who drag an app into `/Applications` rather
+than clone the repo; a DMG copy self-updates through Sparkle instead of git
+(the two are the same app — which updater runs is decided from the bundle's
+`SMARTBARDistribution` key, see `Distribution.swift`). Once the one-time Apple
+setup is done, every `install/release.sh` release builds and attaches the DMG
+automatically via the `release-dmg` workflow. Full setup and runbook:
+[`docs/dmg-release.md`](docs/dmg-release.md). Test the packaging with no
+credentials using `./install/package-dmg.sh --adhoc`.
+
 ```bash
 python3 -m unittest discover -s tests -v   # whole suite, no external deps
                                            # (the painter and Linux front-end

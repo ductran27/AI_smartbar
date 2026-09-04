@@ -8,3 +8,5 @@ macos-swift/.build/
 .codex/
 # Generated from assets/ai-smartbar.png by install/windows.ps1.
 assets/*.ico
+# Built by install/package-dmg.sh: the signed .app, the DMG and the appcast.
+dist/

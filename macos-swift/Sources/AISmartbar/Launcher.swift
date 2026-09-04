@@ -33,14 +33,43 @@ enum Launcher {
         return environment
     }
 
+    /// The interpreter to run a BUNDLED launcher with. A checkout install runs
+    /// bin/ai-smartbar directly and lets its `#!/usr/bin/env python3` shebang
+    /// find the developer's python3 — unchanged. A DMG copy has no such
+    /// guarantee, but its audience installed claude-swap via pipx/uv, so the
+    /// cswap venv interpreter is present AND can import claude_swap — exactly
+    /// what the launcher-backed subcommands need. nil ⇒ run the launcher itself.
+    static func python() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["SMARTBAR_PYTHON"], !override.isEmpty {
+            return override
+        }
+        return CswapClient.venvPython()
+    }
+
+    /// How to exec `bin/ai-smartbar <args>`: (executable, arguments), or nil if
+    /// no launcher can be found. A checkout launcher runs itself via its
+    /// shebang; a launcher living inside the app bundle is run through an
+    /// explicit interpreter (see python()), since a dragged-in copy cannot rely
+    /// on python3 being on PATH.
+    static func invocation(_ args: [String]) -> (URL, [String])? {
+        guard let launcher = path() else { return nil }
+        if let bundled = PresenceStatus.bundledBackendRoot(),
+           launcher == bundled + "/bin/ai-smartbar",
+           let python = python() {
+            return (URL(fileURLWithPath: python), [launcher] + args)
+        }
+        return (URL(fileURLWithPath: launcher), args)
+    }
+
     /// A configured (but not yet started) Process, or nil if the launcher is
     /// missing. The caller wires stdout/stderr and runs it — used both for
     /// one-shot reads and for the long-lived `--sysmon --stream`.
     static func process(_ args: [String]) -> Process? {
-        guard let launcher = path() else { return nil }
+        guard let (executable, arguments) = invocation(args) else { return nil }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = args
+        process.executableURL = executable
+        process.arguments = arguments
         process.environment = environment()
         return process
     }

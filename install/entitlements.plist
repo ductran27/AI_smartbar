@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the Developer-ID-signed DMG build
+  (install/package-dmg.sh signs with `--options runtime --entitlements` this
+  file). Notarization REQUIRES the hardened runtime; these entitlements are the
+  few relaxations that runtime needs for THIS app to keep working.
+
+  The app is NOT sandboxed — it is a menu-bar utility that shells out to the
+  Python launcher and to claude-swap — so no sandbox/network entitlements
+  belong here; hardened runtime already permits outbound network and spawning
+  Apple-signed helpers (python3, osascript) without any entitlement.
+
+  Only ONE relaxation is declared, and it is Sparkle's:
+    com.apple.security.cs.disable-library-validation
+  Sparkle's updater relaunches the app and loads its framework and XPC
+  services; every one of those is signed with the SAME Developer ID here, so
+  library validation would in principle pass without this — but this is the
+  single most common cause of a "runs when built locally, crashes only after
+  notarization" Sparkle failure, and it is benign for a non-sandboxed app that
+  ships all its own code. It is declared explicitly rather than discovered in
+  production. Remove it only after a notarized build is confirmed to launch and
+  self-update without it.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
