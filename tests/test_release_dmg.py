@@ -201,5 +201,48 @@ class TestTheReleaseWorkflow(unittest.TestCase):
         self.assertIn("security delete-keychain", self.yaml)
 
 
+class TestTheDmgBundlesTheBackend(unittest.TestCase):
+    """A checkout install IS the backend; a DMG copy has no clone, so the
+    packager ships bin/ai-smartbar + the smartbar package inside the app and the
+    Swift side falls back to it, run under the user's cswap venv python."""
+
+    def setUp(self):
+        self.script = read(PKGDMG)
+
+    def test_it_copies_the_launcher_and_package_into_the_bundle(self):
+        self.assertIn("Contents/Resources/backend", self.script)
+        self.assertIn("bin/ai-smartbar", self.script)
+        self.assertIn('ditto "$REPO/smartbar"', self.script)
+
+    def test_it_ships_source_not_compiled_caches(self):
+        # __pycache__ is host-specific and ~3x the source size; excluding it
+        # keeps the signed bundle small and reproducible.
+        self.assertIn("__pycache__", self.script)
+
+    def test_the_backend_is_in_place_before_the_signature_covers_it(self):
+        # codesign seals Resources into CodeResources; a backend added after
+        # signing would break the seal.
+        self.assertLess(self.script.index("Contents/Resources/backend"),
+                        self.script.index("--- sign, inside-out"))
+
+    def test_the_checkout_install_ships_no_bundled_backend(self):
+        # The checkout already has the repo; a second copy inside the app would
+        # be dead weight and could drift.
+        self.assertNotIn("Contents/Resources/backend", read(MACOS))
+
+    def test_swift_falls_back_to_the_bundled_backend(self):
+        swift = read(os.path.join(SRC, "PresenceStatus.swift"))
+        self.assertIn("bundledBackendRoot", swift)
+        self.assertIn('appendingPathComponent("backend")', swift)
+
+    def test_the_bundled_backend_runs_under_an_explicit_interpreter(self):
+        # A dragged-in copy cannot rely on `python3` being on PATH; the DMG
+        # audience's pipx/uv claude-swap interpreter is used instead.
+        launcher = read(os.path.join(SRC, "Launcher.swift"))
+        self.assertIn("SMARTBAR_PYTHON", launcher)
+        self.assertIn("venvPython", launcher)
+        self.assertIn("bundledBackendRoot", launcher)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -111,12 +111,27 @@ Mac to check the layout and that the app launches. Gatekeeper will reject an
 ad-hoc DMG on any *other* Mac — that is expected; only the notarized CI build
 is distributable.
 
-## ⚠️ Known gap: the DMG app needs the Python backend
+## What a DMG copy needs at runtime
 
-The app is a front-end over the Python launcher (`bin/ai-smartbar`) and
-`claude-swap` (`cswap`). A DMG copy with no checkout has nothing to read from
-(`repoRoot()` returns nil), so it will show empty data. Making the DMG a fully
-self-contained install — bundling a Python runtime + `smartbar/`, and handling
-`cswap` — is separate work tracked outside this pipeline. Until then the DMG is
-the right *distribution and update* mechanism, but the app inside still expects
-the backend to be present.
+The app is a front-end over two backends, and a dragged-in copy (no checkout)
+handles each:
+
+- **The account / usage cards** come straight from the user's own **`cswap`**
+  (`claude-swap`), which the app finds at `~/.local/bin/cswap` — no checkout
+  required. This is the app's core, and it works in a DMG copy as-is.
+- **The System tab, the OpenAI card and account removal** shell out to
+  `bin/ai-smartbar`. A DMG copy has no clone for it to live in, so
+  `install/package-dmg.sh` **bundles a copy** of `bin/ai-smartbar` + the
+  `smartbar/` package into `AI_smartbar.app/Contents/Resources/backend`.
+  `PresenceStatus.repoRoot()` falls back to it, and `Launcher` runs it with the
+  **cswap venv Python** (`Launcher.python()` → `CswapClient.venvPython()`)
+  rather than a bare `python3`, since a dragged-in app cannot assume python3 is
+  on `PATH`. The invoked subcommands lazy-import only stdlib + `claude_swap`, so
+  the heavy UI deps (rumps/PIL) are never loaded.
+
+**The one prerequisite:** the user must have **claude-swap installed**
+(`pipx install claude-swap`). That is already true of anyone this app is for —
+it monitors their claude-swap accounts — and it is what guarantees both a
+working Python interpreter and that `cswap` credential store exist. Override the
+interpreter with `SMARTBAR_PYTHON` if needed. If claude-swap is absent, the
+cards show the same "install claude-swap" hint the checkout install shows.

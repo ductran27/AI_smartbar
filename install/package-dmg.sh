@@ -162,6 +162,25 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+# --- bundle the Python backend so a DMG copy works without a checkout -------
+# The app is a front-end: the System tab, the OpenAI card and account removal
+# shell out to bin/ai-smartbar, and the account/usage cards to the user's own
+# cswap. A dragged-in copy has no clone for the launcher to live in, so ship one
+# inside the app — PresenceStatus.repoRoot() falls back to it, and Launcher runs
+# it with the cswap venv python (the DMG audience has claude-swap installed).
+# Copy the whole package for simplicity; the invoked subcommands lazy-import
+# only stdlib + claude_swap, so the heavy UI deps (rumps/PIL) are never loaded.
+# Must happen BEFORE signing, which seals Resources into the code signature.
+BACKEND="$APP_DIR/Contents/Resources/backend"
+mkdir -p "$BACKEND/bin"
+cp "$REPO/bin/ai-smartbar" "$BACKEND/bin/ai-smartbar"
+chmod +x "$BACKEND/bin/ai-smartbar"
+ditto "$REPO/smartbar" "$BACKEND/smartbar"
+# Ship source only — compiled caches are host-specific and would just bloat the
+# signed bundle (the package is ~600 KB of source, ~2 MB of __pycache__).
+find "$BACKEND" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+echo "Bundled backend: $(du -sh "$BACKEND" | cut -f1)"
+
 # --- sign, inside-out (Apple discourages --deep for distribution) -----------
 # Sparkle ships nested executables that each need their own hardened-runtime
 # signature; sign the deepest first, then the framework, then the app. The app

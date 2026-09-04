@@ -194,19 +194,36 @@ final class PresenceStatus: ObservableObject {
         }
         let fallback = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("AI_smartbar").path
+        if FileManager.default.isExecutableFile(
+            atPath: fallback + "/bin/ai-smartbar") {
+            return fallback
+        }
+        // Last resort: a DMG copy has no checkout at all, so package-dmg.sh
+        // ships one inside the app. Only a DMG build has this directory, so a
+        // checkout copy never reaches here — the fallback is self-gating.
+        return bundledBackendRoot()
+    }
+
+    /// The Python backend install/package-dmg.sh copies into the app bundle
+    /// (Contents/Resources/backend), so a dragged-in DMG copy with no clone can
+    /// still run the launcher-backed features (System tab, OpenAI card, account
+    /// removal). nil for a checkout build, which ships no such directory.
+    nonisolated static func bundledBackendRoot() -> String? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let root = resources.appendingPathComponent("backend").path
         return FileManager.default.isExecutableFile(
-            atPath: fallback + "/bin/ai-smartbar") ? fallback : nil
+            atPath: root + "/bin/ai-smartbar") ? root : nil
     }
 
     /// Fire and forget. Presence must never be able to stall the UI, so
     /// nothing here is waited on and every failure is silent.
     nonisolated private static func spawn(_ arguments: [String], stdin: Data) {
-        guard let root = repoRoot() else { return }
-        let launcher = root + "/bin/ai-smartbar"
-        guard FileManager.default.isExecutableFile(atPath: launcher) else { return }
+        // Same launcher resolution as every other caller, including the
+        // bundled-backend interpreter injection a DMG copy needs.
+        guard let (executable, args) = Launcher.invocation(arguments) else { return }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = arguments
+        process.executableURL = executable
+        process.arguments = args
         // One PATH fix for every helper — Launcher.environment().
         process.environment = Launcher.environment()
         let input = Pipe()
