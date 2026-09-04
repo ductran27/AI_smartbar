@@ -1,0 +1,111 @@
+name: release-dmg
+
+# Build the signed + notarized DMG and its Sparkle appcast, then attach both to
+# the GitHub Release for the tag. install/release.sh already pushes the vX.Y.Z
+# tag once the tests gate is green; this hangs off that tag and needs no change
+# to the release flow.
+#
+# This workflow is INDEPENDENT of the release itself: the git tag and the
+# self-updating checkout installs do not depend on it, so if signing or
+# notarization fails, the release still stands and source installs still update.
+# Only the DMG download is affected — which is exactly the blast radius a
+# credentials-dependent, Apple-dependent step should have.
+#
+# Required repository secrets (see docs/dmg-release.md for how to create them):
+#   MACOS_CERT_P12_BASE64  base64 of the "Developer ID Application" cert .p12
+#   MACOS_CERT_PASSWORD    the .p12 export password
+#   AC_API_KEY_ID          App Store Connect API key id      ┐ notarytool
+#   AC_API_ISSUER_ID       …its issuer id                    ├ credential
+#   AC_API_KEY_P8_BASE64   base64 of the AuthKey_*.p8        ┘
+#   SPARKLE_ED_PRIVATE_KEY the Sparkle EdDSA private key (from generate_keys -x)
+on:
+  push:
+    tags: ["v*"]
+  # Manual re-run against an existing tag (e.g. after fixing a secret).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build the DMG for, e.g. v1.3.3"
+        required: true
+
+# gh needs to create/upload release assets.
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      # Everything sensitive is materialised under RUNNER_TEMP (wiped with the
+      # runner) and torn down in the always() step at the end.
+      - name: Import the Developer ID certificate
+        env:
+          CERT_B64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PW: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KP="$(uuidgen)"                       # ephemeral keychain password
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          security create-keychain -p "$KP" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KP" "$KEYCHAIN"
+          echo "$CERT_B64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PW" \
+            -T /usr/bin/codesign
+          # Let codesign use the key without an interactive prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KP" "$KEYCHAIN" >/dev/null
+          # Make the temp keychain visible to the default search list.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | sed 's/["[:space:]]//g')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Extract the exact identity string package-dmg.sh signs with.
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          [ -n "$IDENTITY" ] || { echo "no Developer ID Application identity"; exit 1; }
+          echo "MACOS_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "Imported: $IDENTITY"
+
+      - name: Materialise the notary key and the Sparkle key
+        env:
+          AC_KEY_B64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          echo "$AC_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$SPARKLE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
+          echo "AC_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          echo "SPARKLE_ED_KEY_FILE=$RUNNER_TEMP/sparkle_ed_key" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, package
+        env:
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: ./install/package-dmg.sh
+
+      - name: Attach the DMG and appcast to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The release may already exist (install/release.sh --gh) or not;
+          # create it if missing, then upload (clobbering a prior asset on a
+          # re-run). --verify-tag ties it to the pushed tag, not a moving ref.
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          gh release upload "$TAG" \
+            dist/AI_smartbar-*.dmg dist/appcast.xml --clobber
+
+      - name: Tear down the temporary keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/sparkle_ed_key"
