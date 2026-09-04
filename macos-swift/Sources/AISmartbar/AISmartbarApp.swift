@@ -120,6 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (the .app bundle also sets LSUIElement as belt-and-braces).
         NSApp.setActivationPolicy(.accessory)
         installHotkeyMonitor()
+        // Start Sparkle's background update schedule — a no-op on a checkout
+        // install (that copy updates itself with git), live only on a DMG one.
+        // Touched here purely to build the shared instance at launch; see
+        // SparkleUpdater/Distribution.
+        _ = SparkleUpdater.shared
     }
 
     /// Global key monitor for the open-panel hotkey. NSEvent's global

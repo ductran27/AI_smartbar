@@ -10,7 +10,14 @@ struct AppOptionsMenu: View {
     var body: some View {
         Menu {
             Button {
-                updates.checkNow()
+                // A DMG copy has no checkout to pull, so its updates run
+                // through Sparkle; a checkout copy keeps the git updater.
+                // Distribution decides — see SparkleUpdater/Distribution.
+                if SparkleUpdater.shared.isActive {
+                    SparkleUpdater.shared.checkForUpdates()
+                } else {
+                    updates.checkNow()
+                }
             } label: {
                 Label(updateCheckTitle, systemImage: "arrow.down.circle")
             }
