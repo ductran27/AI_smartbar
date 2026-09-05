@@ -157,10 +157,32 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-# The Swift linker ad-hoc signs the bare executable. Once it is wrapped in
-# an app bundle with Info.plist, sign the bundle so `codesign --verify` and
-# Finder launches see a consistent local application.
-codesign --force --deep --sign - "$APP_DIR"
+# The Swift linker ad-hoc signs the bare executable. Once it is wrapped in an
+# app bundle with Info.plist, sign the bundle so `codesign --verify` and Finder
+# launches see a consistent local application.
+#
+# A Developer ID signature (opt-in, SMARTBAR_SIGN_IDENTITY) is what lets the
+# app post its notifications through UNUserNotificationCenter and so show its
+# OWN icon instead of osascript's generic one — an ad-hoc signature makes UN
+# refuse outright (see macos-swift/Sources/AISmartbar/Notifier.swift). The
+# identity reaches us two ways: the updater passes it in the environment
+# (config.env is baked into the update agent's plist), and a manual run — which
+# inherits no such environment — reads it straight from config.env here.
+# Absent or unusable, we ad-hoc sign exactly as before. Never fatal for the
+# same reason the icon is not: this is also the unattended update-apply step.
+SIGN_ID="${SMARTBAR_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_ID" ]]; then
+  SIGN_ID="$("$REPO/bin/ai-smartbar" --print-config winenv 2>/dev/null \
+    | sed -n 's/^SMARTBAR_SIGN_IDENTITY=//p')"
+fi
+if [[ -n "$SIGN_ID" ]] \
+   && codesign --force --deep --sign "$SIGN_ID" "$APP_DIR" 2>/dev/null; then
+  echo "Signed with Developer ID: $SIGN_ID"
+else
+  [[ -n "$SIGN_ID" ]] && echo "WARNING: could not sign with '$SIGN_ID' —" \
+    "falling back to ad-hoc; notifications will use the generic icon." >&2
+  codesign --force --deep --sign - "$APP_DIR"
+fi
 
 # LaunchServices caches a bundle's Info.plist keyed on the .app DIRECTORY's
 # own mtime, and every write above lands INSIDE Contents/ — which leaves that

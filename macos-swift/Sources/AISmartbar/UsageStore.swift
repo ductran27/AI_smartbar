@@ -353,35 +353,12 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// osascript notification. macOS credits a notification to the BUNDLE
-    /// that posted it, and /usr/bin/osascript is not an app, so these arrive
-    /// wearing Script Editor's name and icon. That is a known wart, and it
-    /// is not fixable from here — both alternatives were measured on macOS
-    /// 26.5 against this ad-hoc-signed bundle and both failed:
-    ///
-    ///   * UNUserNotificationCenter.requestAuthorization returns
-    ///     "Notifications are not allowed for this application" immediately,
-    ///     without ever prompting. It wants a real signing identity;
-    ///     `codesign -s -` leaves TeamIdentifier unset. Registering the
-    ///     bundle with lsregister and launching it through LaunchServices
-    ///     changed nothing.
-    ///   * NSUserNotificationCenter (deprecated in 11.0, still compiles)
-    ///     accepts deliver() and drops it — deliveredNotifications stays
-    ///     empty.
-    ///
-    /// So the sender identity is bought with a Developer ID signature, not
-    /// with code. Until this app has one, osascript is the only mechanism
-    /// that actually puts a notification on screen, and a notification with
-    /// the wrong icon beats no notification at all. Linux and Windows have
-    /// no such constraint and do carry the real name and logo — see
-    /// smartbar/core/notify.py.
+    /// The one notification choke point for the app (usage alerts here,
+    /// update-ready from UpdateStatus). Delegates to Notifier, which shows the
+    /// app's own icon via UNUserNotificationCenter on a Developer-ID-signed
+    /// build and falls back to osascript's generic-icon banner otherwise — see
+    /// Notifier.swift for why the sender identity is bought with a signature.
     nonisolated static func notify(title: String, body: String) {
-        let escapedTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedBody = body.replacingOccurrences(of: "\"", with: "\\\"")
-        let script = "display notification \"\(escapedBody)\" with title \"\(escapedTitle)\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        try? process.run()
+        Notifier.shared.post(title: title, body: body)
     }
 }
