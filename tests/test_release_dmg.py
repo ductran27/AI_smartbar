@@ -159,6 +159,21 @@ class TestEntitlementsAreMinimal(unittest.TestCase):
         # off from the Python launcher it shells out to.
         self.assertNotIn("com.apple.security.app-sandbox", plist)
 
+    def test_the_entitlements_carry_no_xml_comments(self):
+        # codesign validates the --entitlements file with AMFIUnserializeXML, a
+        # strict parser that rejects XML comments outright ("syntax error"),
+        # failing the signing step on the runner — even though local ad-hoc
+        # signing (CFPropertyList) parses comments fine. This exact comment block
+        # broke the first v1.3.4 DMG build, so keep the file comment-free.
+        self.assertNotIn("<!--", read(ENTITLEMENTS))
+
+    def test_the_entitlements_are_a_valid_plist_with_only_that_key(self):
+        import plistlib
+
+        parsed = plistlib.loads(read(ENTITLEMENTS).encode("utf-8"))
+        self.assertEqual(
+            parsed, {"com.apple.security.cs.disable-library-validation": True})
+
 
 class TestSwiftPicksTheRightUpdater(unittest.TestCase):
     def test_distribution_defaults_to_source_when_the_key_is_absent(self):
