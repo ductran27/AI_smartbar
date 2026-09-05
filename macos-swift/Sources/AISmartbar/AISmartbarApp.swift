@@ -119,6 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu-bar only: no Dock icon even when run as a bare binary
         // (the .app bundle also sets LSUIElement as belt-and-braces).
         NSApp.setActivationPolicy(.accessory)
+        // Ask for notification authorization and set the presentation delegate.
+        // On a Developer-ID-signed build this prompts once, then banners wear
+        // the app's own icon; on the ad-hoc build it fails fast and Notifier
+        // falls back to osascript. See Notifier.swift.
+        Notifier.shared.configure()
         installHotkeyMonitor()
         // Start Sparkle's background update schedule — a no-op on a checkout
         // install (that copy updates itself with git), live only on a DMG one.

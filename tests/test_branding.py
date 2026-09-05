@@ -286,23 +286,40 @@ class TestWindowsCarriesTheNameAndTheLogo(unittest.TestCase):
         self.assertIn("} catch {", block)
 
 
-class TestMacOSNotificationsAreKnowinglyLeftAlone(unittest.TestCase):
-    """A guard on a deliberate NON-fix.
+class TestMacOSNotificationsPreferUNWithOsascriptFallback(unittest.TestCase):
+    """A guard on the notification path AND its fallback.
 
-    Both replacements for osascript were measured against this ad-hoc-signed
-    bundle on macOS 26.5 and neither delivers, so the wrong-sender wart
-    stays. What must not happen is someone "fixing" it from memory, shipping
-    a path that silently posts nothing, and losing update notifications on
-    every Mac. The reasoning has to survive in the file that would be edited.
+    macOS credits a notification to the bundle that posts it, so posting
+    through UNUserNotificationCenter (this app's own bundle) is what puts the
+    app's icon on the banner instead of osascript's generic one — but only
+    once the bundle carries a real Developer ID signature. Measured on macOS
+    26.6: an ad-hoc `codesign -s -` bundle gets "Notifications are not
+    allowed" with no prompt, while a Developer ID signature (notarization NOT
+    required) prompts and shows the app icon.
+
+    What must not happen is someone dropping the osascript fallback: on the
+    ad-hoc source build UN is unusable, and without the fallback every
+    notification (chiefly "update ready") would silently post nothing. So the
+    guard is: prefer UN, keep osascript underneath, and keep the reasoning in
+    the file that would be edited.
     """
 
-    def test_the_swift_notifier_records_why_it_still_uses_osascript(self):
+    def test_the_notifier_prefers_un_and_keeps_the_osascript_fallback(self):
+        swift = read(os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
+                                  "Notifier.swift"))
+        # Prefers the identity-carrying API...
+        self.assertIn("UNUserNotificationCenter", swift)
+        # ...but never loses a notification when it is unavailable.
+        self.assertIn("/usr/bin/osascript", swift)
+        self.assertIn("display notification", swift)
+        # The reasoning that this needs a real signature stays put.
+        self.assertIn("Developer ID", swift)
+
+    def test_usagestore_notify_routes_through_the_notifier(self):
         swift = read(os.path.join(REPO, "macos-swift", "Sources", "AISmartbar",
                                   "UsageStore.swift"))
-        block = swift[:swift.index("static func notify(")]
-        self.assertIn("UNUserNotificationCenter", block)
-        self.assertIn("NSUserNotificationCenter", block)
-        self.assertIn("Developer ID", block)
+        block = swift[swift.index("static func notify("):]
+        self.assertIn("Notifier.shared.post", block)
 
     def test_branding_does_not_offer_macos_a_notification_identity(self):
         # icon_path/APP_NAME are for Linux and Windows. A darwin helper here
