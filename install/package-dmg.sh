@@ -205,6 +205,14 @@ if [[ "$SIGN_IDENTITY" == "-" ]]; then
 else
   codesign --force --options runtime --timestamp \
            --sign "$SIGN_IDENTITY" "$APP_DIR/Contents/MacOS/AISmartbar"
+  # Only the app carries entitlements; the nested helpers inherit the runtime.
+  # install/entitlements.plist declares a single relaxation — Sparkle's
+  # disable-library-validation, the most common "runs locally, crashes only
+  # after notarization" Sparkle failure. The app is NOT sandboxed (it shells
+  # out to the Python launcher), so no sandbox/network keys belong there.
+  # Keep that file COMMENT-FREE: codesign validates entitlements with the strict
+  # AMFIUnserializeXML parser, which rejects XML comments ("syntax error") and
+  # fails signing here — even though local ad-hoc signing parses them fine.
   codesign --force --options runtime --timestamp \
            --entitlements "$ENTITLEMENTS" \
            --sign "$SIGN_IDENTITY" "$APP_DIR"
