@@ -1,8 +1,104 @@
+<div align="center">
+
+<img src="assets/ai-smartbar.png" alt="AI smartbar" width="120">
+
 # AI smartbar
 
-Your Claude — and ChatGPT/Codex — usage limits, always visible in the bar,
-with one-click Claude account switching. A cross-platform companion for
-[claude-swap](https://github.com/realiti4/claude-swap).
+### Your Claude, ChatGPT &amp; Codex usage limits — always visible in your menu bar
+
+**See how much of your Claude (and ChatGPT / Codex) usage you've already spent,
+right in the menu bar — and switch to a fresh Claude account in one click,
+before you hit the wall.**
+
+[![Latest release](https://img.shields.io/github/v/release/ductran27/AI_smartbar?sort=semver&label=release&color=2ea043)](https://github.com/ductran27/AI_smartbar/releases)
+[![Tests](https://github.com/ductran27/AI_smartbar/actions/workflows/tests.yml/badge.svg)](https://github.com/ductran27/AI_smartbar/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+![Platforms: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-6c6c6c)
+
+[**Install**](#install) · [Features](#features) · [FAQ](#faq) · [Requirements](#requirements) · [Configuration](#configuration-environment-variables)
+
+<img src="assets/screenshot-claude-dark.png" alt="AI smartbar panel: Claude usage across four accounts — one active, one near its weekly limit, filling colour-coded bars" width="360">
+
+</div>
+
+<details>
+<summary><b>Full table of contents</b></summary>
+
+- [Why AI smartbar?](#why-ai-smartbar)
+- [Quickstart](#quickstart)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Configuration (environment variables)](#configuration-environment-variables)
+- [Settings that survive an update](#settings-that-survive-an-update)
+- [Device presence](#device-presence-how-many-devices-share-an-account)
+- [The OpenAI tab (ChatGPT/Codex)](#the-openai-tab-chatgptcodex-accounts)
+- [The System tab](#the-system-tab-what-your-agent-sessions-cost-the-machine)
+- [The Linux panel](#the-linux-panel)
+- [Updating and releases](#updating-and-releases)
+- [Credential lifecycle](#credential-lifecycle-re-capture--healing)
+- [Auto window-starter](#auto-window-starter-warmup-opt-in)
+- [Data freshness](#data-freshness)
+- [FAQ](#faq)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
+</details>
+
+## Why AI smartbar?
+
+Claude Code and ChatGPT's Codex both meter you on rolling **5-hour** and
+**weekly** windows — and neither warns you as the cap gets close. You find out
+you're throttled in the middle of a task. **AI smartbar** keeps that number in
+front of you at all times, and — if you run more than one Claude account — lets
+you jump to whichever one still has budget, in a single click. Every percentage
+is the same **"% used"** value Claude Code's `/usage` reports, so there is
+nothing to calculate.
+
+- 🔋 **Glanceable.** A twin-pill menu-bar icon fills as you spend and steps
+  green → yellow → red → **purple** (100% used) — you read your limit without
+  opening anything.
+- ⚡ **One-click switch.** `Make Active` flips your Claude account instantly;
+  new Claude Code sessions pick it up, running ones keep theirs.
+- 🖥️ **Cross-platform.** A native SwiftUI app on macOS 13+, and the same card
+  panel on Linux and Windows from one unit-tested layout.
+- 🤖 **Claude _and_ ChatGPT.** Claude accounts via
+  [claude-swap](https://github.com/realiti4/claude-swap), plus a ChatGPT / Codex
+  tab read straight from Codex's own local files.
+- 🔒 **Local &amp; private.** Usage comes from local tools and Anthropic's own
+  usage API — the one behind `/usage`. Your credentials never leave your machine.
+
+## Quickstart
+
+**macOS** (native app, macOS 13+, needs Xcode Command Line Tools):
+
+```bash
+git clone https://github.com/ductran27/AI_smartbar ~/tools/AI_smartbar
+cd ~/tools/AI_smartbar
+./install/macos-swift.sh
+```
+
+The icon appears in your menu bar within a minute. Linux, Windows and the
+older Python fallback are one command each — see [Install](#install). The
+Claude side needs [claude-swap](https://github.com/realiti4/claude-swap)
+(`pipx install claude-swap`); registration is automatic from there.
+
+<details>
+<summary><b>More screenshots</b> — light &amp; dark, plus the ChatGPT / Codex and System tabs</summary>
+
+<br>
+
+|  |  |
+| :---: | :---: |
+| **Claude · dark** | **Claude · light** |
+| <img src="assets/screenshot-claude-dark.png" width="330" alt="Claude tab in dark appearance"> | <img src="assets/screenshot-claude-light.png" width="330" alt="Claude tab in light appearance"> |
+| **ChatGPT / Codex tab** | **System tab** |
+| <img src="assets/screenshot-openai.png" width="330" alt="ChatGPT and Codex usage tab"> | <img src="assets/screenshot-system.png" width="330" alt="System tab: CPU, memory and leftover processes"> |
+
+</details>
+
+<details>
+<summary><b>Anatomy of the panel</b> — the same layout, annotated as text</summary>
 
 ```
 Menu bar / tray:   … [▮▮] 🔋 📶 🔊 …          (two vertical pills, fill =
@@ -29,7 +125,7 @@ The panel — the same layout on macOS, Linux and Windows:
  ▌│ █████████████████████████─────────────── │
  ▌│                   ╷                      │
  ▌└──────────────────────────────────────────┘
-   v1.0.0                    [Update to 1.1.0]
+   v1.3.5                    [Update to 1.3.6]
 
  (numbers are % USED — the /usage scale; each limit is a label line over a
   full-width bar; ▌ = the rail marking the ACTIVE account, alongside its
@@ -44,6 +140,8 @@ The panel — the same layout on macOS, Linux and Windows:
   present when both providers have accounts; follows the system's
   light/dark appearance)
 ```
+
+</details>
 
 ## Features
 
@@ -868,6 +966,50 @@ Design notes with the full audit live in `docs/superpowers/specs/`.
   while a metric is ≥90% used fires that notification once more.
 - **XFCE hover text** is a single line (StatusNotifier limitation); full
   details are in the menu.
+
+## FAQ
+
+**Is AI smartbar free?**
+Yes — it's open source under the Apache 2.0 license.
+
+**Does it read or upload my Claude credentials?**
+No. Usage comes from claude-swap's local files and Anthropic's official usage
+API (the same one behind `/usage`); the ChatGPT / Codex numbers are read from
+Codex's own local files. Nothing about your accounts is sent anywhere except to
+the providers' own APIs — see [Data freshness](#data-freshness) and
+[Credential lifecycle](#credential-lifecycle-re-capture--healing).
+
+**Do I need claude-swap?**
+For the Claude side, yes — AI smartbar is a companion to
+[claude-swap](https://github.com/realiti4/claude-swap)
+(`pipx install claude-swap`), which owns the account backups and the switch.
+Registration is automatic: sign in to Claude Code and the bar runs `cswap add`
+for you. The ChatGPT / Codex tab works on its own, with just Codex signed in.
+
+**How is "usage" measured — is it the same as `/usage`?**
+Every percentage is "% used" on the exact scale Claude Code's `/usage` shows,
+promo-boosted limits included. No conversion, no estimate.
+
+**Does switching accounts interrupt a running session?**
+No. `Make Active` changes which account *new* Claude Code sessions use; a
+session already running keeps the account it started with (claude-swap
+semantics).
+
+**Which platforms are supported?**
+The native macOS app (SwiftUI, macOS 13+) is the most polished. Linux and
+Windows run the same unit-tested layout painted with cairo — see the platform
+status note under [Install](#install) for how thoroughly each has been verified.
+
+**Does it work with only ChatGPT / Codex (no Claude)?**
+Yes. If only Codex is signed in you get the ChatGPT tab; the provider-tab row
+only appears when both providers have accounts, so a single-provider machine
+stays simple.
+
+**Will polling burn through my rate limit?**
+No. It polls adaptively — 60 s when something is near a limit, 180 s when
+everything is calm — and stays within claude-swap's per-account poll budget
+without exceeding the usage API's request budget. Details in
+[Data freshness](#data-freshness).
 
 ## Troubleshooting
 
