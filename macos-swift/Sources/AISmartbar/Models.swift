@@ -236,6 +236,24 @@ struct Account: Identifiable, Equatable {
         return metrics.map { "\($0.label) \($0.usedPct)% used" }
             .joined(separator: " · ")
     }
+
+    /// Multi-line hover tooltip body for the menu-bar icon: the account
+    /// address, then one line per metric with its "% used" and live reset
+    /// countdown ("5h 47% used · resets in 2h 13m"). `now` is injected so the
+    /// countdown is testable against a fixed clock. When a metric has no
+    /// usable countdown at all (unparseable resetsAt and no fetch-time
+    /// fallback), its "· resets in …" clause is dropped rather than shown
+    /// blank. The one-line `summary` stays the concise VoiceOver label; this
+    /// is the sighted-hover counterpart, richer because a tooltip has room.
+    func tooltip(now: Date = Date()) -> String {
+        guard !metrics.isEmpty else { return "\(email)\n\(summary)" }
+        let lines = metrics.map { metric -> String in
+            let left = metric.liveCountdown(now: now)
+            let resets = left.isEmpty ? "" : " · resets in \(left)"
+            return "\(metric.label) \(metric.usedPct)% used\(resets)"
+        }
+        return ([email] + lines).joined(separator: "\n")
+    }
 }
 
 struct Snapshot: Equatable {

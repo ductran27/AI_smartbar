@@ -36,20 +36,26 @@ struct AISmartbarApp: App {
                 ? store.accessibilitySummary
                 : "\(store.accessibilitySummary). Update to "
                   + "\(updates.pendingVersion) available"
+            // Sighted-user hover tooltip. `.help()` on a MenuBarExtra label is
+            // a no-op — macOS only renders the status item button's native
+            // toolTip — so push it there directly. This closure re-runs on
+            // every published store change (ObservableObject re-renders on any
+            // @Published mutation), so the tooltip stays live in the
+            // background even with the popover closed. Richer than the concise
+            // `summary` VoiceOver label because a tooltip has the room: the
+            // active account plus each window's reset countdown. (Linux's
+            // AppIndicator.set_title and Windows' pystray icon.title already
+            // show a native hover tooltip — see tray_controller.py's set_title
+            // — so macOS was the one platform without one.)
+            let _ = StatusItemLocator.shared.updateTooltip(
+                updates.pendingVersion.isEmpty
+                ? store.tooltipSummary
+                : "\(store.tooltipSummary)\n\nUpdate to "
+                  + "\(updates.pendingVersion) available")
             Image(nsImage: updates.pendingVersion.isEmpty
                   ? store.icon
                   : MenuBarIcon.badged(store.icon))
                 .accessibilityLabel(summary)
-                // .help() is the sighted-user counterpart to the
-                // accessibilityLabel above: VoiceOver already spoke this
-                // text, but before this a sighted user hovering the icon
-                // saw nothing (Linux's AppIndicator.set_title and
-                // Windows' pystray icon.title both already show a native
-                // hover tooltip here — see tray_controller.py's
-                // set_title calls — so macOS was the one platform
-                // without one). Same string as the VoiceOver label so
-                // the two can't drift apart.
-                .help(summary)
         }
         .menuBarExtraStyle(.window)
     }
@@ -80,6 +86,41 @@ final class StatusItemLocator {
     func capture(from view: NSView) {
         guard statusItem == nil, let window = view.window else { return }
         statusItem = window.value(forKey: "statusItem") as? NSStatusItem
+    }
+
+    /// The menu-bar icon's button. Found by locating the status bar window
+    /// among the app's own windows, rather than through the `statusItem`
+    /// above: that reference is captured from the popover CONTENT window,
+    /// which SwiftUI does not create until the popover is first opened — so it
+    /// stays nil (and the tooltip unset) for a user who only ever hovers. The
+    /// NSStatusBarWindow, by contrast, exists the moment the icon is on
+    /// screen. Empirically it is the sole NSStatusBarWindow among NSApp's
+    /// windows and its button is an NSStatusBarButton in the view tree. Nil
+    /// only in the instant before the icon is placed; the next state change
+    /// re-pushes.
+    var menuBarButton: NSStatusBarButton? {
+        for window in NSApp.windows where window.className == "NSStatusBarWindow" {
+            if let button = Self.firstStatusBarButton(in: window.contentView) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    private static func firstStatusBarButton(in view: NSView?) -> NSStatusBarButton? {
+        guard let view else { return nil }
+        if let button = view as? NSStatusBarButton { return button }
+        for subview in view.subviews {
+            if let button = firstStatusBarButton(in: subview) { return button }
+        }
+        return nil
+    }
+
+    /// Set the native hover tooltip on the icon's button. This is the one
+    /// thing macOS actually renders on hover — the SwiftUI `.help()` modifier
+    /// is silently dropped on a MenuBarExtra label.
+    func updateTooltip(_ text: String) {
+        menuBarButton?.toolTip = text
     }
 }
 

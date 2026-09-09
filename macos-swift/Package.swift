@@ -38,6 +38,14 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-rpath",
                               "-Xlinker", "@executable_path/../Frameworks"]),
             ]
-        )
+        ),
+        // Unit tests for the pure, UI-free display logic (the app itself is
+        // otherwise live-tested). `@testable import` reaches the internal
+        // model rendering directly.
+        .testTarget(
+            name: "AISmartbarTests",
+            dependencies: ["AISmartbar"],
+            path: "Tests/AISmartbarTests"
+        ),
     ]
 )

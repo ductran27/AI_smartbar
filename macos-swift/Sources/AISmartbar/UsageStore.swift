@@ -85,6 +85,17 @@ final class UsageStore: ObservableObject {
         return "AI smartbar: \(account.summary)"
     }
 
+    /// Multi-line hover tooltip pushed to the status item button's native
+    /// toolTip (SwiftUI's `.help()` is a no-op on a MenuBarExtra label, so a
+    /// sighted user hovering saw nothing before this). Mirrors
+    /// `accessibilitySummary`'s loading / no-data guards so the two can't
+    /// drift, then delegates to the active account's own richer rendering.
+    var tooltipSummary: String {
+        if consecutiveFailures >= 3 { return "AI smartbar: no data" }
+        guard let account = snapshot?.activeAccount else { return "AI smartbar: loading" }
+        return account.tooltip()
+    }
+
     init() {
         rescheduleTimer(interval: baseInterval)
         // The moments the display is most likely stale: the Mac just woke,
