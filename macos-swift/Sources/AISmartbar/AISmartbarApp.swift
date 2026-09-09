@@ -83,6 +83,16 @@ final class StatusItemLocator {
     static let shared = StatusItemLocator()
     private(set) weak var statusItem: NSStatusItem?
 
+    /// The last text actually written to the button, so a re-render that
+    /// leaves the tooltip unchanged doesn't re-assign it — see
+    /// `shouldApplyTooltip` for why that matters.
+    private var appliedTooltip: String?
+    /// The found button, held so an unchanged-text render costs nothing
+    /// instead of re-walking every window's view tree. Weak: if the status
+    /// window is ever torn down and rebuilt, this clears and `menuBarButton`
+    /// finds the new one.
+    private weak var cachedButton: NSStatusBarButton?
+
     func capture(from view: NSView) {
         guard statusItem == nil, let window = view.window else { return }
         statusItem = window.value(forKey: "statusItem") as? NSStatusItem
@@ -99,8 +109,10 @@ final class StatusItemLocator {
     /// only in the instant before the icon is placed; the next state change
     /// re-pushes.
     var menuBarButton: NSStatusBarButton? {
+        if let cachedButton { return cachedButton }
         for window in NSApp.windows where window.className == "NSStatusBarWindow" {
             if let button = Self.firstStatusBarButton(in: window.contentView) {
+                cachedButton = button
                 return button
             }
         }
@@ -119,8 +131,28 @@ final class StatusItemLocator {
     /// Set the native hover tooltip on the icon's button. This is the one
     /// thing macOS actually renders on hover — the SwiftUI `.help()` modifier
     /// is silently dropped on a MenuBarExtra label.
+    ///
+    /// The label closure that calls this re-runs on every SwiftUI publish (any
+    /// of the five app-level stores, several ticks a minute between them), but
+    /// the tooltip text only moves when the live reset countdown ticks (~once a
+    /// minute). Skipping the unchanged writes is not just economy: re-assigning
+    /// `toolTip` reinstalls the view's tooltip tracking rectangle, and doing
+    /// that while the tooltip is on screen disrupts its mouse-exit dismissal —
+    /// the tooltip lingers and fades slowly. Write only when it changed.
     func updateTooltip(_ text: String) {
-        menuBarButton?.toolTip = text
+        guard let button = menuBarButton else { return }  // not placed yet; a later render retries
+        guard shouldApplyTooltip(text) else { return }
+        button.toolTip = text
+    }
+
+    /// The pure "did the tooltip text move?" decision behind `updateTooltip`,
+    /// split out so it is unit-testable without a live status-bar button:
+    /// true the first time a text is seen and whenever it changes (remembering
+    /// it), false for a repeat of the last-applied text.
+    func shouldApplyTooltip(_ text: String) -> Bool {
+        guard text != appliedTooltip else { return false }
+        appliedTooltip = text
+        return true
     }
 }
 
