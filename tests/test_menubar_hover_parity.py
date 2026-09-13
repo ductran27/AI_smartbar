@@ -7,19 +7,23 @@ host.set_title(model.title_line(account)) on every meaningful repaint
 _apply_snapshot/_apply_error) and both hosts' set_title implementations
 (AppIndicator.set_title, pystray's icon.title) render natively as a hover
 tooltip. macOS's SwiftUI MenuBarExtra label had no such thing: its
-.accessibilityLabel(store.accessibilitySummary) is VoiceOver-only, so a
-sighted user hovering the icon saw nothing until a .help(...) modifier was
-added reusing that same string.
+.accessibilityLabel(store.accessibilitySummary) is VoiceOver-only.
+
+A .help(...) modifier is the obvious fix but is silently DROPPED on a
+MenuBarExtra label — macOS renders only the underlying status-item button's
+native toolTip — so the label pushes the tooltip straight to that button
+instead, via StatusItemLocator.shared.updateTooltip(store.tooltipSummary).
+VoiceOver keeps the concise `accessibilitySummary`; the hover tooltip gets
+the roomier `tooltipSummary` (active account plus each window's countdown).
 
 Same technique as tests/test_plan.py::TestPlanParity and
 tests/test_account_card_parity.py: read the Swift as source text, so this
 runs on Linux with no Swift toolchain, and pins that a future refactor of
-the MenuBarExtra label can't silently drop the modifier again.
+the MenuBarExtra label can't silently drop the hover tooltip again.
 """
 from __future__ import annotations
 
 import os
-import re
 import unittest
 
 import smartbar
@@ -42,30 +46,34 @@ class SwiftPresent(unittest.TestCase):
 
 
 class TestMenuBarHoverTooltipParity(SwiftPresent):
-    def test_menu_bar_extra_label_carries_a_help_modifier(self):
+    def _label_body(self) -> str:
+        """The MenuBarExtra label closure alone — from its `} label: {` to
+        the `.menuBarExtraStyle` that closes the scene — so an assertion
+        can't be satisfied by code elsewhere in the file."""
         text = _read(APP_SOURCE)
         self.assertIn("MenuBarExtra {", text,
                        "expected the MenuBarExtra scene to still exist")
-        # The label closure: everything between the `label: {` that starts
-        # MenuBarExtra's second trailing closure and its matching `}`.
-        label_start = text.index("} label: {")
-        label_body = text[label_start:]
-        self.assertIn(".accessibilityLabel(", label_body,
-                       "VoiceOver label regressed — nothing to keep in "
-                       "sync with .help(...) anymore")
-        self.assertIn(".help(", label_body,
+        return text[text.index("} label: {"):text.index(".menuBarExtraStyle")]
+
+    def test_menu_bar_extra_label_pushes_a_native_hover_tooltip(self):
+        # .help() is a no-op on a MenuBarExtra label, so the tooltip is
+        # pushed to the status-item button directly. Pin that it still is,
+        # alongside the VoiceOver label it complements.
+        label_body = self._label_body()
+        self.assertIn("StatusItemLocator.shared.updateTooltip(", label_body,
                        "the menu-bar icon lost its hover tooltip — a "
                        "sighted user hovering it sees nothing again")
+        self.assertIn(".accessibilityLabel(", label_body,
+                       "VoiceOver label regressed — nothing left to "
+                       "complement the hover tooltip")
 
-    def test_help_and_accessibility_label_read_the_same_summary(self):
-        """Both modifiers must be handed the same string (`summary`), or
-        VoiceOver and a sighted hover could say different things about the
-        same icon."""
-        text = _read(APP_SOURCE)
-        match = re.search(
-            r"\.accessibilityLabel\((\w+)\)\s+.*?\.help\((\w+)\)",
-            text, re.DOTALL)
-        self.assertIsNotNone(
-            match, "could not find .accessibilityLabel(...)/.help(...) "
-                   "on the menu-bar icon")
-        self.assertEqual(match.group(1), match.group(2))
+    def test_voiceover_and_hover_read_the_stores_two_summaries(self):
+        """VoiceOver reads the concise accessibilitySummary; the hover
+        tooltip gets the roomier tooltipSummary. Both must come from the
+        store, so the icon and its labels can never describe different
+        usage than the panel does."""
+        label_body = self._label_body()
+        self.assertIn("store.accessibilitySummary", label_body)
+        self.assertIn("store.tooltipSummary", label_body)
+        # The VoiceOver label is the concise summary, not the tooltip's text.
+        self.assertRegex(label_body, r"\.accessibilityLabel\(summary\)")
