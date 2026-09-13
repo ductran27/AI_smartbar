@@ -69,11 +69,8 @@ struct AISmartbarApp: App {
                       ? store.icon
                       : MenuBarIcon.badged(store.icon))
                 if !labelText.isEmpty {
-                    Text(labelText)
-                        .font(.system(size: 12, weight: .semibold))
-                        .monospacedDigit()
-                        .fixedSize()
-                        .foregroundStyle(menuBarLabelColor)
+                    MenuBarLabel(text: labelText, tint: menuBarTint,
+                                 status: store.menuBarStatus(source: menuBarSource))
                 }
             }
             .accessibilityElement(children: .ignore)
@@ -81,21 +78,41 @@ struct AISmartbarApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+}
 
-    /// Text color for the menu-bar label. Neutral by default — Color.primary
-    /// inherits the menu bar's own vibrancy, so it stays legible on a light
-    /// or dark bar alike. "Tint when low" colors it only once the window is
-    /// past green (yellow → red → spent): the color then appears exactly when
-    /// it means something, and a green number never risks washing out on a
-    /// light menu bar.
-    private var menuBarLabelColor: Color {
-        guard menuBarTint, let status = store.menuBarStatus(source: menuBarSource) else {
-            return .primary
-        }
-        switch status {
-        case .green, .gray: return .primary
-        default: return Color(nsColor: status.nsColor)
-        }
+/// The optional text beside the icon, tinted to match the window it reads.
+///
+/// A small View rather than a colour computed up in the App scene, because
+/// the tint is appearance-aware and only a View gets \.colorScheme.
+private struct MenuBarLabel: View {
+    let text: String
+    let tint: Bool
+    let status: Status?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            // Regular weight, sized to sit in the same class as the bar's
+            // other readouts (a temperature widget, the clock) rather than a
+            // bolder number that reads as a badge shouting over them. The
+            // status tint, not the weight, is what carries the state.
+            .font(.system(size: 12, weight: .regular))
+            .monospacedDigit()
+            .fixedSize()
+            .foregroundStyle(color)
+    }
+
+    /// When tinted, the number wears its window's status colour — the same
+    /// green→red the pill shows — so the label restates the state at a glance
+    /// instead of a neutral figure. Scheme-aware (unlike the baked pill,
+    /// StatusPalette's nsColor) because the label is live Text over the bar's
+    /// own vibrancy: the light ramp keeps green and yellow legible on a light
+    /// menu bar, exactly the wash-out the dark ramp would cause there. Off, or
+    /// with no window to read, falls back to primary, which inherits that
+    /// vibrancy directly.
+    private var color: Color {
+        guard tint, let status else { return .primary }
+        return status.color(in: colorScheme)
     }
 }
 

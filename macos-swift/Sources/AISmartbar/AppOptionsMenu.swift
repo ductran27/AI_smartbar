@@ -47,7 +47,7 @@ struct AppOptionsMenu: View {
             .pickerStyle(.inline)
             .disabled(menuBarLabel == "off")
 
-            Toggle("Tint when low", isOn: $menuBarTint)
+            Toggle("Tint to match status", isOn: $menuBarTint)
                 .disabled(menuBarLabel == "off")
 
             Divider()
