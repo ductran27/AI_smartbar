@@ -23,7 +23,6 @@ tests/test_model.py::TestMenuBarLabel.
 from __future__ import annotations
 
 import os
-import re
 import unittest
 
 import smartbar
