@@ -254,6 +254,29 @@ struct Account: Identifiable, Equatable {
         }
         return ([email] + lines).joined(separator: "\n")
     }
+
+    /// The optional text beside the menu-bar icon — mirror of
+    /// model.menu_bar_label (pinned by tests/test_menubar_label_parity.py).
+    /// `mode` is what to show ("percentLeft" / "reset"; "off" or an absent
+    /// window yields ""), `source` which window to read ("5h" or the "7d"
+    /// weekly limit) — both are the literal @AppStorage values. Returns ""
+    /// whenever there is nothing honest to show, and the caller draws the
+    /// icon alone.
+    func menuBarLabel(mode: String, source: String, now: Date = Date()) -> String {
+        if mode == "off" { return "" }
+        guard let metric = metrics.first(where: { $0.key == source }) else { return "" }
+        switch mode {
+        case "percentLeft": return "\(max(0, 100 - metric.usedPct))%"
+        case "reset": return metric.liveCountdown(now: now)
+        default: return ""
+        }
+    }
+
+    /// The status of the window a menu-bar label reads, so the text can be
+    /// tinted the same green→red the pill is — nil when that window is absent.
+    func menuBarLabelStatus(source: String) -> Status? {
+        metrics.first(where: { $0.key == source })?.status
+    }
 }
 
 struct Snapshot: Equatable {

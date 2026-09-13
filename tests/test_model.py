@@ -259,6 +259,63 @@ class TestFormatting(Env):
         self.assertEqual(snap.active_account.number, 2)
 
 
+class TestMenuBarLabel(Env):
+    """The optional macOS menu-bar text label — off by default, driven by a
+    mode (what to show) and a source (which window). Swift's Account.menuBarLabel
+    mirrors this; tests/test_menubar_label_parity.py pins the two together."""
+
+    def setUp(self):
+        super().setUp()
+        # now sits 1h47m before the 5h reset and inside a 7d window.
+        self.now = datetime(2026, 1, 1, 0, 13, tzinfo=timezone.utc)
+        self.acct = account(1, "duc.dut.wr@gmail.com", metrics=[
+            metric("5h", 42.0, resets_at="2026-01-01T02:00:00+00:00",
+                   countdown="stale"),
+            metric("7d", 20.0, resets_at="2026-01-03T00:13:00+00:00",
+                   countdown="stale"),
+        ])
+
+    def test_off_shows_nothing(self):
+        self.assertEqual(model.menu_bar_label(self.acct, "off", "5h"), "")
+
+    def test_none_account_shows_nothing(self):
+        self.assertEqual(model.menu_bar_label(None, "percentLeft", "5h"), "")
+
+    def test_percent_left_of_the_five_hour_window(self):
+        # 42% used -> 58% left.
+        self.assertEqual(model.menu_bar_label(self.acct, "percentLeft", "5h"),
+                         "58%")
+
+    def test_source_selects_the_window(self):
+        # Same account, weekly window: 20% used -> 80% left.
+        self.assertEqual(model.menu_bar_label(self.acct, "percentLeft", "7d"),
+                         "80%")
+
+    def test_percent_left_clamps_over_spent_at_zero(self):
+        spent = account(metrics=[metric("5h", 105.0)])
+        self.assertEqual(model.menu_bar_label(spent, "percentLeft", "5h"), "0%")
+
+    def test_reset_is_the_live_countdown_of_the_chosen_window(self):
+        self.assertEqual(
+            model.menu_bar_label(self.acct, "reset", "5h", now=self.now),
+            "1h 47m")
+
+    def test_reset_falls_back_to_the_fetch_time_string(self):
+        # Unparseable resets_at -> cswap's frozen countdown, never blank.
+        acct = account(metrics=[metric("5h", 10.0, resets_at="",
+                                       countdown="3h 9m")])
+        self.assertEqual(model.menu_bar_label(acct, "reset", "5h"), "3h 9m")
+
+    def test_absent_window_shows_nothing(self):
+        only_weekly = account(metrics=[metric("7d", 30.0)])
+        self.assertEqual(model.menu_bar_label(only_weekly, "percentLeft", "5h"),
+                         "")
+
+    def test_no_data_shows_nothing(self):
+        self.assertEqual(model.menu_bar_label(account(metrics=[]),
+                                              "percentLeft", "5h"), "")
+
+
 class TestGeneralScopedRows(Env):
     def setUp(self):
         super().setUp()

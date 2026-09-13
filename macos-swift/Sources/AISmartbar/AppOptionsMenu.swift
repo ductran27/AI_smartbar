@@ -7,6 +7,14 @@ import SwiftUI
 struct AppOptionsMenu: View {
     @EnvironmentObject private var updates: UpdateStatus
 
+    // The optional menu-bar text label — off by default. Same @AppStorage
+    // keys the MenuBarExtra label reads in AISmartbarApp, so a change here
+    // updates the icon immediately. The "Read from" window and "Tint" only
+    // matter once a text mode is on, so both are disabled while it is off.
+    @AppStorage("menuBarLabel") private var menuBarLabel = "off"
+    @AppStorage("menuBarSource") private var menuBarSource = "5h"
+    @AppStorage("menuBarTint") private var menuBarTint = true
+
     var body: some View {
         Menu {
             Button {
@@ -22,6 +30,25 @@ struct AppOptionsMenu: View {
                 Label(updateCheckTitle, systemImage: "arrow.down.circle")
             }
             .disabled(updates.isChecking || updates.isUpdating)
+
+            Divider()
+
+            Picker("Menu-bar text", selection: $menuBarLabel) {
+                Text("Icon only").tag("off")
+                Text("Percent left").tag("percentLeft")
+                Text("Time to reset").tag("reset")
+            }
+            .pickerStyle(.inline)
+
+            Picker("Read from", selection: $menuBarSource) {
+                Text("5-hour limit").tag("5h")
+                Text("Weekly limit").tag("7d")
+            }
+            .pickerStyle(.inline)
+            .disabled(menuBarLabel == "off")
+
+            Toggle("Tint when low", isOn: $menuBarTint)
+                .disabled(menuBarLabel == "off")
 
             Divider()
 

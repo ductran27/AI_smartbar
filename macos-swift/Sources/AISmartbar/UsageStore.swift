@@ -96,6 +96,18 @@ final class UsageStore: ObservableObject {
         return account.tooltip()
     }
 
+    /// The optional menu-bar text label for the active account (or "" —
+    /// icon only), and the status behind it for optional tinting. The
+    /// mode/source come from @AppStorage; the logic is the active account's
+    /// own, shared with the painted UIs through model.menu_bar_label.
+    func menuBarText(mode: String, source: String) -> String {
+        snapshot?.activeAccount?.menuBarLabel(mode: mode, source: source) ?? ""
+    }
+
+    func menuBarStatus(source: String) -> Status? {
+        snapshot?.activeAccount?.menuBarLabelStatus(source: source)
+    }
+
     init() {
         rescheduleTimer(interval: baseInterval)
         // The moments the display is most likely stale: the Mac just woke,

@@ -14,6 +14,13 @@ struct AISmartbarApp: App {
     @StateObject private var openai = OpenAIStatus()
     @StateObject private var system = SystemStatus()
 
+    // Optional menu-bar text label — off by default (see AppOptionsMenu's
+    // "Menu bar" section, which writes these same keys). The mode says what
+    // to show, the source which window; both are read by model.menu_bar_label.
+    @AppStorage("menuBarLabel") private var menuBarLabel = "off"
+    @AppStorage("menuBarSource") private var menuBarSource = "5h"
+    @AppStorage("menuBarTint") private var menuBarTint = true
+
     var body: some Scene {
         MenuBarExtra {
             PopoverView()
@@ -52,12 +59,43 @@ struct AISmartbarApp: App {
                 ? store.tooltipSummary
                 : "\(store.tooltipSummary)\n\nUpdate to "
                   + "\(updates.pendingVersion) available")
-            Image(nsImage: updates.pendingVersion.isEmpty
-                  ? store.icon
-                  : MenuBarIcon.badged(store.icon))
-                .accessibilityLabel(summary)
+            // Optional text beside the icon (off by default). The colored
+            // pills stay a baked NSImage; the label is live SwiftUI Text so
+            // it inherits the menu bar's own light/dark vibrancy — a color
+            // baked into the bitmap could not adapt to the bar behind it.
+            let labelText = store.menuBarText(mode: menuBarLabel, source: menuBarSource)
+            HStack(spacing: 3) {
+                Image(nsImage: updates.pendingVersion.isEmpty
+                      ? store.icon
+                      : MenuBarIcon.badged(store.icon))
+                if !labelText.isEmpty {
+                    Text(labelText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .fixedSize()
+                        .foregroundStyle(menuBarLabelColor)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(summary)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// Text color for the menu-bar label. Neutral by default — Color.primary
+    /// inherits the menu bar's own vibrancy, so it stays legible on a light
+    /// or dark bar alike. "Tint when low" colors it only once the window is
+    /// past green (yellow → red → spent): the color then appears exactly when
+    /// it means something, and a green number never risks washing out on a
+    /// light menu bar.
+    private var menuBarLabelColor: Color {
+        guard menuBarTint, let status = store.menuBarStatus(source: menuBarSource) else {
+            return .primary
+        }
+        switch status {
+        case .green, .gray: return .primary
+        default: return Color(nsColor: status.nsColor)
+        }
     }
 }
 

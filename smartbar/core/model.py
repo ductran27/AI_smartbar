@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from smartbar.core.reset_countdown_format import parse_iso
+from smartbar.core.reset_countdown_format import parse_iso, remaining_text
 
 DEFAULT_YELLOW_USED = 50.0
 DEFAULT_LOW_USED = 75.0
@@ -463,3 +463,40 @@ def macos_title(account) -> str:
     """Menu-bar text mirroring the tray badge: one dotted segment per row."""
     return " · ".join(f"{DOT[row_color]} {text}"
                       for text, row_color in icon_rows(account))
+
+
+# The stored @AppStorage values a user picks for the optional macOS menu-bar
+# text label. These literals ARE the cross-language protocol: the Swift side
+# stores exactly these strings, so this function and Account.menuBarLabel
+# stay pinned identical (tests/test_menubar_label_parity.py). Sources are the
+# metric KEYS the label reads — "5h" and the "7d" weekly window.
+MENU_LABEL_OFF = "off"
+MENU_LABEL_PERCENT_LEFT = "percentLeft"
+MENU_LABEL_RESET = "reset"
+
+
+def menu_bar_label(account, mode: str, source: str, now=None) -> str:
+    """The optional text beside the twin-pill menu-bar icon, or "".
+
+    OFF by default: the feature only shows text when the user opts in, and
+    even then this returns "" (draw the icon alone) whenever there is nothing
+    honest to show — no active account, or the chosen window is absent from
+    this account's data.
+
+    `mode` says WHAT to show — the budget still left ("percentLeft", e.g.
+    "58%") or how long until the window refills ("reset", e.g. "1h 47m").
+    `source` says WHICH window to read it from — the "5h" rolling limit or
+    the "7d" weekly one. The reset text reuses the same live countdown the
+    hover tooltip does (stale fetch-time string as the fallback), so the two
+    never disagree about the wait.
+    """
+    if account is None or mode == MENU_LABEL_OFF:
+        return ""
+    metric = next((m for m in account.metrics if m.key == source), None)
+    if metric is None:
+        return ""
+    if mode == MENU_LABEL_PERCENT_LEFT:
+        return f"{max(0, 100 - used_pct(metric.pct))}%"
+    if mode == MENU_LABEL_RESET:
+        return remaining_text(metric.resets_at, now) or metric.countdown
+    return ""
