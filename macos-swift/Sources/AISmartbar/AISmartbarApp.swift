@@ -92,11 +92,11 @@ private struct MenuBarLabel: View {
 
     var body: some View {
         Text(text)
-            // Regular weight, sized to sit in the same class as the bar's
-            // other readouts (a temperature widget, the clock) rather than a
+            // Regular weight and small — a compact, quiet readout beside the
+            // bar's other widgets (a temperature, the clock) rather than a
             // bolder number that reads as a badge shouting over them. The
-            // status tint, not the weight, is what carries the state.
-            .font(.system(size: 12, weight: .regular))
+            // status tint, not the size, is what carries the state.
+            .font(.system(size: 8, weight: .regular))
             .monospacedDigit()
             .fixedSize()
             .foregroundStyle(color)
