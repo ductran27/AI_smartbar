@@ -19,7 +19,6 @@ struct AISmartbarApp: App {
     // to show, the source which window; both are read by model.menu_bar_label.
     @AppStorage("menuBarLabel") private var menuBarLabel = "off"
     @AppStorage("menuBarSource") private var menuBarSource = "5h"
-    @AppStorage("menuBarTint") private var menuBarTint = true
 
     var body: some Scene {
         MenuBarExtra {
@@ -69,7 +68,7 @@ struct AISmartbarApp: App {
                       ? store.icon
                       : MenuBarIcon.badged(store.icon))
                 if !labelText.isEmpty {
-                    MenuBarLabel(text: labelText, tint: menuBarTint,
+                    MenuBarLabel(text: labelText,
                                  status: store.menuBarStatus(source: menuBarSource))
                 }
             }
@@ -86,7 +85,6 @@ struct AISmartbarApp: App {
 /// the tint is appearance-aware and only a View gets \.colorScheme.
 private struct MenuBarLabel: View {
     let text: String
-    let tint: Bool
     let status: Status?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -96,22 +94,21 @@ private struct MenuBarLabel: View {
             // bar's other widgets (a temperature, the clock) rather than a
             // bolder number that reads as a badge shouting over them. The
             // status tint, not the size, is what carries the state.
-            .font(.system(size: 8, weight: .regular))
+            .font(.system(size: 6, weight: .regular))
             .monospacedDigit()
             .fixedSize()
             .foregroundStyle(color)
     }
 
-    /// When tinted, the number wears its window's status colour — the same
-    /// green→red the pill shows — so the label restates the state at a glance
-    /// instead of a neutral figure. Scheme-aware (unlike the baked pill,
-    /// StatusPalette's nsColor) because the label is live Text over the bar's
-    /// own vibrancy: the light ramp keeps green and yellow legible on a light
-    /// menu bar, exactly the wash-out the dark ramp would cause there. Off, or
-    /// with no window to read, falls back to primary, which inherits that
-    /// vibrancy directly.
+    /// The number always wears its window's status colour — the same green→red
+    /// the pill shows — so the label restates the state at a glance instead of
+    /// a neutral figure. Scheme-aware (unlike the baked pill, StatusPalette's
+    /// nsColor) because the label is live Text over the bar's own vibrancy: the
+    /// light ramp keeps green and yellow legible on a light menu bar, exactly
+    /// the wash-out the dark ramp would cause there. With no window to read,
+    /// falls back to primary, which inherits that vibrancy directly.
     private var color: Color {
-        guard tint, let status else { return .primary }
+        guard let status else { return .primary }
         return status.color(in: colorScheme)
     }
 }

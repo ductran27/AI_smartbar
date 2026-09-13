@@ -88,7 +88,6 @@ class TestSettingsWiring(SwiftPresent):
             text = _read(source)
             self.assertIn('@AppStorage("menuBarLabel")', text)
             self.assertIn('@AppStorage("menuBarSource")', text)
-            self.assertIn('@AppStorage("menuBarTint")', text)
 
     def test_the_default_is_off_in_both_places(self):
         # The feature is opt-in — it must ship OFF, wherever the default is

@@ -9,11 +9,11 @@ struct AppOptionsMenu: View {
 
     // The optional menu-bar text label — off by default. Same @AppStorage
     // keys the MenuBarExtra label reads in AISmartbarApp, so a change here
-    // updates the icon immediately. The "Read from" window and "Tint" only
-    // matter once a text mode is on, so both are disabled while it is off.
+    // updates the icon immediately. The "Read from" window only matters once a
+    // text mode is on, so it is disabled while the label is off. The label
+    // always wears its window's status colour — there is no tint toggle.
     @AppStorage("menuBarLabel") private var menuBarLabel = "off"
     @AppStorage("menuBarSource") private var menuBarSource = "5h"
-    @AppStorage("menuBarTint") private var menuBarTint = true
 
     var body: some View {
         Menu {
@@ -46,9 +46,6 @@ struct AppOptionsMenu: View {
             }
             .pickerStyle(.inline)
             .disabled(menuBarLabel == "off")
-
-            Toggle("Tint to match status", isOn: $menuBarTint)
-                .disabled(menuBarLabel == "off")
 
             Divider()
 
