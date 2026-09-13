@@ -61,13 +61,15 @@ struct MetricBarRow: View {
                     // way they always have — fixed-width right anchoring
                     // alone. SIZE_ROW_VALUE in the shared theme.
                     .font(.system(size: 13, weight: .bold).monospacedDigit())
-                    // A spent limit is a deliberate signal (purple bar), not
-                    // a disabled row — keep its number readable, just
-                    // distinguishable. Both inks come from the palette
-                    // rather than the white-with-alpha literal this used to
-                    // be, because that literal is invisible on a light card.
-                    .foregroundStyle(metric.pct >= 100 ? palette.textSpent
-                                                       : palette.text)
+                    // The readout wears the SAME status ink as the bar below
+                    // it, so the number reinforces the bar's colour instead
+                    // of restating it in neutral text — green while there's
+                    // headroom, warming to red, the spent purple at 100%.
+                    // Mirror of model.color(pct) in popover_layout.py; the
+                    // ramp is tuned per appearance (StatusPalette) to stay
+                    // legible as a filled bar on either ground, the contrast
+                    // a bold readout needs too.
+                    .foregroundStyle(metric.status.color(in: colorScheme))
                     .lineLimit(1)
                     // VALUE_PCT_W in the shared theme.
                     .frame(width: 35, alignment: .trailing)

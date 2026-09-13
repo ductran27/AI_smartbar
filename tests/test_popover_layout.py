@@ -389,7 +389,10 @@ class TestCardContent(unittest.TestCase):
         # Colour and weight carry the hierarchy, not size: the window name
         # and the percentage are the row's facts, the caption qualifies the
         # name. A caption in the same ink would read as a third number to
-        # compare against the other two.
+        # compare against the other two. The percentage wears its status ink
+        # (79% used -> "low"), the bar's own colour — bold and saturated, a
+        # fact; the caption stays secondary ink and regular weight, quieter
+        # than both.
         resets = (NOW + timedelta(hours=2, minutes=5)).isoformat()
         built = layout.build(
             snap(account(metrics=[metric(pct=79.0, resets_at=resets)])),
@@ -400,10 +403,27 @@ class TestCardContent(unittest.TestCase):
         pct = next(s for s in built.shapes
                    if isinstance(s, t.Label) and s.text == "79%")
         self.assertEqual(caption.color, t.DARK.text_secondary)
-        self.assertEqual(pct.color, t.DARK.text)
+        self.assertEqual(pct.color, t.DARK.status_rgba(model.color(79.0)))
         self.assertFalse(caption.bold)
         self.assertTrue(pct.bold)
         self.assertEqual(caption.size, pct.size)
+
+    def test_the_percentage_wears_its_window_status_ink(self):
+        # The number is the bar's readout, so it takes the bar's colour: the
+        # used ramp climbs green -> yellow -> low -> critical -> full (spent
+        # purple at 100%), and the percentage tracks it exactly. Mirror of
+        # MetricBarRow.swift's .foregroundStyle(metric.status.color(in:)).
+        cases = {5.0: "green", 60.0: "yellow", 79.0: "low",
+                 95.0: "critical", 100.0: "full"}
+        for pct_value, status in cases.items():
+            built = layout.build(
+                snap(account(metrics=[metric(pct=pct_value)])), now=NOW)
+            label = next(s for s in built.shapes
+                         if isinstance(s, t.Label)
+                         and s.text == f"{round(pct_value)}%")
+            self.assertEqual(model.color(pct_value), status)
+            self.assertEqual(label.color, t.DARK.status_rgba(status),
+                             f"{round(pct_value)}% should wear {status} ink")
 
     def test_percent_position_is_stable_across_countdown_lengths(self):
         # FINDING 3: the percentage used to be right-anchored as part of

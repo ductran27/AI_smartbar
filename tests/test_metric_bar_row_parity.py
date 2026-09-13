@@ -143,6 +143,21 @@ class TestRowGeometryParity(SwiftPresent):
         self.assertIsNotNone(match, "could not find the percentage's font")
         self.assertEqual(float(match.group(1)), theme.SIZE_ROW_VALUE)
 
+    def test_the_percentage_wears_the_bar_status_ink_on_both_sides(self):
+        """The readout takes the bar's own colour, so the number reinforces
+        the fill instead of restating it in neutral ink. Swift paints it from
+        the same status the fill uses (metric.status.color(in:)); the cairo
+        painter from the same model.color(pct) ramp the fill reads. If either
+        drifts back to a flat text ink the two platforms disagree about what
+        a 90%-used row looks like — and the whole point of the change is lost
+        on one of them silently."""
+        self.assertIn(
+            ".foregroundStyle(metric.status.color(in: colorScheme))",
+            _read(ROW_SOURCE))
+        painter = _read(os.path.join(
+            os.path.dirname(model.__file__), "popover_layout.py"))
+        self.assertIn("s.status_rgba(model.color(metric.pct))", painter)
+
     def test_the_reset_caption_is_worded_and_shares_the_value_size(self):
         """A bare duration beside a percentage gets read as budget left
         rather than time left, so the caption says what it measures. It

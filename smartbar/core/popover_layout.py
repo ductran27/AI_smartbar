@@ -462,10 +462,15 @@ def _card_body(shapes, s, account, top, now, inner_l, inner_r,
         # The bar's own readout, and the only value over the bar. Bold and
         # right-anchored flush with the track's end, so "how full is this"
         # and "what number is that" line up instead of being separated by a
-        # countdown. The spent ink comes from the scheme rather than the
-        # ink-with-alpha literal it used to be, because that literal was
-        # white and a white readout is invisible on a light card.
-        color = s.text_spent if metric.pct >= 100 else s.text
+        # countdown. It wears the SAME status ink as the bar it labels
+        # (model.color(pct) -> the used ramp), so the number reinforces the
+        # bar's colour instead of restating it in neutral text — green while
+        # there's headroom, warming through to red, and the spent purple at
+        # 100%. That subsumes the old pct>=100 special-case: "full" already
+        # names the purple, and every ramp colour is tuned per scheme (see
+        # StatusPalette.swift) to stay legible as a filled bar on either
+        # ground, which is the same contrast a bold readout needs.
+        color = s.status_rgba(model.color(metric.pct))
         shapes.append(t.Label(inner_r, label_cy, f"{round(metric.pct)}%",
                               size=t.SIZE_ROW_VALUE, bold=True, mono=True,
                               anchor="right", color=color))
