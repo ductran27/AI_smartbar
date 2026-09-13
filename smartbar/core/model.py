@@ -374,6 +374,43 @@ def account_address(account) -> str:
     return account.email
 
 
+# Consumer freemail domains carry no identity — nearly every personal inbox
+# lives on one of a handful of them — so the card header drops them and
+# shows the local part alone ("duc.dut.wr@gmail.com" -> "duc.dut.wr"). A
+# domain that is NOT one of these is kept in full: a work or school address
+# ("nguyen@dut.edu.vn") is exactly what tells two accounts apart, so hiding
+# it would be the opposite of helpful. Lower-case, compared case-folded.
+# AccountCardView.swift mirrors this list — pinned by
+# tests/test_account_card_parity.py.
+FREEMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com",
+    "outlook.com", "hotmail.com", "live.com", "msn.com",
+    "yahoo.com", "ymail.com",
+    "icloud.com", "me.com", "mac.com",
+    "proton.me", "protonmail.com",
+    "aol.com",
+})
+
+
+def account_display(account) -> str:
+    """The address as the card header shows it: the local part alone when
+    the domain is a generic freemail host (FREEMAIL_DOMAINS), the full
+    address otherwise.
+
+    This is a DISPLAY shortening for the one line that runs tight against
+    the badge and switch button, not a new identity. account_address()/
+    account_label() still carry the whole email everywhere being sure of the
+    account matters — the remove confirmation, alerts, the tray title — and
+    the full address is always one hover away in the card's tooltip, so
+    nothing is ever truly hidden.
+    """
+    email = account.email
+    local, sep, domain = email.rpartition("@")
+    if sep and local and domain.lower() in FREEMAIL_DOMAINS:
+        return local
+    return email
+
+
 def account_badge(account) -> str:
     """The plan suffix alone: "20x", "Pro", or "" when there is nothing to
     say (unknown tier, managed API-key account, or SMARTBAR_PLANS=off — see

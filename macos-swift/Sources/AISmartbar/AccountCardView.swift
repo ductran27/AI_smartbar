@@ -62,6 +62,46 @@ struct AccountCardView: View {
         return "\(account.email) \u{00B7} \(badge)"
     }
 
+    /// Consumer freemail domains carry no identity — nearly every personal
+    /// inbox lives on one of a handful of them — so the header drops them and
+    /// shows the local part alone. Any other domain (a work or school
+    /// address) is kept: it is exactly what tells two accounts apart. Mirrors
+    /// model.FREEMAIL_DOMAINS — pinned by tests/test_account_card_parity.py.
+    private static let freemailDomains: Set<String> = [
+        "gmail.com", "googlemail.com",
+        "outlook.com", "hotmail.com", "live.com", "msn.com",
+        "yahoo.com", "ymail.com",
+        "icloud.com", "me.com", "mac.com",
+        "proton.me", "protonmail.com",
+        "aol.com",
+    ]
+
+    /// The address as the header shows it — the bare local part when the
+    /// domain is generic freemail, the whole email otherwise. A display
+    /// shortening for the one tight line only; the full address stays in the
+    /// hover tooltip (hoverHelp) and in the remove confirmation. Mirror of
+    /// model.account_display.
+    private var displayAddress: String {
+        guard let at = account.email.lastIndex(of: "@") else {
+            return account.email
+        }
+        let local = account.email[..<at]
+        let domain = account.email[account.email.index(after: at)...]
+        if !local.isEmpty
+            && Self.freemailDomains.contains(domain.lowercased()) {
+            return String(local)
+        }
+        return account.email
+    }
+
+    /// The address line's hover text: the full email (the header may have
+    /// dropped its domain or middle-truncated it), then the device or
+    /// measurement note when there is one.
+    private var hoverHelp: String {
+        let extra = headerHelp
+        return extra.isEmpty ? account.email : "\(account.email)\n\(extra)"
+    }
+
     /// OpenAI cards say when their numbers were measured (they move only
     /// while Codex is actually used); Claude cards keep the device story.
     private var headerHelp: String {
@@ -171,13 +211,15 @@ struct AccountCardView: View {
             statusDot
             // Just the address now — the plan/device badge moved into its
             // own micro-chip (planBadge, below) so this line never has to
-            // make room for it.
-            Text(account.email)
+            // make room for it. A generic freemail domain is dropped
+            // (displayAddress) so the name that distinguishes the account
+            // reads at a glance; the whole email is in the hover tooltip.
+            Text(displayAddress)
                 .font(.system(size: 15.5, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(headerHelp)
+                .help(hoverHelp)
             Spacer(minLength: 10)
             // The remove ✕'s HIT TARGET and TAP only exist while the
             // pointer is on a non-active card (mirror of the shared

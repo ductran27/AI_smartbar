@@ -355,11 +355,35 @@ class TestCardContent(unittest.TestCase):
     def test_the_account_address_is_the_one_label_that_middle_truncates(self):
         # Mirrors AccountCardView.swift's cardHeader, the only Text in the
         # Swift tree with an explicit .truncationMode(.middle) — see
-        # Label.mode's comment in popover_theme.py.
+        # Label.mode's comment in popover_theme.py. example.com is not a
+        # freemail host, so account_display keeps it whole and the label
+        # text is still the full address.
         built = layout.build(snap(account(email="a@example.com")), now=NOW)
         label = next(s for s in built.shapes
                      if isinstance(s, t.Label) and s.text == "a@example.com")
         self.assertEqual(label.mode, "middle")
+
+    def test_the_header_shows_the_shortened_display_address(self):
+        # A freemail domain is dropped (model.account_display) so the name
+        # that distinguishes the account reads at a glance; the whole email
+        # is one hover away (next test).
+        built = layout.build(snap(account(email="duc.dut.wr@gmail.com")),
+                             now=NOW)
+        texts = labels(built)
+        self.assertIn("duc.dut.wr", texts)
+        self.assertNotIn("duc.dut.wr@gmail.com", texts)
+
+    def test_the_address_hover_carries_the_full_email(self):
+        # The header dropped "@gmail.com"; the tooltip over the address text
+        # gives the exact address back, so two accounts that shorten to the
+        # same name are still tellable apart. Mirrors AccountCardView's
+        # .help(hoverHelp).
+        built = layout.build(snap(account(email="duc.dut.wr@gmail.com")),
+                             now=NOW)
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == "duc.dut.wr")
+        self.assertEqual(built.tooltip_at(label.x + 2, label.y),
+                         "duc.dut.wr@gmail.com")
 
     def test_the_countdown_is_quieter_than_the_two_facts_it_sits_between(self):
         # Colour and weight carry the hierarchy, not size: the window name

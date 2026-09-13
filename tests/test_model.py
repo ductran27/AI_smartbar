@@ -406,6 +406,50 @@ class TestAccountAddress(Env):
         self.assertEqual(model.account_address(acct), "a@x.com")
 
 
+class TestAccountDisplay(Env):
+    """The header-only shortening: a generic freemail domain is dropped to
+    the local part, everything else is kept whole. account_address stays the
+    full email regardless (TestAccountAddress), so the two must be checked
+    apart."""
+
+    def test_a_freemail_domain_is_dropped_to_the_local_part(self):
+        self.assertEqual(
+            model.account_display(_badge_account(email="duc.dut.wr@gmail.com")),
+            "duc.dut.wr")
+
+    def test_every_listed_freemail_host_is_dropped(self):
+        for domain in model.FREEMAIL_DOMAINS:
+            with self.subTest(domain=domain):
+                acct = _badge_account(email=f"someone@{domain}")
+                self.assertEqual(model.account_display(acct), "someone")
+
+    def test_the_match_is_case_insensitive(self):
+        self.assertEqual(
+            model.account_display(_badge_account(email="Duc@Gmail.COM")),
+            "Duc")
+
+    def test_an_identity_bearing_domain_is_kept_in_full(self):
+        # The .edu case the request called out: a school or work address is
+        # what tells accounts apart, so it survives untouched.
+        for email in ("nguyen@dut.edu.vn", "alice@company.com",
+                      "bob@self-hosted.io"):
+            with self.subTest(email=email):
+                acct = _badge_account(email=email)
+                self.assertEqual(model.account_display(acct), email)
+
+    def test_a_string_with_no_at_is_returned_unchanged(self):
+        self.assertEqual(
+            model.account_display(_badge_account(email="local-only")),
+            "local-only")
+
+    def test_an_empty_local_part_keeps_the_whole_string(self):
+        # "@gmail.com" is not a real address; dropping it to "" would erase
+        # the row, so the guard keeps the original.
+        self.assertEqual(
+            model.account_display(_badge_account(email="@gmail.com")),
+            "@gmail.com")
+
+
 class TestAccountBadge(Env):
     def test_no_plan_is_empty(self):
         self.assertEqual(model.account_badge(_badge_account()), "")

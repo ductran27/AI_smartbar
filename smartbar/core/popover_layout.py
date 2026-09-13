@@ -379,10 +379,20 @@ def _card(shapes, hits, s, account, top, now, hover, confirm=""):
     # not, quietly granting the label 1pt more room than the row had.
     label_l = inner_l + t.DOT_R * 2 + 9
     shapes.append(t.Label(label_l, head_cy,
-                          model.account_address(account),
+                          model.account_display(account),
                           size=t.SIZE_EMAIL, bold=True, color=s.text,
                           max_width=label_r - label_l,
                           mode="middle"))
+    # The header may drop a freemail domain (account_display) or middle-
+    # truncate a long address to fit, so the WHOLE email rides in a hover
+    # tooltip. A tooltip-only tracker over just the address text — not the
+    # badge/✕/switch to its right, whose own tooltips must stay reachable
+    # (TestDisabledSwitchTooltip) — reusing the card's own name so hovering
+    # the address still counts as "on this card" for the ✕. Mirrors
+    # AccountCardView.cardHeader's .help(hoverHelp) on the address Text.
+    hits.append(t.Hit(f"card:{pid}", label_l, head_cy - t.CARD_HEADER_H / 2,
+                      label_r - label_l, t.CARD_HEADER_H,
+                      tooltip=account.email))
 
     _card_body(shapes, s, account, top, now, inner_l, inner_r)
     return height

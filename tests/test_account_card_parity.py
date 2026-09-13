@@ -130,5 +130,46 @@ class TestBadgeChipParity(SwiftPresent):
         self.assertLess(badge_at, make_active_at)
 
 
+class TestDisplayAddressParity(SwiftPresent):
+    """The header shortens a freemail address to its local part in two
+    languages: model.account_display (Python, for the painted UIs and the
+    tray) and AccountCardView.displayAddress (SwiftUI, native). The domain
+    list is the part that drifts — a host added on one side and forgotten on
+    the other would show the domain on one platform and hide it on the
+    other — so pin the Swift set as source text against model.FREEMAIL_DOMAINS
+    and confirm the header actually renders through displayAddress.
+    """
+
+    def _swift_freemail_domains(self) -> set:
+        text = _read(CARD_SOURCE)
+        match = re.search(
+            r"freemailDomains: Set<String> = \[(.*?)\]", text, re.DOTALL)
+        self.assertIsNotNone(match, "could not find the Swift freemail set")
+        return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+    def test_the_swift_freemail_list_matches_the_model(self):
+        self.assertEqual(self._swift_freemail_domains(),
+                         set(model.FREEMAIL_DOMAINS))
+
+    def test_the_header_renders_through_display_address(self):
+        # Not Text(account.email): the whole point is that the header shows
+        # the shortened form. The bare email still belongs in the hover
+        # tooltip and the remove confirmation, checked below / by
+        # test_popover_layout.
+        text = _read(CARD_SOURCE)
+        header = text[text.index("private var cardHeader"):
+                      text.index("private var confirmHeader")]
+        self.assertIn("Text(displayAddress)", header)
+        self.assertNotIn("Text(account.email)", header)
+
+    def test_the_hover_tooltip_still_carries_the_full_email(self):
+        # hoverHelp is what .help() shows; it must be built from the whole
+        # account.email, so the domain a header dropped is never truly gone.
+        text = _read(CARD_SOURCE)
+        hover = text[text.index("private var hoverHelp"):]
+        hover = hover[:hover.index("\n    }")]
+        self.assertIn("account.email", hover)
+
+
 if __name__ == "__main__":
     unittest.main()
