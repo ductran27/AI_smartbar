@@ -41,6 +41,28 @@ def _read(path: str) -> str:
         return handle.read()
 
 
+def _provider_mark_tails(text: str) -> list[str]:
+    """The source that FOLLOWS each `ProviderMark(...)` call in `text`, from
+    just after the call's own closing paren onward — enough for a caller to
+    see what modifier comes next. Parens are balanced rather than matched
+    with `[^)]*`, so an argument list that ever gains a nested call still
+    ends at the right place. `\\b` keeps a hypothetical `MyProviderMark(`
+    from counting."""
+    tails = []
+    for m in re.finditer(r"\bProviderMark\(", text):
+        depth, j = 0, m.end() - 1        # start on the call's own "("
+        while j < len(text):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        tails.append(text[j + 1:])        # everything past the ")"
+    return tails
+
+
 class SwiftPresent(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -71,6 +93,40 @@ class TestProviderMarkDrawsEveryNewKind(SwiftPresent):
         text = _read(MARK_SOURCE)
         self.assertNotIn("systemImage", text)
         self.assertNotIn("Image(systemName", text)
+
+
+class TestEveryProviderMarkIsFramed(SwiftPresent):
+    """ProviderMark's body is a bare `GeometryReader` — greedy, it fills
+    whatever space it is offered and reports SwiftUI's own flexible size,
+    the same shape the account list's collapsing `ScrollView` had (fixed in
+    v1.3.11). It reads as a fixed-size icon ONLY because every call site
+    pins it with a `.frame`; drop one and that mark balloons to fill its
+    container, warping the row around it.
+
+    The two current sites are pinned by NUMBER below (TAB_MARK, INLINE_ICON).
+    This is the complementary guard: it catches a THIRD site added without
+    any frame at all — the failure those number-pinned tests can't see
+    because they only look where a mark is already known to be. Frame-first
+    is the convention: a mark needs its size before any other modifier."""
+
+    def test_every_call_site_is_immediately_framed(self):
+        seen = 0
+        for name in sorted(os.listdir(SWIFT_DIR)):
+            if not name.endswith(".swift"):
+                continue
+            for tail in _provider_mark_tails(_read(os.path.join(SWIFT_DIR,
+                                                                 name))):
+                seen += 1
+                self.assertRegex(
+                    tail, r"\A\s*\.frame\(",
+                    f"a ProviderMark(...) in {name} is not immediately "
+                    "followed by .frame(...) — its greedy GeometryReader "
+                    "will fill its container instead of staying an icon")
+        # Never let the scan pass by finding nothing: the tab mark and the
+        # blocked-line warn mark must both still be here (same floor the
+        # card-gap parity test keeps).
+        self.assertGreaterEqual(
+            seen, 2, "expected at least the tab and blocked-line ProviderMarks")
 
 
 class TestTabMarkParity(SwiftPresent):
