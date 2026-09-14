@@ -204,19 +204,15 @@ struct PopoverView: View {
     private static let listMaxHeight: CGFloat = 555
     private static let listScrollsPast = 4
 
-    @ViewBuilder
     private var openAIList: some View {
         let cards = VStack(spacing: 9) {
             ForEach(openai.accounts) { account in
                 AccountCardView(account: account)
             }
         }
-        if openai.accounts.count > Self.listScrollsPast {
-            ScrollView(showsIndicators: false) { cards }
-                .frame(maxHeight: Self.listMaxHeight)
-        } else {
-            cards
-        }
+        return ScrollingCardList(count: openai.accounts.count,
+                                 scrollsPast: Self.listScrollsPast,
+                                 maxHeight: Self.listMaxHeight) { cards }
     }
 
     /// Transient updater status, plus the one-click upgrade when a release is
@@ -280,19 +276,15 @@ struct PopoverView: View {
             || !updates.launchError.isEmpty
     }
 
-    @ViewBuilder
     private func accountList(_ snapshot: Snapshot) -> some View {
         let cards = VStack(spacing: 9) {
             ForEach(snapshot.accounts) { account in
                 AccountCardView(account: account)
             }
         }
-        if snapshot.accounts.count > Self.listScrollsPast {
-            ScrollView(showsIndicators: false) { cards }
-                .frame(maxHeight: Self.listMaxHeight)
-        } else {
-            cards
-        }
+        return ScrollingCardList(count: snapshot.accounts.count,
+                                 scrollsPast: Self.listScrollsPast,
+                                 maxHeight: Self.listMaxHeight) { cards }
     }
 
     private var header: some View {
@@ -360,6 +352,91 @@ struct PopoverView: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(palette.textSecondary)
             }
+        }
+    }
+}
+
+/// Pure layout decisions for a scrolling card list, split out from the view
+/// so the two behaviours the panel got wrong can be pinned by a test without
+/// a live layout pass: the list collapsing to a fixed sliver, and the list
+/// growing taller than its cap. The view wiring in `ScrollingCardList` is
+/// otherwise only verifiable by opening the panel with enough accounts.
+enum CardListLayout {
+    /// Whether `count` cards should scroll rather than lay out in full.
+    static func scrolls(count: Int, scrollsPast: Int) -> Bool {
+        count > scrollsPast
+    }
+
+    /// The height a scrolling list occupies: its measured content height,
+    /// capped at `maxHeight`. Always tied to the content (never a fixed
+    /// height independent of it — that was the sliver) and never past the cap.
+    static func height(contentHeight: CGFloat, maxHeight: CGFloat) -> CGFloat {
+        min(contentHeight, maxHeight)
+    }
+}
+
+/// Reports the natural (unscrolled) height of a card stack up to its
+/// enclosing ScrollView. See `ScrollingCardList` for why the ScrollView
+/// needs that height handed to it explicitly.
+private struct CardStackHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// A vertical stack of account cards that lays out at its natural height
+/// until it would grow past `maxHeight`, then caps there and scrolls.
+///
+/// The height is MEASURED and applied explicitly rather than left to a bare
+/// `ScrollView { … }.frame(maxHeight:)`. Inside the auto-sizing
+/// MenuBarExtra(.window) panel, a ScrollView asked to size itself returns
+/// SwiftUI's ~10pt "unspecified" height along its scroll axis, and
+/// `.frame(maxHeight:)` only caps a height — it never grows one — so the
+/// list rendered as a ~10pt sliver on first open: every card was there but
+/// all past the first were scrolled out of a viewport too short to show
+/// them. Switching to another provider tab and back forced a fresh layout
+/// with the window already sized, which is exactly the "click OpenAI, click
+/// back to Claude" workaround this fixes. Measuring the stack's real height
+/// and pinning the ScrollView to `min(that, maxHeight)` hands the window a
+/// concrete height on the FIRST pass: no collapse, and no dead space when a
+/// few short cards don't reach the cap. Below `scrollsPast` cards it is a
+/// plain VStack, exactly as before.
+private struct ScrollingCardList<Content: View>: View {
+    let count: Int
+    let scrollsPast: Int
+    let maxHeight: CGFloat
+    let content: Content
+
+    // Seeded at the cap, not 0, so a list long enough to scroll paints at
+    // full height on the first pass — the common case settles with no
+    // visible resize, and a shorter list only ever shrinks to fit once,
+    // never grows in from a sliver.
+    @State private var contentHeight: CGFloat
+
+    init(count: Int, scrollsPast: Int, maxHeight: CGFloat,
+         @ViewBuilder content: () -> Content) {
+        self.count = count
+        self.scrollsPast = scrollsPast
+        self.maxHeight = maxHeight
+        self.content = content()
+        _contentHeight = State(initialValue: maxHeight)
+    }
+
+    var body: some View {
+        if CardListLayout.scrolls(count: count, scrollsPast: scrollsPast) {
+            ScrollView(showsIndicators: false) {
+                content.background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: CardStackHeightKey.self,
+                                               value: proxy.size.height)
+                    })
+            }
+            .frame(height: CardListLayout.height(contentHeight: contentHeight,
+                                                 maxHeight: maxHeight))
+            .onPreferenceChange(CardStackHeightKey.self) { contentHeight = $0 }
+        } else {
+            content
         }
     }
 }
