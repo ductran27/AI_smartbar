@@ -21,6 +21,8 @@ struct PopoverView: View {
     @EnvironmentObject private var updates: UpdateStatus
     @EnvironmentObject private var openai: OpenAIStatus
     @EnvironmentObject private var system: SystemStatus
+    @EnvironmentObject private var presence: PresenceStatus
+    @EnvironmentObject private var plans: PlanStatus
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("providerTab") private var providerTab = "claude"
 
@@ -37,15 +39,17 @@ struct PopoverView: View {
                     providerTabs
                 }
             }
-            // One error line for every card action — switching, removing or
-            // killing, whichever failed most recently (a refused kill used
-            // to set SystemStatus.actionError that nothing displayed).
-            if let actionError = store.switchError ?? store.removeError
-                    ?? openai.removeError ?? system.actionError {
+            // One error line for the card actions of the tab on screen —
+            // switching, removing or killing (a refused kill used to set
+            // SystemStatus.actionError that nothing displayed). Scoped per
+            // tab: one shared line let an old Claude switch error mask a
+            // newer OpenAI failure and follow the user onto every tab.
+            if let actionError {
                 Label(actionError, systemImage: "exclamationmark.triangle")
                     .font(.system(size: 12.5))
                     .foregroundStyle(palette.warning)
                     .lineLimit(2)
+                    .help(actionError)
             }
             if selectedProvider == "system" {
                 // The System tab must not hide what a first run or a broken
@@ -97,9 +101,45 @@ struct PopoverView: View {
         .onAppear {
             store.refresh()
             updates.reload()
-            openai.refresh()
-            system.refresh()
+            // A fetch from a moment ago is fresh enough: re-opening the
+            // panel repeatedly spawned a helper process per open.
+            openai.refresh(ifOlderThan: 30)
+            system.refresh(ifOlderThan: 30)
         }
+        // Errors are about the last thing the user did; a fresh open
+        // starts clean rather than replaying a failure from an hour ago.
+        .onDisappear {
+            store.clearActionErrors()
+            if openai.removeError != nil { openai.removeError = nil }
+            if system.actionError != nil { system.actionError = nil }
+        }
+    }
+
+    private var actionError: String? {
+        switch selectedProvider {
+        case "openai": return openai.removeError
+        case "system": return system.actionError
+        default: return store.switchError ?? store.removeError
+        }
+    }
+
+    /// One card, fed plain values so `.equatable()` can skip it whenever
+    /// its data did not move — see AccountCardView's inputs for why.
+    private func card(_ account: Account) -> some View {
+        AccountCardView(
+            account: account,
+            claudePlan: plans.plans[account.email] ?? "",
+            claudeDevices: presence.counts[account.email] ?? 0,
+            switching: store.switchInFlight,
+            onSwitch: { [store] in store.switchTo(account.number) },
+            onRemove: { [store, openai] in
+                if account.provider == "openai" {
+                    openai.remove(account.email)
+                } else {
+                    store.removeAccount(account.number)
+                }
+            })
+            .equatable()
     }
 
     private var hasClaudeAccounts: Bool {
@@ -189,6 +229,8 @@ struct PopoverView: View {
         .buttonStyle(.plain)
         .help(id == "system" ? "Show machine vitals and leftover processes"
               : "Show \(title) accounts")
+        // Selection is drawn only as ink weight; say it to VoiceOver too.
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// How tall the card list may grow before it starts scrolling, and how
@@ -206,8 +248,10 @@ struct PopoverView: View {
 
     private var openAIList: some View {
         let cards = VStack(spacing: 9) {
-            ForEach(openai.accounts) { account in
-                AccountCardView(account: account)
+            // Keyed by address: OpenAI `number`s are list positions, so a
+            // reorder or removal re-bound card state to other accounts.
+            ForEach(openai.accounts, id: \.email) { account in
+                card(account)
             }
         }
         return ScrollingCardList(count: openai.accounts.count,
@@ -244,6 +288,9 @@ struct PopoverView: View {
                         .font(.system(size: 12.5))
                         .foregroundStyle(palette.textSecondary)
                 } else if !updates.pendingVersion.isEmpty {
+                    // A manual check still reports while an update waits;
+                    // it used to run with no visible result at all.
+                    checkStatus
                     Button("Update to \(updates.pendingVersion)") {
                         updates.installUpdate()
                     }
@@ -251,19 +298,26 @@ struct PopoverView: View {
                     .controlSize(.small)
                     .help("Fetch, rebuild and restart AI smartbar")
                     .accessibilityLabel("Update to version \(updates.pendingVersion)")
-                } else if updates.isChecking {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Checking…")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(palette.textSecondary)
-                } else if !updates.checkResult.isEmpty {
-                    Text(updates.checkResult)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(palette.textSecondary)
+                } else {
+                    checkStatus
                 }
             }
             .padding(.top, 1)
+        }
+    }
+
+    @ViewBuilder
+    private var checkStatus: some View {
+        if updates.isChecking {
+            ProgressView()
+                .controlSize(.small)
+            Text("Checking…")
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.textSecondary)
+        } else if !updates.checkResult.isEmpty {
+            Text(updates.checkResult)
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.textSecondary)
         }
     }
 
@@ -279,7 +333,7 @@ struct PopoverView: View {
     private func accountList(_ snapshot: Snapshot) -> some View {
         let cards = VStack(spacing: 9) {
             ForEach(snapshot.accounts) { account in
-                AccountCardView(account: account)
+                card(account)
             }
         }
         return ScrollingCardList(count: snapshot.accounts.count,
@@ -292,13 +346,16 @@ struct PopoverView: View {
             Text("AI smartbar")
                 .font(.system(size: 16.5, weight: .semibold))
                 .foregroundStyle(palette.text)
-            if let updated = store.dataUpdated {
+            // Both describe cswap's Claude poll, so they stay off the other
+            // tabs: the OpenAI cards carry their own "Usage measured" hover,
+            // and a failed Claude poll says nothing about OpenAI or System.
+            if selectedProvider == "claude", let updated = store.dataUpdated {
                 Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                     .font(.system(size: 12.5))
                     .foregroundStyle(palette.textTertiary)
                     .help(freshnessHelp)
             }
-            if store.isStale {
+            if selectedProvider == "claude" && store.isStale {
                 Image(systemName: "wifi.slash")
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(palette.warning)
@@ -307,6 +364,7 @@ struct PopoverView: View {
             Spacer()
             Button {
                 store.refresh(force: true)
+                openai.refresh()
             } label: {
                 // Header chrome sits a step back from the cards it frames —
                 // they are what you opened the panel to read.

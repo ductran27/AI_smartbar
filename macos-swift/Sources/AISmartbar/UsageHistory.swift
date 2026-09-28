@@ -21,7 +21,10 @@ final class UsageHistory {
     // key ("provider|email|metricKey") -> ordered [(minute, pct)] ring.
     private var rings: [String: [[Int]]] = [:]
     private var lastSave = Date.distantPast
-    private static let saveInterval: TimeInterval = 20  // debounce disk writes
+    // Debounce disk writes: every poll used to rewrite the whole file (all
+    // accounts x metrics x a week of samples). Losing a few minutes of
+    // trend on quit is cosmetic.
+    private static let saveInterval: TimeInterval = 300
 
     private init() { load() }
 
@@ -40,7 +43,15 @@ final class UsageHistory {
         let minute = Self.nowMinute(date)
         let value = max(0, min(100, Int(pct.rounded())))
         let k = Self.key(provider: provider, email: email, metric: metric)
-        var ring = (rings[k] ?? []).filter { $0[0] > minute - Self.spanMinutes }
+        let oldest = minute - Self.spanMinutes
+        // Edited in place (taken out of the dictionary, so no copy) and
+        // trimmed only once the oldest sample has aged out: copy-filtering
+        // the whole week-long ring for every metric of every account on
+        // each poll was main-thread work that grew with accounts.
+        var ring = rings.removeValue(forKey: k) ?? []
+        if let first = ring.first, first[0] <= oldest {
+            ring.removeAll { $0[0] <= oldest }
+        }
         if let last = ring.last, last[0] == minute {
             ring[ring.count - 1] = [minute, value]
         } else {

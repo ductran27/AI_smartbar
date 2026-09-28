@@ -28,6 +28,7 @@ final class SystemStatus: ObservableObject {
     private var streamProcess: Process?
     private var streamWanted = false
     private var generation = 0
+    private var lastStarted: Date?
     private var firedAlerts = Set<String>()   // alert keys already notified
     private var pendingKills = Set<String>()  // rows dropped, awaiting truth
 
@@ -48,7 +49,12 @@ final class SystemStatus: ObservableObject {
     /// One background poll: decode the payload, and surface any leftover
     /// notifications the runner decided on. Kept even while the stream runs —
     /// the stream is display-only, the poll is what does the side effects.
-    func refresh() {
+    /// `ifOlderThan` lets the popover-open path skip a spawn (each run is
+    /// ~1 s of side-effecting sampling) when a poll just ran.
+    func refresh(ifOlderThan maxAge: TimeInterval = 0) {
+        if maxAge > 0, let last = lastStarted,
+           Date().timeIntervalSince(last) < maxAge { return }
+        lastStarted = Date()
         generation += 1
         let current = generation
         Task.detached(priority: .utility) {

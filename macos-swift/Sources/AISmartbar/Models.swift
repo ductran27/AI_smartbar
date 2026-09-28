@@ -57,14 +57,18 @@ enum Status: String {
 }
 
 enum Thresholds {
+    /// Read once: `ProcessInfo.environment` rebuilds a dictionary on every
+    /// access, and status(forUsedPct:) runs for every row on every render.
+    private static let environment = ProcessInfo.processInfo.environment
+
     static func envDouble(_ name: String, _ fallback: Double) -> Double {
-        guard let raw = ProcessInfo.processInfo.environment[name],
+        guard let raw = environment[name],
               let value = Double(raw) else { return fallback }
         return value
     }
 
     private static func value(_ name: String, _ fallback: Double) -> Double {
-        if ProcessInfo.processInfo.environment["SMARTBAR_TEST_THRESHOLD"] != nil {
+        if environment["SMARTBAR_TEST_THRESHOLD"] != nil {
             return envDouble("SMARTBAR_TEST_THRESHOLD", fallback)
         }
         return envDouble(name, fallback)
@@ -121,6 +125,15 @@ struct Metric: Identifiable, Equatable {
 
     var id: String { key }
     var status: Status { Thresholds.status(forUsedPct: pct) }
+
+    /// `countdown` only counts when there is no resetsAt to count from:
+    /// cswap re-formats it on every list call, so comparing it made every
+    /// poll look like a change and re-rendered every card for nothing.
+    static func == (lhs: Metric, rhs: Metric) -> Bool {
+        lhs.key == rhs.key && lhs.label == rhs.label && lhs.short == rhs.short
+            && lhs.pct == rhs.pct && lhs.resetsAt == rhs.resetsAt
+            && (!lhs.resetsAt.isEmpty || lhs.countdown == rhs.countdown)
+    }
     var isScoped: Bool { key.hasPrefix("scoped:") }
 
     var usedPct: Int { Int(max(0, pct).rounded()) }

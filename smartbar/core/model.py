@@ -300,10 +300,20 @@ def pill_states(account):
     return states
 
 
+OPENAI_IDLE_TEXT = "No Codex usage since this sign-in yet"
+
+
 def state_text(account) -> str:
     """Explanation shown when an account has no usable usage data."""
     if account.ok:
-        return "" if account.metrics else "No usage data"
+        if account.metrics:
+            return ""
+        # The live ChatGPT login before its first Codex request since
+        # sign-in: codex.py rightly hides older (possibly another
+        # account's) traffic, so say why the card is empty.
+        if account.provider == "openai":
+            return OPENAI_IDLE_TEXT
+        return "No usage data"
     return STATE_TEXT.get(account.status, "No usage data")
 
 

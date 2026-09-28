@@ -18,6 +18,7 @@ final class OpenAIStatus: ObservableObject {
 
     private var timer: Timer?
     private var generation = 0  // stamps fetches; a removal supersedes them
+    private var lastStarted: Date?
 
     init() {
         refresh()
@@ -27,7 +28,12 @@ final class OpenAIStatus: ObservableObject {
         }
     }
 
-    func refresh() {
+    /// `ifOlderThan` lets the popover-open path skip a spawn when a fetch
+    /// just ran; timers, the Refresh button and removals pass nothing.
+    func refresh(ifOlderThan maxAge: TimeInterval = 0) {
+        if maxAge > 0, let last = lastStarted,
+           Date().timeIntervalSince(last) < maxAge { return }
+        lastStarted = Date()
         generation += 1
         let current = generation
         Task.detached(priority: .utility) {

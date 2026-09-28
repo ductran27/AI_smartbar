@@ -98,8 +98,11 @@ def _win(minutes, pct, resets=FUTURE):
             "resets_at": resets}
 
 
-def _rl(lid="codex", primary=None, secondary=None):
-    return {"limit_id": lid, "primary": primary, "secondary": secondary}
+def _rl(lid="codex", primary=None, secondary=None, plan_type=None):
+    limits = {"limit_id": lid, "primary": primary, "secondary": secondary}
+    if plan_type is not None:
+        limits["plan_type"] = plan_type
+    return limits
 
 
 def _write_rollout(home: Path, name, events, pad=0):
@@ -199,7 +202,85 @@ class TestRateLimits(_CodexHome):
         self.assertEqual(self.limits()[0]["5h"]["pct"], 60.0)
 
 
+class TestPlanFilter(_CodexHome):
+    def test_only_foreign_plan_events_read_nothing(self):
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(43200, 97.0), plan_type="free"))])
+        self.assertEqual(codex.rate_limits(str(self.home), plan_type="pro"),
+                         ({}, ""))
+
+    def test_events_without_a_plan_are_accepted(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        self.assertEqual([m.key for m in codex.accounts()[0].metrics], ["5h"])
+
+    def test_raw_plan_types_are_compared_not_badges(self):
+        _write_auth(self.home, "a@x.com", "prolite")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(300, 42.0), plan_type="prolite"))])
+        acct = codex.accounts()[0]
+        self.assertEqual(acct.plan, "Pro Lite")
+        self.assertEqual([m.key for m in acct.metrics], ["5h"])
+
+
 class TestAccounts(_CodexHome):
+    def test_another_plans_later_event_does_not_reach_the_card(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(secondary=_win(10080, 30.0), plan_type="pro")),
+            ("2026-07-25T11:00:00Z",
+             _rl(primary=_win(43200, 97.0), plan_type="free"))])
+        acct = codex.accounts()[0]
+        self.assertEqual([m.key for m in acct.metrics], ["7d"])
+        self.assertEqual(codex.payload()["accounts"][0]["updatedAt"],
+                         "2026-07-25T10:00:00Z")
+
+    def test_legacy_entry_without_plan_type_drops_its_stored_metrics(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        self.cache.mkdir()
+        stale = {"label": "30d", "short": "30d", "pct": 97.0,
+                 "resets_at": "2100-01-01T00:00:00Z"}
+        (self.cache / "openai-accounts.json").write_text(json.dumps({
+            "active": "a@x.com", "cutoff": "", "accounts": {"a@x.com": {
+                "lastSeen": "2026-07-25T09:00:00Z", "plan": "Pro",
+                "metrics": {"30d": stale}, "measuredAt": "x"}}}))
+        self.assertEqual(codex.accounts()[0].metrics, [])
+        reg = json.loads((self.cache / "openai-accounts.json").read_text())
+        self.assertEqual(reg["accounts"]["a@x.com"]["planType"], "pro")
+
+    def test_plan_change_on_the_same_email_drops_old_metrics(self):
+        _write_auth(self.home, "a@x.com", "plus")
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(300, 42.0), plan_type="plus"))])
+        self.assertEqual([m.key for m in codex.accounts()[0].metrics], ["5h"])
+        _write_auth(self.home, "a@x.com", "pro")
+        acct = codex.accounts()[0]
+        self.assertEqual((acct.plan, acct.metrics), ("Pro", []))
+
+    def test_unchanged_plan_keeps_metrics_after_events_age_out(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        path = _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0)))])
+        codex.accounts()
+        path.unlink()
+        self.assertEqual([(m.key, m.pct) for m in codex.accounts()[0].metrics],
+                         [("5h", 42.0)])
+
+    def test_extra_general_windows_sort_by_duration(self):
+        stored = {k: {"label": k, "short": k, "pct": 1.0,
+                      "resets_at": "2100-01-01T00:00:00Z"}
+                  for k in ("30d", "6h", "1d", "7d", "odd")}
+        rows = codex._rows({"metrics": stored}, True,
+                           codex.datetime.now(codex.timezone.utc))
+        self.assertEqual([r.key for r in rows],
+                         ["7d", "6h", "1d", "30d", "odd"])
+
+
     def test_cold_start_attributes_existing_history_to_the_live_login(self):
         _write_auth(self.home, "a@x.com", "pro")
         _write_rollout(self.home, "rollout-a.jsonl", [
@@ -308,6 +389,12 @@ class TestAccounts(_CodexHome):
         self.assertEqual(acct["metrics"][0]["pct"], 42.0)
         self.assertTrue(acct["metrics"][0]["resetsAt"].endswith("Z"))
         self.assertEqual(acct["updatedAt"], "2026-07-25T10:00:00Z")
+
+    def test_live_login_without_usage_says_why_its_card_is_empty(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        acct = codex.payload()["accounts"][0]
+        self.assertEqual(acct["metrics"], [])
+        self.assertEqual(acct["stateText"], "No Codex usage since this sign-in yet")
 
 
 REPO = Path(__file__).resolve().parent.parent

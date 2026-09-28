@@ -8,12 +8,21 @@
 // see PopoverView.swift's header for why that changed.
 import SwiftUI
 
-struct AccountCardView: View {
+struct AccountCardView: View, Equatable {
     let account: Account
-    @EnvironmentObject private var store: UsageStore
-    @EnvironmentObject private var presence: PresenceStatus
-    @EnvironmentObject private var planStatus: PlanStatus
-    @EnvironmentObject private var openai: OpenAIStatus
+    // Plain values and actions handed down by PopoverView rather than four
+    // observed stores: an @EnvironmentObject re-renders EVERY card on ANY
+    // publish of its store (the refresh spinner flipping, an unrelated
+    // provider's poll), which is what made a long card list lag. With plain
+    // inputs and `.equatable()`, a card whose data did not move is skipped.
+    /// PlanStatus's badge and PresenceStatus's device count for this
+    /// address — both Claude facts, looked up by email by the parent.
+    let claudePlan: String
+    let claudeDevices: Int
+    /// A Claude switch is already running: Make Active waits for it.
+    let switching: Bool
+    let onSwitch: () -> Void
+    let onRemove: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var hovering = false
 
@@ -34,14 +43,19 @@ struct AccountCardView: View {
     /// ChatGPT account, so an OpenAI card must not borrow the Claude
     /// device count (pinned by TestOpenAIParity).
     private var devices: Int {
-        account.provider == "openai" ? 0
-            : (presence.counts[account.email] ?? 0)
+        account.provider == "openai" ? 0 : claudeDevices
     }
 
     private var accountPlan: String {
-        account.provider == "openai"
-            ? account.plan
-            : (planStatus.plans[account.email] ?? "")
+        account.provider == "openai" ? account.plan : claudePlan
+    }
+
+    /// The actions are closures over long-lived stores, so only the data
+    /// decides whether the card must redraw.
+    static func == (lhs: AccountCardView, rhs: AccountCardView) -> Bool {
+        lhs.account == rhs.account && lhs.claudePlan == rhs.claudePlan
+            && lhs.claudeDevices == rhs.claudeDevices
+            && lhs.switching == rhs.switching
     }
 
     /// "20x", "Pro", or "" — the plan suffix alone, drawn as its own
@@ -204,6 +218,11 @@ struct AccountCardView: View {
         // survived closing the popover, and a stray click an hour later
         // deleted the slot.
         .onDisappear { confirmToken = nil }
+        // A question that stopped matching (the card became active, or the
+        // OpenAI list reordered) is dropped, not parked: parked, it came
+        // back armed the moment the same slot/address lined up again.
+        .onChange(of: removalToken) { _ in confirmToken = nil }
+        .onChange(of: account.active) { _ in confirmToken = nil }
     }
 
     private var cardHeader: some View {
@@ -261,12 +280,10 @@ struct AccountCardView: View {
                 // Read-only card: no switcher exists for ChatGPT logins.
                 EmptyView()
             } else {
-                Button("Make Active") {
-                    store.switchTo(account.number)
-                }
+                Button("Make Active") { onSwitch() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(account.switchBlocked)
+                .disabled(account.switchBlocked || switching)
                 .help(account.switchBlocked
                       ? "Stored credential is dead — switching would log Claude Code out. \(account.stateText)."
                       : "Switch Claude Code to \(account.email)")
@@ -293,7 +310,7 @@ struct AccountCardView: View {
                 Spacer(minLength: 0)
                 Button("Remove") {
                     confirmToken = nil
-                    performRemoval()
+                    onRemove()
                 }
                 .buttonStyle(.borderedProminent)
                 // DANGER in the shared theme. It used to tint from
@@ -310,14 +327,6 @@ struct AccountCardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-        }
-    }
-
-    private func performRemoval() {
-        if account.provider == "openai" {
-            openai.remove(account.email)
-        } else {
-            store.removeAccount(account.number)
         }
     }
 
@@ -349,7 +358,8 @@ struct AccountCardView: View {
             Circle()
                 .fill(account.worstStatus.color(in: colorScheme))
                 .frame(width: 9, height: 9)
-                .accessibilityLabel("status \(account.worstStatus.rawValue)")
+                // The number, not the ramp's internal name ("status low").
+                .accessibilityLabel("\(account.worstUsedPct)% used at most")
         }
     }
 }

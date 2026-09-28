@@ -4,17 +4,28 @@
 import Foundation
 
 enum TimeRemaining {
+    /// Built once: every metric row parses its reset time on each render,
+    /// and constructing a formatter per call was a measurable share of a
+    /// redraw with many accounts. ISO8601DateFormatter is thread-safe.
+    private static let formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     /// Tolerant ISO-8601 parse: cswap emits fractional seconds
     /// ("…T05:40:00.162682+00:00") and a "Z" suffix, both of which trip
     /// ISO8601DateFormatter's fixed format — strip the fraction first.
     static func parseISO(_ text: String) -> Date? {
         guard !text.isEmpty else { return nil }
         var cleaned = text
-        if let fraction = cleaned.range(of: #"\.\d+"#, options: .regularExpression) {
-            cleaned.removeSubrange(fraction)
+        if let dot = cleaned.firstIndex(of: ".") {
+            let digits = cleaned[cleaned.index(after: dot)...]
+                .prefix { $0.isASCII && $0.isNumber }
+            if !digits.isEmpty {
+                cleaned.removeSubrange(dot..<digits.endIndex)
+            }
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: cleaned)
     }
 

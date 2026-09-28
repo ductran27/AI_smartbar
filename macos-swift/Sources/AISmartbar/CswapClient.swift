@@ -36,7 +36,7 @@ enum CswapClient {
     try:
         from claude_swap.switcher import ClaudeAccountSwitcher
         switcher = ClaudeAccountSwitcher()
-        numbers = {a.number for a in switcher.accounts_snapshot(fetch=set()).accounts}
+        numbers = {str(n) for n in (switcher._get_sequence_data() or {}).get("sequence", [])}
         if numbers:
             switcher.accounts_snapshot(fetch=numbers)
     except Exception as exc:
@@ -55,7 +55,7 @@ enum CswapClient {
     try:
         from claude_swap.switcher import ClaudeAccountSwitcher
         switcher = ClaudeAccountSwitcher()
-        numbers = {a.number for a in switcher.accounts_snapshot(fetch=set()).accounts}
+        numbers = {str(n) for n in (switcher._get_sequence_data() or {}).get("sequence", [])}
         if numbers:
             switcher.accounts_snapshot(fetch=numbers)
         from claude_swap import cli

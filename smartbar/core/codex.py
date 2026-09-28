@@ -2,9 +2,11 @@
 
 Everything is local: who is signed in (and their plan) comes from the label
 claims inside ~/.codex/auth.json, usage comes from the rate-limit snapshots
-Codex writes into its own session rollouts. Token strings are decoded only
-far enough to read two claims and never leave `login()` — no network, no
-keychain, nothing written under the codex home. Design note:
+Codex writes into its own session rollouts (which carry no account id, so
+events are attributed by login time and matched on plan type). Token
+strings are decoded only far enough to read two claims and never leave
+`_login_claims()` — no network, no keychain, nothing written under the
+codex home. Design note:
 docs/superpowers/specs/2026-07-25-openai-provider-tabs-design.md
 """
 from __future__ import annotations
@@ -13,6 +15,7 @@ import base64
 import glob
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 
@@ -21,10 +24,11 @@ from smartbar.core.reset_countdown_format import parse_iso
 
 DEFAULT_CODEX_HOME = "~/.codex"
 
-# Rollout files grow to hundreds of MB; only their tails are ever read, and
-# only recently-touched files are considered (a weekly window is fully
-# covered by 8 days of files).
-TAIL_BYTES = 262144
+# Rollout files grow to gigabytes and interleave accounts; only their tails
+# are ever read, and only recently-touched files are considered (a weekly
+# window is fully covered by 8 days of files). The plan filter in
+# rate_limits keeps a big tail from mixing in another account's events.
+TAIL_BYTES = 1048576
 MAX_FILES = 16
 RECENT_DAYS = 8
 
@@ -61,8 +65,8 @@ def _claims(id_token: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(payload))
 
 
-def login():
-    """(email, plan badge) of the live ChatGPT login, or None.
+def _login_claims():
+    """(email, raw plan type) of the live ChatGPT login, or None.
 
     Reads ONLY the email and plan-type claims; the token strings themselves
     never leave this function. `auth_mode: apikey` (or anything unreadable)
@@ -77,15 +81,22 @@ def login():
             return None
         claims = _claims(token)
         email = (claims.get("email") or "").strip()
-        plan = plan_label((claims.get(_AUTH_CLAIM) or {})
-                          .get("chatgpt_plan_type"))
+        plan = str((claims.get(_AUTH_CLAIM) or {})
+                   .get("chatgpt_plan_type") or "").strip().lower()
         return (email, plan) if email else None
-    except (OSError, ValueError, IndexError):
+    except (OSError, ValueError, IndexError, AttributeError):
         return None
 
 
-# path -> ((mtime, size), [(timestamp, rate_limits), ...]). Steady state is
-# a stat() per recent file; only a grown file re-reads its tail.
+def login():
+    """(email, plan badge) of the live ChatGPT login, or None."""
+    claims = _login_claims()
+    return (claims[0], plan_label(claims[1])) if claims else None
+
+
+# path -> ((mtime, size), [(timestamp, rate_limits), ...]). Every --openai
+# call is a fresh process, so this only saves re-reads within one process
+# (a long-lived UI); a grown file re-reads its tail.
 _scan_cache: dict = {}
 
 
@@ -162,7 +173,7 @@ def _window_key(minutes: int) -> str:
     return f"{max(1, round(minutes / 60))}h"
 
 
-def rate_limits(home=None, cutoff="", now=None):
+def rate_limits(home=None, cutoff="", now=None, plan_type=""):
     """Latest %-used per window from the rollout tails.
 
     Returns ({metric key: {label, short, pct, resets_at}}, measured_at).
@@ -170,7 +181,9 @@ def rate_limits(home=None, cutoff="", now=None):
     signed in before the current login (rollouts carry no account id). A
     window whose reset time has passed reads 0% with no countdown: the
     budget is back, and showing the old number would lie. ({}, "") when
-    nothing is readable.
+    nothing is readable. With `plan_type` (the raw claim, e.g. "prolite"),
+    events stamped with a different plan belong to another account and are
+    skipped; events with no plan (older Codex builds) are still accepted.
     """
     home = home or codex_home()
     now = now or datetime.now(timezone.utc)
@@ -181,6 +194,9 @@ def rate_limits(home=None, cutoff="", now=None):
         for raw_ts, limits in _events(path):
             at = parse_iso(raw_ts)
             if at is None or (cutoff_at is not None and at <= cutoff_at):
+                continue
+            event_plan = (limits.get("plan_type") or "").strip().lower()
+            if plan_type and event_plan and event_plan != plan_type:
                 continue
             limit_id = limits.get("limit_id") or "codex"
             limit_name = limits.get("limit_name") or ""
@@ -313,14 +329,16 @@ def _sync(now) -> dict:
     the predecessor's numbers freeze as they stand and a cutoff timestamp
     keeps its traffic from bleeding into the new login. A cold start (empty
     registry) has no predecessor, so existing history belongs to the
-    current login.
+    current login. Events also carry their plan type, so a plan change
+    drops the stored snapshot and a rescan keeps only matching events.
     """
     reg = _load_registry()
     before = json.dumps(reg, sort_keys=True)
     now_iso = _iso(now.timestamp())
-    live = login()
+    live = _login_claims()
     if live:
-        email, badge = live
+        email, raw_plan = live
+        badge = plan_label(raw_plan)
         if reg.get("active") != email:
             previous = reg.get("active") or ""
             if previous in (reg.get("accounts") or {}):
@@ -330,7 +348,14 @@ def _sync(now) -> dict:
         entry = reg.setdefault("accounts", {}).setdefault(
             email, {"lastSeen": now_iso})
         entry["plan"] = badge   # the claim is fresher than any old event
-        metrics, measured = rate_limits(cutoff=reg.get("cutoff", ""), now=now)
+        if entry.get("planType") != raw_plan:
+            # Numbers stored under another plan (or before planType existed)
+            # may hold a different account's windows; rescan from scratch.
+            entry.pop("metrics", None)
+            entry.pop("measuredAt", None)
+            entry["planType"] = raw_plan
+        metrics, measured = rate_limits(cutoff=reg.get("cutoff", ""), now=now,
+                                        plan_type=raw_plan)
         if metrics:
             entry["metrics"] = metrics
             entry["measuredAt"] = measured
@@ -349,6 +374,13 @@ def _sync(now) -> dict:
     return reg
 
 
+def _span_order(key: str):
+    """Sort key for extra general windows: by duration, odd keys last."""
+    if re.fullmatch(r"\d+[hd]", key):
+        return (0, int(key[:-1]) * (3600 if key[-1] == "h" else 86400), key)
+    return (1, 0, key)
+
+
 def _rows(entry: dict, active: bool, now) -> list:
     """Stored window snapshots -> ordered model.Metric rows.
 
@@ -359,8 +391,9 @@ def _rows(entry: dict, active: bool, now) -> list:
     """
     stored = entry.get("metrics") or {}
     keys = [k for k in ("5h", "7d") if k in stored]
-    keys += sorted(k for k in stored
-                   if k not in ("5h", "7d") and not k.startswith("scoped:"))
+    keys += sorted((k for k in stored
+                    if k not in ("5h", "7d") and not k.startswith("scoped:")),
+                   key=_span_order)
     keys += sorted(k for k in stored if k.startswith("scoped:"))
     rows = []
     for key in keys:

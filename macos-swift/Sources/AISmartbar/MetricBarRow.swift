@@ -40,6 +40,9 @@ struct MetricBarRow: View {
                     .foregroundStyle(palette.text)
                     .lineLimit(1)
                     .frame(width: 73, alignment: .leading)
+                    // Per-model names ("GPT-5.3-Codex-Spark") outgrow the
+                    // column; the full name is one hover away.
+                    .help(metric.label)
                 // The countdown ticks live from the absolute reset time
                 // while the popover is open instead of freezing at fetch
                 // time.
