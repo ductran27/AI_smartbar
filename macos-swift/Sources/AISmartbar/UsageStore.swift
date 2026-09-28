@@ -12,8 +12,10 @@ final class UsageStore: ObservableObject {
     @Published var consecutiveFailures = 0
     @Published var isRefreshing = false
     @Published var icon: NSImage = MenuBarIcon.image(for: [])
-    @Published var switchError: String?  // sticky until the next switch attempt
-    @Published var removeError: String?  // sticky until the next remove attempt
+    @Published var switchError: String?  // sticky until the next attempt or popover close
+    @Published var removeError: String?  // sticky until the next attempt or popover close
+    /// A `cswap switch` is running: a second one would race it.
+    @Published private(set) var switchInFlight = false
 
     /// Per-account device counts. Owned here rather than beside the store
     /// because it needs every snapshot, including the ones taken while the
@@ -179,6 +181,9 @@ final class UsageStore: ObservableObject {
     }
 
     func switchTo(_ number: Int) {
+        // Belt for the disabled buttons: one switch at a time — two racing
+        // `cswap switch` runs could leave either account active.
+        guard !switchInFlight else { return }
         // Belt for the disabled button: never restore a dead credential.
         if let target = snapshot?.accounts.first(where: { $0.number == number }),
            target.switchBlocked {
@@ -187,7 +192,8 @@ final class UsageStore: ObservableObject {
         }
         // Optimistic flip: ACTIVE chip, outline and icon move immediately;
         // the follow-up fetch confirms (or reverts and surfaces the error).
-        switchError = nil
+        clearActionErrors()
+        switchInFlight = true
         if var snap = snapshot {
             for index in snap.accounts.indices {
                 snap.accounts[index].active = snap.accounts[index].number == number
@@ -209,6 +215,7 @@ final class UsageStore: ObservableObject {
                 if let failure {
                     self?.switchError = "Switch failed: \(failure)"
                 }
+                self?.switchInFlight = false
                 self?.isRefreshing = false
                 self?.refresh(force: true)
             }
@@ -223,7 +230,7 @@ final class UsageStore: ObservableObject {
     func removeAccount(_ number: Int) {
         guard let target = snapshot?.accounts.first(where: { $0.number == number }),
               !target.active else { return }
-        removeError = nil
+        clearActionErrors()
         snapshot?.accounts.removeAll { $0.number == number }
         fetchGeneration += 1  // any in-flight pre-removal fetch is now stale
         isRefreshing = false
@@ -232,9 +239,20 @@ final class UsageStore: ObservableObject {
                                                 identifier: String(number))
             await MainActor.run { [weak self] in
                 if let failure { self?.removeError = "Remove failed: \(failure)" }
+                // A poll that started meanwhile read cswap BEFORE the
+                // removal; without this its isRefreshing made the forced
+                // refresh a no-op and that stale read resurrected the card.
+                self?.isRefreshing = false
                 self?.refresh(force: true)
             }
         }
+    }
+
+    /// Only the latest action's outcome is worth showing: a new attempt
+    /// (or closing the popover) retires the previous error.
+    func clearActionErrors() {
+        if switchError != nil { switchError = nil }
+        if removeError != nil { removeError = nil }
     }
 
     private func apply(_ result: Result<Snapshot, Error>, generation: Int) {

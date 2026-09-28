@@ -22,6 +22,8 @@ COMBINED_TIMEOUT = 40
 # limit and refreshes alternates parked on long plans). A fresh and
 # not-yet-due account is still served from the store, so the sustained
 # per-token API rate can never exceed claude-swap's measured budget.
+# Account numbers come from the roster file (no keychain reads), not a
+# throwaway accounts_snapshot pass.
 # Runs under the pipx venv python (see venv_python); any failure is
 # non-fatal — the follow-up `cswap list` serves last-good data regardless.
 # Keep in sync with the copy in macos-swift CswapClient.primerCode.
@@ -30,7 +32,7 @@ import sys
 try:
     from claude_swap.switcher import ClaudeAccountSwitcher
     switcher = ClaudeAccountSwitcher()
-    numbers = {a.number for a in switcher.accounts_snapshot(fetch=set()).accounts}
+    numbers = {str(n) for n in (switcher._get_sequence_data() or {}).get("sequence", [])}
     if numbers:
         switcher.accounts_snapshot(fetch=numbers)
 except Exception as exc:
@@ -48,7 +50,7 @@ import sys
 try:
     from claude_swap.switcher import ClaudeAccountSwitcher
     switcher = ClaudeAccountSwitcher()
-    numbers = {a.number for a in switcher.accounts_snapshot(fetch=set()).accounts}
+    numbers = {str(n) for n in (switcher._get_sequence_data() or {}).get("sequence", [])}
     if numbers:
         switcher.accounts_snapshot(fetch=numbers)
     from claude_swap import cli

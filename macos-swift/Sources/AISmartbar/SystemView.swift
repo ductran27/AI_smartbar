@@ -30,6 +30,9 @@ struct SystemView: View {
         }
         .onAppear { system.startStream() }
         .onDisappear { system.stopStream() }
+        // A fresh open never starts mid-question (AccountCardView's rule):
+        // an armed "Kill x?" otherwise survived closing the popover.
+        .onDisappear { confirmToken = nil }
     }
 
     private func ramp(_ pct: Double) -> Color {
