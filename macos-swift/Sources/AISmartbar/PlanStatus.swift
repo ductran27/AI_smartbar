@@ -21,6 +21,7 @@ final class PlanStatus: ObservableObject {
                                      repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        timer?.tolerance = Self.refreshInterval / 10   // lets macOS coalesce wakeups
     }
 
     func refresh() {
@@ -36,28 +37,6 @@ final class PlanStatus: ObservableObject {
     /// nil = helper unavailable (missing checkout, bad JSON); keep the
     /// last-good map rather than blanking every badge on a hiccup.
     nonisolated private static func fetchPlans() -> [String: String]? {
-        guard let root = PresenceStatus.repoRoot() else { return nil }
-        let launcher = root + "/bin/ai-smartbar"
-        guard FileManager.default.isExecutableFile(atPath: launcher) else {
-            return nil
-        }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = ["--plans", "--json"]
-        // One PATH fix for every helper — Launcher.environment() — so the
-        // four inlined copies cannot drift again.
-        process.environment = Launcher.environment()
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard
-            let raw = try? JSONSerialization.jsonObject(with: data)
-                as? [String: Any],
-            let plans = raw["plans"] as? [String: String]
-        else { return nil }
-        return plans
+        Launcher.json(["--plans", "--json"])?["plans"] as? [String: String]
     }
 }

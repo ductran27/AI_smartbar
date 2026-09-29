@@ -70,6 +70,20 @@ Three approaches were weighed:
    and the whole point of `MenuBarExtra(.window)` was reusing the same
    `PopoverView` everywhere.
 
+> **Update 2026-09-30 — the macOS trigger changed.** The `NSEvent` global
+> monitor described below needs Accessibility trust and wakes the app for
+> every keystroke on the Mac; on a machine that never granted it, the hotkey
+> simply never worked. It is now Carbon's `RegisterEventHotKey`
+> (`GlobalHotkey.swift`) — the API hotkey libraries use and the macOS twin of
+> Windows' `RegisterHotKey`: no permission, and the system wakes the app only
+> for ⌃⌥A. The "open the popover" half is still the simulated icon click, but
+> the button now comes from the always-present status bar window
+> (`StatusItemLocator.menuBarButton`), not from the KVC `"statusItem"` route
+> below: that one only resolved after the popover had been opened once, so
+> the hotkey did nothing until then. The KVC route and its planted accessor
+> view are gone. There is also nothing left to gate on a launch-time
+> permission check.
+
 **Permission handling.** `NSEvent`'s global key monitor only ever invokes
 its handler once macOS has granted the app Accessibility trust (surfaced as
 Input Monitoring on some macOS versions) — there is no separate

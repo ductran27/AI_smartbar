@@ -71,8 +71,8 @@ def open_panel() -> int:
     SIGUSR1 by opening the panel through the exact same path a click does.
 
     macOS and Windows each get a real, in-process global hotkey instead
-    (AISmartbarApp.swift's key monitor, windows/tray.py's RegisterHotKey
-    thread) and have no use for this command, so it refuses there rather
+    (GlobalHotkey.swift's RegisterEventHotKey, windows/tray.py's
+    RegisterHotKey thread) and have no use for this command, so it refuses there rather
     than silently doing nothing.
     """
     if sys.platform in ("darwin", "win32"):

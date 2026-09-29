@@ -136,9 +136,13 @@ final class UpdateStatus: ObservableObject {
         isChecking = true
         checkResult = ""
         launchError = ""      // a fresh interaction supersedes the last one
-        let root = repoRoot
         Task.detached(priority: .userInitiated) {
-            let answer = Self.runCheck(root)
+            // Launcher resolves the checkout (baked root, the updater's
+            // state file, ~/AI_smartbar, a DMG's bundled backend) — a device
+            // installed with --no-auto-update never writes repoRoot into the
+            // state file, so the state-file-only lookup answered "✕ Could
+            // not check" forever there.
+            let answer = Launcher.json(["--check-update", "--json"]) ?? [:]
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.isChecking = false
@@ -165,31 +169,6 @@ final class UpdateStatus: ObservableObject {
                 }
             }
         }
-    }
-
-    /// Runs the check and returns its JSON, or [:] if anything went wrong.
-    nonisolated private static func runCheck(_ root: String) -> [String: Any] {
-        // Launcher.path() resolves SMARTBAR_REPO_ROOT (baked into the app
-        // plist) and the default checkout — a device installed with
-        // --no-auto-update never writes repoRoot into the state file, so the
-        // state-file-only lookup answered "✕ Could not check" forever there.
-        let launcher = Launcher.path()
-            ?? (root.isEmpty ? nil : root).map { $0 + "/bin/ai-smartbar" }
-        guard let launcher, FileManager.default.isExecutableFile(atPath: launcher)
-        else { return [:] }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = ["--check-update", "--json"]
-        process.environment = Launcher.environment()
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = FileHandle.nullDevice
-        // Read before waiting: a full pipe buffer would deadlock the child.
-        guard (try? process.run()) != nil else { return [:] }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            ?? [:]
     }
 
     func installUpdate() {
