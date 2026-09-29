@@ -183,7 +183,7 @@ Numbers are % USED (same scale as /usage). ▌ marks the ACTIVE account.
 - **Device presence** (macOS) — hover a card's header to see how many of your devices have that account active right now, all burning the same budget. Only shown if >1 device.
 - **ChatGPT / Codex tab** — automatically appears when you sign in with Codex. Read-only (no switch); numbers update as Codex works. Remembers signed-out accounts and forgets them on hover.
 - **System tab** (macOS/Linux only) — per-core CPU, 60-minute history, memory, and orphaned processes from dead AI sessions. Click a ✕ to kill junk cleanly; enable auto-kill with `SMARTBAR_SYSMON_AUTOKILL=on`.
-- **⌃⌥A hotkey** (macOS/Windows) to open the panel from anywhere (needs Accessibility permission on macOS).
+- **⌃⌥A hotkey** (macOS/Windows) to open the panel from anywhere (no permission needed).
 - **Adaptive polling** — 60s when something is near a limit, 180s when calm. Respects claude-swap's per-account budget; never exceeds the API rate limit.
 - **Self-updating** — every device checks at login and every 6 hours. A red dot appears on the icon when an update is waiting; click **Update to vX.Y.Z** to apply it. Rolls back if it fails, never touches uncommitted work.
 - **Plan badges** — shows your subscription tier (20x / 5x / Pro / etc.) next to each account. Disable with `SMARTBAR_PLANS=off`.

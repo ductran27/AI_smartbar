@@ -44,6 +44,7 @@ final class SystemStatus: ObservableObject {
                                      repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        timer?.tolerance = interval / 10   // lets macOS coalesce wakeups
     }
 
     /// One background poll: decode the payload, and surface any leftover

@@ -26,6 +26,7 @@ final class OpenAIStatus: ObservableObject {
                                      repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        timer?.tolerance = Self.refreshInterval / 10   // lets macOS coalesce wakeups
     }
 
     /// `ifOlderThan` lets the popover-open path skip a spawn when a fetch
