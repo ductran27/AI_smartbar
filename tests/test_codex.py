@@ -192,6 +192,12 @@ class TestRateLimits(_CodexHome):
         self.assertEqual(metrics["7d"]["pct"], 15.0)
         self.assertEqual(measured, "2026-07-25T12:00:00Z")
 
+    def test_a_zero_minute_window_is_not_a_bogus_1h_row(self):
+        _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(0, 0.0), secondary=_win(10080, 30.0)))])
+        self.assertEqual(sorted(self.limits()[0]), ["7d"])
+
     def test_mtime_bump_invalidates_the_scan_cache(self):
         path = _write_rollout(self.home, "rollout-a.jsonl", [
             ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 10.0)))])
@@ -270,6 +276,87 @@ class TestAccounts(_CodexHome):
         path.unlink()
         self.assertEqual([(m.key, m.pct) for m in codex.accounts()[0].metrics],
                          [("5h", 42.0)])
+
+    def _rows_of(self, acct):
+        return [(m.key, m.pct) for m in acct.metrics]
+
+    def test_a_partial_scan_keeps_the_stored_windows(self):
+        # A busy session can fill a rollout's tail with one limit's events;
+        # the weekly bar read earlier must not vanish because of it.
+        _write_auth(self.home, "a@x.com", "pro")
+        weekly = _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(10080, 84.0)))])
+        codex.accounts()
+        weekly.unlink()
+        _write_rollout(self.home, "rollout-b.jsonl", [
+            ("2026-07-25T11:00:00Z", _rl("codex_bengalfox",
+                                         primary=_win(10080, 1.0)))])
+        self.assertEqual(self._rows_of(codex.accounts()[0]),
+                         [("7d", 84.0), ("scoped:Bengalfox", 1.0)])
+
+    def test_an_older_scanned_reading_does_not_replace_a_newer_one(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        newer = _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T11:00:00Z", _rl(primary=_win(10080, 84.0)))])
+        codex.accounts()
+        newer.unlink()
+        _write_rollout(self.home, "rollout-b.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(10080, 72.0)))])
+        self.assertEqual(self._rows_of(codex.accounts()[0]), [("7d", 84.0)])
+        self.assertEqual(codex.payload()["accounts"][0]["updatedAt"],
+                         "2026-07-25T11:00:00Z")
+
+    def test_a_reset_window_no_longer_reported_is_dropped(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        old = _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z", _rl(primary=_win(300, 42.0, PAST)))])
+        codex.accounts()
+        old.unlink()
+        _write_rollout(self.home, "rollout-b.jsonl", [
+            ("2026-07-25T11:00:00Z", _rl(primary=_win(10080, 5.0)))])
+        self.assertEqual(self._rows_of(codex.accounts()[0]), [("7d", 5.0)])
+
+    def test_a_30_day_window_idle_for_weeks_still_counts(self):
+        _write_auth(self.home, "a@x.com", "free")
+        path = _write_rollout(self.home, "rollout-a.jsonl", [
+            ("2026-07-25T10:00:00Z",
+             _rl(primary=_win(43200, 97.0), plan_type="free"))])
+        weeks_ago = path.stat().st_mtime - 20 * 86400
+        os.utime(path, (weeks_ago, weeks_ago))
+        self.assertEqual(self._rows_of(codex.accounts()[0]), [("30d", 97.0)])
+
+    def test_a_half_written_auth_file_keeps_the_last_poll(self):
+        # Codex rewrites auth.json in place; a poll landing mid-write must
+        # not sign the account out or move the attribution cutoff.
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        _write_auth(self.home, "b@x.com", "plus")
+        codex.accounts()
+        path = self.cache / "openai-accounts.json"
+        stamp = path.read_text(encoding="utf-8")
+        (self.home / "auth.json").write_text('{"auth_mode": "chat')
+        accts = codex.accounts()
+        self.assertEqual([(a.email, a.active) for a in accts],
+                         [("b@x.com", True), ("a@x.com", False)])
+        self.assertEqual(path.read_text(encoding="utf-8"), stamp)
+
+    def test_a_poll_does_not_resurrect_an_account_removed_meanwhile(self):
+        _write_auth(self.home, "a@x.com", "pro")
+        codex.accounts()
+        _write_auth(self.home, "b@x.com", "plus")
+        codex.accounts()                       # a@x.com is now remembered
+        scan = codex.rate_limits
+
+        def remove_during_scan(**kw):
+            codex.remove_account("a@x.com")    # the UI's Remove, mid-poll
+            return {"5h": {"label": "5h", "short": "5h", "pct": 9.0,
+                           "resets_at": "2100-01-01T00:00:00Z",
+                           "at": "2026-07-25T10:00:00Z"}}, ""
+
+        with mock.patch.object(codex, "rate_limits", remove_during_scan):
+            codex.accounts()
+        self.assertIs(codex.rate_limits, scan)
+        self.assertEqual([a.email for a in codex.accounts()], ["b@x.com"])
 
     def test_extra_general_windows_sort_by_duration(self):
         stored = {k: {"label": k, "short": k, "pct": 1.0,

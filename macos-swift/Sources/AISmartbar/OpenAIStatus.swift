@@ -44,8 +44,12 @@ final class OpenAIStatus: ObservableObject {
                 // Record before the change gate: these numbers hold still
                 // between Codex uses, and a flat stretch is still history the
                 // hover-reveal trend should show (as a flat line, not a hole).
+                // Live login only: a signed-out card is a frozen snapshot,
+                // and re-stamping it every poll would draw a line that
+                // looks measured.
                 let now = Date()
-                for account in fetched where !account.metrics.isEmpty {
+                for account in fetched
+                where account.active && !account.metrics.isEmpty {
                     for metric in account.metrics {
                         UsageHistory.shared.record(provider: account.provider,
                                                    email: account.email,

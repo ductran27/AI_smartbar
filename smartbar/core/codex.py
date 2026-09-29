@@ -25,12 +25,13 @@ from smartbar.core.reset_countdown_format import parse_iso
 DEFAULT_CODEX_HOME = "~/.codex"
 
 # Rollout files grow to gigabytes and interleave accounts; only their tails
-# are ever read, and only recently-touched files are considered (a weekly
-# window is fully covered by 8 days of files). The plan filter in
-# rate_limits keeps a big tail from mixing in another account's events.
+# are ever read, and only recently-touched files are considered (31 days
+# covers the longest window Codex reports, Free's 30-day one). The plan
+# filter in rate_limits keeps a big tail from mixing in another account's
+# events, and _sync keeps the windows a tail no longer shows.
 TAIL_BYTES = 1048576
 MAX_FILES = 16
-RECENT_DAYS = 8
+RECENT_DAYS = 31
 
 # chatgpt_plan_type -> badge. Unknown plans fall back to title-case so a new
 # tier degrades to something readable instead of hiding the account.
@@ -69,13 +70,19 @@ def _login_claims():
     """(email, raw plan type) of the live ChatGPT login, or None.
 
     Reads ONLY the email and plan-type claims; the token strings themselves
-    never leave this function. `auth_mode: apikey` (or anything unreadable)
-    is "no ChatGPT login" — API-key use has no subscription windows.
+    never leave this function. `auth_mode: apikey` (or no auth.json) is "no
+    ChatGPT login" — API-key use has no subscription windows. Raises
+    ValueError when auth.json exists but does not parse: Codex rewrites it
+    in place on sign-in and token refresh, so a poll can land mid-write,
+    and that is "unknown", not "signed out".
     """
     try:
         with open(os.path.join(codex_home(), "auth.json"),
                   encoding="utf-8") as handle:
             auth = json.load(handle) or {}
+    except OSError:
+        return None
+    try:
         token = (auth.get("tokens") or {}).get("id_token") or ""
         if token.count(".") != 2:
             return None
@@ -84,13 +91,16 @@ def _login_claims():
         plan = str((claims.get(_AUTH_CLAIM) or {})
                    .get("chatgpt_plan_type") or "").strip().lower()
         return (email, plan) if email else None
-    except (OSError, ValueError, IndexError, AttributeError):
+    except (ValueError, IndexError, AttributeError):
         return None
 
 
 def login():
     """(email, plan badge) of the live ChatGPT login, or None."""
-    claims = _login_claims()
+    try:
+        claims = _login_claims()
+    except ValueError:
+        return None
     return (claims[0], plan_label(claims[1])) if claims else None
 
 
@@ -183,7 +193,11 @@ def rate_limits(home=None, cutoff="", now=None, plan_type=""):
     budget is back, and showing the old number would lie. ({}, "") when
     nothing is readable. With `plan_type` (the raw claim, e.g. "prolite"),
     events stamped with a different plan belong to another account and are
-    skipped; events with no plan (older Codex builds) are still accepted.
+    skipped. Events with no plan_type are accepted: current Codex builds
+    leave it empty on some snapshots, and on real data those are the live
+    login's own (dropping them froze a Free card at 25% while it was at
+    93%). Each window also carries `at`, the time of its event, which
+    _sync uses to keep the later of a stored and a scanned reading.
     """
     home = home or codex_home()
     now = now or datetime.now(timezone.utc)
@@ -205,7 +219,7 @@ def rate_limits(home=None, cutoff="", now=None, plan_type=""):
                 if not isinstance(window, dict):
                     continue
                 minutes = window.get("window_minutes")
-                if not isinstance(minutes, (int, float)):
+                if not isinstance(minutes, (int, float)) or minutes <= 0:
                     continue
                 contributed = True
                 key = (limit_id, int(minutes))
@@ -232,7 +246,7 @@ def rate_limits(home=None, cutoff="", now=None, plan_type=""):
         else:
             pct, resets_at = 0.0, ""   # the window already reset: budget back
         return {"label": label, "short": short, "pct": pct,
-                "resets_at": resets_at}
+                "resets_at": resets_at, "at": _iso(at.timestamp())}
 
     metrics: dict = {}
     scoped: dict = {}   # limit_id -> {minutes: (at, window, name)}
@@ -317,6 +331,29 @@ def remove_account(email: str) -> None:
     _save_registry(reg)
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _merge_windows(stored: dict, scanned: dict, now) -> dict:
+    """Fold a rollout scan into an account's stored windows.
+
+    A scan sees only rollout tails, so a window it misses — or reads from
+    an older event than the stored one — is not news: per window the later
+    measurement wins, and a stored window the scan lacks stands while its
+    reset is still ahead. One that has reset and is no longer reported is
+    dropped, so a window Codex stopped sending cannot linger as a 0% row.
+    """
+    def measured(window):
+        return parse_iso(window.get("at") or "") or _EPOCH
+
+    merged = {key: window for key, window in stored.items()
+              if (parse_iso(window.get("resets_at") or "") or now) > now}
+    for key, window in scanned.items():
+        if key not in merged or measured(window) >= measured(merged[key]):
+            merged[key] = window
+    return merged
+
+
 def _sync(now) -> dict:
     """Fold the live login + fresh rate limits into the registry.
 
@@ -327,15 +364,22 @@ def _sync(now) -> dict:
 
     Attribution: rollouts carry no account id, so when the login changes
     the predecessor's numbers freeze as they stand and a cutoff timestamp
-    keeps its traffic from bleeding into the new login. A cold start (empty
+    keeps its traffic from bleeding into the new login. The cutoff is this
+    poll, not auth.json's last_refresh: account switchers swap in saved
+    auth files whose stamp can be days old, which would hand the previous
+    account's plan-less events to the new login. A cold start (empty
     registry) has no predecessor, so existing history belongs to the
     current login. Events also carry their plan type, so a plan change
     drops the stored snapshot and a rescan keeps only matching events.
     """
     reg = _load_registry()
     before = json.dumps(reg, sort_keys=True)
+    known = set(reg.get("accounts") or {})
     now_iso = _iso(now.timestamp())
-    live = _login_claims()
+    try:
+        live = _login_claims()
+    except ValueError:
+        return reg          # auth.json mid-rewrite: keep the last poll's view
     if live:
         email, raw_plan = live
         badge = plan_label(raw_plan)
@@ -354,11 +398,14 @@ def _sync(now) -> dict:
             entry.pop("metrics", None)
             entry.pop("measuredAt", None)
             entry["planType"] = raw_plan
-        metrics, measured = rate_limits(cutoff=reg.get("cutoff", ""), now=now,
-                                        plan_type=raw_plan)
+        metrics, _measured = rate_limits(cutoff=reg.get("cutoff", ""),
+                                         now=now, plan_type=raw_plan)
         if metrics:
-            entry["metrics"] = metrics
-            entry["measuredAt"] = measured
+            merged = _merge_windows(entry.get("metrics") or {}, metrics, now)
+            entry["metrics"] = merged
+            entry["measuredAt"] = max(
+                (w["at"] for w in merged.values() if w.get("at")),
+                key=parse_iso)
     elif reg.get("active"):
         previous = reg["active"]
         if previous in (reg.get("accounts") or {}):
@@ -367,6 +414,12 @@ def _sync(now) -> dict:
         reg["cutoff"] = now_iso
     after = json.dumps(reg, sort_keys=True)
     if after != before:
+        # A removal (another process) can land while this poll scans;
+        # writing back what it just forgot would undo the user's click.
+        latest = _load_registry()
+        if "accounts" in latest:
+            for gone in known - set(latest["accounts"]) - {reg.get("active")}:
+                reg["accounts"].pop(gone, None)
         try:
             _save_registry(reg)
         except OSError:
