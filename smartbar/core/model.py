@@ -314,6 +314,10 @@ def state_text(account) -> str:
         if account.provider == "openai":
             return OPENAI_IDLE_TEXT
         return "No usage data"
+    if account.status == "signed_out" and not account.metrics:
+        # Every window it had has reset (or it never used Codex here), so
+        # "usage from its last session" would point at nothing.
+        return "Signed out — no usage left to show"
     return STATE_TEXT.get(account.status, "No usage data")
 
 

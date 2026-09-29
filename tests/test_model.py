@@ -553,9 +553,14 @@ class TestProviderModel(unittest.TestCase):
         self.assertEqual(model.Snapshot().openai, [])
 
     def test_signed_out_accounts_explain_themselves(self):
-        acct = account(ok=False, status="signed_out", metrics=[])
+        acct = account(ok=False, status="signed_out", metrics=[metric("7d")])
         self.assertEqual(model.state_text(acct),
                          "Signed out — usage from its last session")
+
+    def test_signed_out_account_with_no_windows_left_says_so(self):
+        acct = account(ok=False, status="signed_out", metrics=[])
+        self.assertEqual(model.state_text(acct),
+                         "Signed out — no usage left to show")
 
     def test_openai_list_never_leaks_into_claude_semantics(self):
         snap = model.Snapshot()
