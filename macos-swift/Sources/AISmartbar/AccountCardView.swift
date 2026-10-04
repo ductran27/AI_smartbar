@@ -174,8 +174,7 @@ struct AccountCardView: View, Equatable {
                 // ROW_GAP in the shared theme.
                 VStack(spacing: 9) {
                     ForEach(account.metrics) { metric in
-                        MetricBarRow(metric: metric, provider: account.provider,
-                                     accountEmail: account.email)
+                        MetricBarRow(metric: metric)
                     }
                 }
             }
