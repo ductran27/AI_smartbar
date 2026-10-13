@@ -128,8 +128,8 @@ struct PopoverView: View {
     private func card(_ account: Account) -> some View {
         AccountCardView(
             account: account,
-            claudePlan: plans.plans[account.email] ?? "",
-            claudeDevices: presence.counts[account.email] ?? 0,
+            claudePlan: plans.plans[account.identity] ?? "",
+            claudeDevices: presence.counts[account.identity] ?? 0,
             switching: store.switchInFlight,
             onSwitch: { [store] in store.switchTo(account.number) },
             onRemove: { [store, openai] in

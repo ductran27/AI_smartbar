@@ -12,6 +12,8 @@ import json
 import os
 import re
 
+from smartbar.core.model import account_identity
+
 DEFAULT_BACKUP_DIR = "~/.claude-swap-backup"
 DEFAULT_CLAUDE_JSON = "~/.claude.json"
 
@@ -66,14 +68,14 @@ def tier_label(rate_limit_tier=None, organization_type=None,
     return sub.title() if sub else ""
 
 
-# path -> ((mtime, size), (email, label) | None). Config backups are a
+# path -> ((mtime, size), (identity, label) | None). Config backups are a
 # couple hundred KB each and polled every 60-180s on Linux; the cache
 # makes the steady state a stat() per file.
 _cache: dict = {}
 
 
 def _labelled(path: str):
-    """(email, label) from one config-backup/claude.json, None if unusable."""
+    """(identity, label) from one config-backup/claude.json, None if unusable."""
     try:
         stat = os.stat(path)
         key = (stat.st_mtime, stat.st_size)
@@ -86,15 +88,18 @@ def _labelled(path: str):
         label = tier_label(oauth.get("organizationRateLimitTier"),
                            oauth.get("organizationType"),
                            oauth.get("subscriptionType"))
-        value = (email, label) if email and label else None
+        org = (oauth.get("organizationUuid") or "").strip()
+        value = (account_identity(email, org), label) if email and label else None
         _cache[path] = (key, value)
         return value
     except (OSError, ValueError):
         return None
 
 
-def plans_by_email(directory=None, claude_json=None) -> dict:
-    """email -> badge label for every account whose tier is readable."""
+def plans_by_account(directory=None, claude_json=None) -> dict:
+    """model.account_identity -> badge label for every account whose tier
+    is readable. Keyed by address AND org: the live login must only
+    refresh its own slot's badge, not every slot sharing the email."""
     if not enabled():
         return {}
     directory = directory or backup_dir()
@@ -115,4 +120,5 @@ def apply_plans(snapshot, plans) -> None:
     if snapshot is None:
         return
     for account in snapshot.accounts:
-        account.plan = str((plans or {}).get(account.email, "") or "")
+        key = account_identity(account.email, account.org_uuid)
+        account.plan = str((plans or {}).get(key, "") or "")

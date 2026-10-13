@@ -356,7 +356,7 @@ class TrayController:
         # the menu rows and the panel both name accounts through
         # model.account_label.
         presence.apply_counts(snap, presence_client.counts())
-        plan.apply_plans(snap, plan.plans_by_email())
+        plan.apply_plans(snap, plan.plans_by_account())
         # ChatGPT accounts ride the snapshot's separate list (cheap local
         # reads, mtime-cached); a panel's OpenAI tab renders them.
         snap.openai = codex.accounts()

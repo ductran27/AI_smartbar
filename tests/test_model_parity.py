@@ -162,3 +162,25 @@ class TestThresholds(SwiftPresent):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAccountIdentity(SwiftPresent):
+    """Plan badges and device counts are Python answers keyed by
+    model.account_identity and looked up in Swift by Account.identity —
+    a different key format would silently blank every badge on the Mac."""
+
+    def test_swift_builds_the_same_key(self):
+        with open(MODELS_SOURCE, encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn('var identity: String { orgUuid.isEmpty ? email : '
+                      '"\\(email)' + model.IDENTITY_SEP + '\\(orgUuid)" }',
+                      source)
+        self.assertEqual(model.account_identity("a@x.com", "u1"), "a@x.com|u1")
+        self.assertEqual(model.account_identity("a@x.com"), "a@x.com")
+
+    def test_swift_looks_up_badges_and_devices_by_identity(self):
+        with open(os.path.join(SWIFT_DIR, "PopoverView.swift"),
+                  encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn("plans.plans[account.identity]", source)
+        self.assertIn("presence.counts[account.identity]", source)

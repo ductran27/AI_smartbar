@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from smartbar.core import branding, cswap, paths, portable, warmup
 from smartbar.core.cswap import CswapError
+from smartbar.core.model import account_identity
 
 CACHE_DIR = paths.cache_dir()
 STATE_FILE = os.path.join(CACHE_DIR, "warmup-state.json")
@@ -375,7 +376,8 @@ def run_once() -> int:
         return 1
 
     now = datetime.now(timezone.utc)
-    warmup.prune_state(state, [a.email for a in snap.accounts], now)
+    warmup.prune_state(state, [account_identity(a.email, a.org_uuid)
+                               for a in snap.accounts], now)
     failures = 0
 
     for account in snap.accounts:
@@ -388,12 +390,13 @@ def run_once() -> int:
         if not ok:
             log.info("skip #%s %s: %s", account.number, account.email, reason)
             continue
-        warmup.record_attempt(state, account.email, now)
+        ident = account_identity(account.email, account.org_uuid)
+        warmup.record_attempt(state, ident, now)
         save_state(state)  # persist BEFORE the ping: a crash must not re-ping
         sent, detail = ping(account.number, claude)
         if not sent:
             failures += 1
-            streak = warmup.record_failure(state, account.email, now)
+            streak = warmup.record_failure(state, ident, now)
             save_state(state)
             log.error("warmup #%s %s failed: %s", account.number, account.email, detail)
             # Notify on the first failure of a streak and on the giving-up
@@ -406,7 +409,7 @@ def run_once() -> int:
                                f"{account.email}: {streak} failures in a row — "
                                "paused until tomorrow (see warmup.log)")
             continue
-        warmup.record_success(state, account.email)
+        warmup.record_success(state, ident)
         save_state(state)
         # No immediate re-fetch "verification": cswap serves rows younger
         # than its 180 s TTL from the store, so the new window CANNOT be

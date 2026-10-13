@@ -115,6 +115,7 @@ class Account:
     number: int
     email: str
     org: str = ""
+    org_uuid: str = ""    # cswap organizationUuid; see account_identity()
     active: bool = False
     ok: bool = True       # usageStatus == "ok" and usage data present
     status: str = "ok"    # raw cswap usageStatus (see STATE_TEXT)
@@ -386,6 +387,23 @@ def metrics_text(account) -> str:
 def account_address(account) -> str:
     """The bare email, with no plan badge riding on it."""
     return account.email
+
+
+IDENTITY_SEP = "|"
+
+
+def account_identity(email: str, org_uuid: str = "") -> str:
+    """The key for anything stored per account (plan badge, device count,
+    warmup state).
+
+    The address alone is not an account: one email can hold a slot in two
+    orgs — an Enterprise seat and a personal Max org — with different plans
+    and usage, and cswap keeps them apart by (email, organizationUuid). With
+    no org (OpenAI cards, token slots) the key is the bare address.
+    Models.swift Account.identity mirrors this — pinned by
+    tests/test_model_parity.py.
+    """
+    return f"{email}{IDENTITY_SEP}{org_uuid}" if org_uuid else email
 
 
 # Consumer freemail domains carry no identity — nearly every personal inbox

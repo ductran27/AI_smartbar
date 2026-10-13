@@ -26,9 +26,10 @@ cheap enough to run every five minutes forever:
     GitHub's UI, not fetched by a clone, untouched by `fetch --tags
     --prune`, and invisible to install/release.sh's clean+synced gate.
 
-Emails never leave the machine — a ref carries sha256(email)[:16], and
-the mapping back to an address happens locally against accounts this
-device already knows.
+Emails never leave the machine — a ref carries the first 16 hex of
+sha256(model.account_identity), i.e. of the address plus its org, and the
+mapping back to an account happens locally against accounts this device
+already knows.
 """
 from __future__ import annotations
 
@@ -39,6 +40,8 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass
+
+from smartbar.core.model import IDENTITY_SEP, account_identity
 
 SCHEMA = "p1"
 NAMESPACE = "refs/smartbar/" + SCHEMA + "/"
@@ -104,12 +107,27 @@ def ttl() -> float:
         return max(3 * beat, floor)
 
 
-def account_key(email: str) -> str:
-    """Stable per-account id for the wire — never the address itself."""
-    normal = (email or "").strip().lower()
+def account_key(identity: str) -> str:
+    """Stable per-account id for the wire — never the address itself.
+
+    Hashes a model.account_identity, so the same email in two orgs (an
+    Enterprise seat and a personal Max org) is two accounts on the wire.
+    """
+    normal = (identity or "").strip().lower()
     if not normal:
         return ""
     return hashlib.sha256(normal.encode("utf-8")).hexdigest()[:KEY_LEN]
+
+
+def account_keys(identity: str) -> set:
+    """Every wire key that means this account.
+
+    Builds before org-aware identities hash the bare address. Such a
+    device cannot say which org it is on, so its beacon counts for every
+    slot holding that address — the old behaviour, until it updates.
+    """
+    email = (identity or "").split(IDENTITY_SEP, 1)[0]
+    return {key for key in (account_key(identity), account_key(email)) if key}
 
 
 def new_device_id() -> str:
@@ -269,8 +287,9 @@ def live_devices(beacons, now, seen, window) -> list:
     return sorted(live, key=lambda b: (b.label, b.device))
 
 
-def device_counts(live, emails, self_device: str, self_active: str) -> dict:
-    """{email: devices currently on it}, for the accounts THIS device knows.
+def device_counts(live, identities, self_device: str, self_active: str) -> dict:
+    """{identity: devices currently on it}, for the accounts THIS device
+    knows (keyed by model.account_identity).
 
     Our own beacon is ignored and replaced by `self_active` from the live
     snapshot, so the number stays right on a device whose credential can
@@ -288,10 +307,10 @@ def device_counts(live, emails, self_device: str, self_active: str) -> dict:
     if self_active:
         by_key[self_active] = by_key.get(self_active, 0) + 1
     counts = {}
-    for email in emails or ():
-        total = by_key.get(account_key(email), 0)
+    for identity in identities or ():
+        total = sum(by_key.get(key, 0) for key in account_keys(identity))
         if total > 0:
-            counts[email] = total
+            counts[identity] = total
     return counts
 
 
@@ -340,4 +359,5 @@ def apply_counts(snapshot, counts) -> None:
     if snapshot is None:
         return
     for account in snapshot.accounts:
-        account.devices = int((counts or {}).get(account.email, 0) or 0)
+        key = account_identity(account.email, account.org_uuid)
+        account.devices = int((counts or {}).get(key, 0) or 0)

@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from smartbar import presence_git
 from smartbar.core import paths, portable, presence
+from smartbar.core.model import account_identity
 
 CACHE_DIR = paths.cache_dir()
 CONFIG_DIR = paths.config_dir()
@@ -147,7 +148,8 @@ def device_label() -> str:
 
 
 def _accounts():
-    """(active email, all emails) — from the UI on stdin, else from cswap.
+    """(active identity, all identities) — from the UI on stdin, else from
+    cswap. Identities are model.account_identity: address plus org.
 
     isatty() guards the fallback: run by hand from a terminal, a blind
     stdin read would hang forever waiting for an EOF nobody will send.
@@ -161,19 +163,24 @@ def _accounts():
     except (OSError, ValueError):
         payload = None
     if isinstance(payload, dict):
-        emails = [e for e in payload.get("accounts") or [] if isinstance(e, str)]
+        identities = [e for e in payload.get("accounts") or []
+                      if isinstance(e, str)]
         active = payload.get("active") or ""
-        if active and active not in emails:
-            emails.append(active)
-        return active, emails
+        if active and active not in identities:
+            identities.append(active)
+        return active, identities
     try:
         from smartbar.core import cswap
         snapshot = cswap.fetch()
     except Exception:
         log.info("no account list on stdin and cswap is unavailable")
         return "", []
+    def identity(account):
+        return account_identity(account.email, account.org_uuid)
+
     account = snapshot.active_account
-    return (account.email if account else ""), [a.email for a in snapshot.accounts]
+    return ((identity(account) if account else ""),
+            [identity(a) for a in snapshot.accounts])
 
 
 def _setup_log() -> None:
@@ -225,7 +232,7 @@ def _report(state: dict, live, me: str, active: str) -> None:
     remote = state.get("remoteError") or "readable"
     publish = ("ok" if state.get("published")
                else "NOT PUBLISHED — the other devices cannot see this one")
-    listed = ", ".join(f"{email} ({n})" for email, n in sorted(counts.items()))
+    listed = ", ".join(f"{ident} ({n})" for ident, n in sorted(counts.items()))
     print('device    {} "{}"'.format(me, state.get("label", "")))
     print("remote    " + remote)
     print("publish   " + publish)
@@ -241,8 +248,8 @@ def _report(state: dict, live, me: str, active: str) -> None:
     for beacon in live:
         if beacon.device == me:
             continue
-        known = next((email for email in counts
-                      if presence.account_key(email) == beacon.active), "")
+        known = next((ident for ident in counts
+                      if beacon.active in presence.account_keys(ident)), "")
         print("  {:<24} {:<34} {}s ago".format(
             beacon.label, known or "(an account not on this device)",
             max(0, int(now - beacon.epoch))))
@@ -276,8 +283,8 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
     now = time.time()
     window = presence.ttl()
     me, label = device_id(), device_label()
-    active_email, emails = _accounts()
-    active_key = presence.account_key(active_email)
+    active, identities = _accounts()
+    active_key = presence.account_key(active)
 
     remote = presence_git.read_remote()
     if remote is None:
@@ -290,14 +297,14 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
         save_state(state)
         log.info("remote unreachable; holding %d count(s)", len(held))
         if report:
-            _report(state, [], me, active_email)
+            _report(state, [], me, active)
         return 1
 
     candidates, refs = remote
     beacons = presence.decode_all(refs)
     seen = presence.observe(beacons, state.get("seen"), now)
     live = presence.live_devices(beacons, now, seen, window)
-    counts = presence.device_counts(live, emails, me, active_key)
+    counts = presence.device_counts(live, identities, me, active_key)
 
     published = state.get("published", False)
     my_ref = state.get("myRef", "")
@@ -327,5 +334,5 @@ def run_once(*, leave: bool = False, report: bool = False) -> int:
     if not report:
         presence_git.sweep(presence.litter(beacons, me, now))
     else:
-        _report(state, live, me, active_email)
+        _report(state, live, me, active)
     return 0 if published or report else 1

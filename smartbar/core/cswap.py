@@ -305,6 +305,7 @@ def parse_snapshot(text: str) -> Snapshot:
         acct = Account(number=int(raw.get("number") or 0),
                        email=raw.get("email") or "?",
                        org=raw.get("organizationName") or "",
+                       org_uuid=raw.get("organizationUuid") or "",
                        active=bool(raw.get("active", False)),
                        ok=status == "ok" and isinstance(usage, dict),
                        status=status,

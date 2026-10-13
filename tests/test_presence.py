@@ -346,6 +346,37 @@ class TestCounts(unittest.TestCase):
         self.assertEqual(sum(counts.values()), len(live) + 1)
 
 
+
+class TestSameEmailInTwoOrgs(unittest.TestCase):
+    # One address with an Enterprise seat AND a personal Max org: cswap
+    # gives them two slots, and a device on one is not on the other.
+    ENT = "a@x.com|ent"
+    MAX = "a@x.com|max"
+
+    def counts(self, live, self_active=""):
+        return presence.device_counts(live, [self.ENT, self.MAX],
+                                      "me", self_active)
+
+    def test_orgs_get_separate_wire_keys(self):
+        self.assertNotEqual(presence.account_key(self.ENT),
+                            presence.account_key(self.MAX))
+
+    def test_a_device_on_one_org_does_not_count_for_the_other(self):
+        other = beacon(device="linux", active=presence.account_key(self.ENT))
+        self.assertEqual(self.counts([other], presence.account_key(self.MAX)),
+                         {self.ENT: 1, self.MAX: 1})
+
+    def test_an_older_build_on_the_bare_address_counts_for_both(self):
+        # Pre-org builds publish sha256(email): it cannot say which org, so
+        # it keeps the old behaviour until that device updates.
+        old = beacon(device="linux", active=presence.account_key("a@x.com"))
+        self.assertEqual(self.counts([old]), {self.ENT: 1, self.MAX: 1})
+
+    def test_no_org_identity_has_one_key(self):
+        self.assertEqual(presence.account_keys("a@x.com"),
+                         {presence.account_key("a@x.com")})
+
+
 class TestStateFreshness(unittest.TestCase):
     WINDOW = 900.0
 

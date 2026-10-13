@@ -379,7 +379,7 @@ def main() -> int:
     if args.plans:
         import json as _json
         from smartbar.core import plan
-        print(_json.dumps({"plans": plan.plans_by_email()}))
+        print(_json.dumps({"plans": plan.plans_by_account()}))
         return 0
     if args.openai:
         import json as _json

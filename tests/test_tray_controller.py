@@ -157,7 +157,7 @@ class ControllerTestCase(unittest.TestCase):
         self._patches.enter_context(
             mock.patch.object(tc.plan, "apply_plans"))
         self._patches.enter_context(
-            mock.patch.object(tc.plan, "plans_by_email", return_value={}))
+            mock.patch.object(tc.plan, "plans_by_account", return_value={}))
         self._patches.enter_context(
             mock.patch.object(tc.codex, "accounts", return_value=[]))
         self.thread_cls = self._patches.enter_context(

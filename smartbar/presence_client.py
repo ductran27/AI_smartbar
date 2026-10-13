@@ -18,6 +18,7 @@ import sys
 import time
 
 from smartbar.core import portable, presence
+from smartbar.core.model import account_identity
 
 REPO_ROOT = os.path.dirname(os.path.dirname(
     os.path.realpath(os.path.abspath(__file__))))
@@ -111,10 +112,13 @@ def beat(snapshot=None) -> None:
     """
     if not presence.enabled():
         return
+    def identity(account):
+        return account_identity(account.email, account.org_uuid)
+
     active = snapshot.active_account if snapshot is not None else None
     _spawn(["--presence-beat"], json.dumps({
-        "active": active.email if active is not None else "",
-        "accounts": [a.email for a in snapshot.accounts] if snapshot else [],
+        "active": identity(active) if active is not None else "",
+        "accounts": [identity(a) for a in snapshot.accounts] if snapshot else [],
     }))
 
 

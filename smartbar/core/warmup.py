@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
+from .model import account_identity
 from .reset_countdown_format import parse_iso  # re-exported: gate + runner use it
 
 DEFAULT_DAILY_CAP = 6
@@ -83,13 +84,13 @@ def _day_key(now) -> str:
     return now.astimezone().strftime("%Y-%m-%d")
 
 
-def attempts_today(state: dict, email: str, now) -> int:
-    return state.get("days", {}).get(_day_key(now), {}).get(email, 0)
+def attempts_today(state: dict, ident: str, now) -> int:
+    return state.get("days", {}).get(_day_key(now), {}).get(ident, 0)
 
 
-def consecutive_failures(state: dict, email: str, now) -> int:
+def consecutive_failures(state: dict, ident: str, now) -> int:
     """Today's unbroken failure streak; a new day resets it to 0."""
-    entry = state.get("fail", {}).get(email)
+    entry = state.get("fail", {}).get(ident)
     if not isinstance(entry, dict) or entry.get("day") != _day_key(now):
         return 0
     try:
@@ -123,53 +124,53 @@ def should_warm(account, now, state, fetched_at):
         return False, "snapshot stale or unknown age"
     if not window_idle(account, now):
         return False, "window running"
-    email = account.email
-    streak = consecutive_failures(state, email, now)
+    ident = account_identity(account.email, account.org_uuid)
+    streak = consecutive_failures(state, ident, now)
     if streak >= MAX_CONSECUTIVE_FAILURES:
         return False, f"{streak} failures in a row — paused until tomorrow"
-    last = state.get("last", {}).get(email)
+    last = state.get("last", {}).get(ident)
     if last is not None and now - datetime.fromtimestamp(last, tz=timezone.utc) \
             < timedelta(minutes=COOLDOWN_MINUTES):
         return False, "cooldown"
     cap = _env_int("SMARTBAR_WARMUP_DAILY_CAP", DEFAULT_DAILY_CAP)
-    if attempts_today(state, email, now) >= cap:
+    if attempts_today(state, ident, now) >= cap:
         return False, f"daily cap ({cap}) reached"
     return True, "idle window, all gates passed"
 
 
-def record_attempt(state: dict, email: str, now) -> None:
+def record_attempt(state: dict, ident: str, now) -> None:
     day = state.setdefault("days", {}).setdefault(_day_key(now), {})
-    day[email] = day.get(email, 0) + 1
-    state.setdefault("last", {})[email] = now.timestamp()
+    day[ident] = day.get(ident, 0) + 1
+    state.setdefault("last", {})[ident] = now.timestamp()
 
 
-def record_failure(state: dict, email: str, now) -> int:
+def record_failure(state: dict, ident: str, now) -> int:
     """Bump the consecutive-failure streak; returns the new count."""
     fail = state.setdefault("fail", {})
-    entry = fail.get(email)
+    entry = fail.get(ident)
     if not isinstance(entry, dict) or entry.get("day") != _day_key(now):
         entry = {"count": 0}
     count = int(entry.get("count", 0)) + 1
-    fail[email] = {"count": count, "day": _day_key(now)}
+    fail[ident] = {"count": count, "day": _day_key(now)}
     return count
 
 
-def record_success(state: dict, email: str) -> None:
+def record_success(state: dict, ident: str) -> None:
     """A ping went through — clear the failure streak."""
-    state.get("fail", {}).pop(email, None)
+    state.get("fail", {}).pop(ident, None)
 
 
-def prune_state(state: dict, current_emails, now) -> None:
-    """Drop day buckets older than STATE_KEEP_DAYS and unknown emails."""
+def prune_state(state: dict, current_identities, now) -> None:
+    """Drop day buckets older than STATE_KEEP_DAYS and unknown identities."""
     keep_from = _day_key(now - timedelta(days=STATE_KEEP_DAYS))
-    known = set(current_emails)
+    known = set(current_identities)
     days = state.get("days", {})
     for day in [d for d in days if d < keep_from]:
         del days[day]
     for day in days.values():
-        for email in [e for e in day if e not in known]:
-            del day[email]
+        for ident in [e for e in day if e not in known]:
+            del day[ident]
     for section in ("last", "fail"):
         entries = state.get(section, {})
-        for email in [e for e in entries if e not in known]:
-            del entries[email]
+        for ident in [e for e in entries if e not in known]:
+            del entries[ident]

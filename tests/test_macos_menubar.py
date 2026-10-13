@@ -337,7 +337,7 @@ class TestTheRealApplyPathRunsAgainstThisHost(MenubarTestCase):
              mock.patch.object(c, "_maybe_recapture") as recapture, \
              mock.patch.object(self.menubar.presence_client, "beat"), \
              mock.patch("smartbar.presence_client.counts", return_value={}), \
-             mock.patch("smartbar.core.plan.plans_by_email", return_value={}), \
+             mock.patch("smartbar.core.plan.plans_by_account", return_value={}), \
              mock.patch("smartbar.core.codex.accounts", return_value=[]), \
              mock.patch("smartbar.update_runner.pending_for_ui",
                         return_value=("", "")):

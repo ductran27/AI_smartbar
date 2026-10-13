@@ -42,18 +42,19 @@ class TestTierLabel(unittest.TestCase):
                          "Max")
 
 
-def _write_config(directory: Path, n: int, email: str, tier: str) -> Path:
+def _write_config(directory: Path, n: int, email: str, tier: str,
+                  org: str = "") -> Path:
     path = directory / "configs" / f".claude-config-{n}-{email}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"oauthAccount": {
-        "emailAddress": email,
-        "organizationRateLimitTier": tier,
-        "organizationType": "claude_max",
-    }}))
+    oauth = {"emailAddress": email, "organizationRateLimitTier": tier,
+             "organizationType": "claude_max"}
+    if org:
+        oauth["organizationUuid"] = org
+    path.write_text(json.dumps({"oauthAccount": oauth}))
     return path
 
 
-class TestPlansByEmail(unittest.TestCase):
+class TestPlansByAccount(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -64,7 +65,7 @@ class TestPlansByEmail(unittest.TestCase):
         plan._cache.clear()
 
     def plans(self):
-        return plan.plans_by_email(str(self.dir), claude_json=str(self.live))
+        return plan.plans_by_account(str(self.dir), claude_json=str(self.live))
 
     def test_reads_every_slot_backup(self):
         _write_config(self.dir, 1, "a@x.com", "default_claude_max_20x")
@@ -78,6 +79,20 @@ class TestPlansByEmail(unittest.TestCase):
             "organizationRateLimitTier": "default_claude_max_20x",
         }}))
         self.assertEqual(self.plans(), {"a@x.com": "20x"})
+
+    def test_one_email_in_two_orgs_keeps_two_badges(self):
+        # An Enterprise seat and a personal Max org on the same address:
+        # the live Enterprise login must not repaint the Max slot.
+        _write_config(self.dir, 1, "a@x.com", "default_raven_enterprise",
+                      org="ent")
+        _write_config(self.dir, 5, "a@x.com", "default_claude_max_5x",
+                      org="max")
+        self.live.write_text(json.dumps({"oauthAccount": {
+            "emailAddress": "a@x.com", "organizationUuid": "ent",
+            "organizationType": "claude_enterprise",
+        }}))
+        self.assertEqual(self.plans(), {"a@x.com|ent": "Enterprise",
+                                        "a@x.com|max": "5x"})
 
     def test_corrupt_or_tierless_files_are_skipped_silently(self):
         _write_config(self.dir, 1, "a@x.com", "default_claude_max_20x")
@@ -103,8 +118,8 @@ class TestPlansByEmail(unittest.TestCase):
         self.assertEqual(self.plans()["a@x.com"], "20x")
 
 
-def _account(email="a@x.com", plan_label="", devices=0):
-    acct = model.Account(number=1, email=email)
+def _account(email="a@x.com", plan_label="", devices=0, org_uuid=""):
+    acct = model.Account(number=1, email=email, org_uuid=org_uuid)
     acct.plan = plan_label
     acct.devices = devices
     return acct
@@ -132,6 +147,13 @@ class TestApplyPlans(unittest.TestCase):
         plan.apply_plans(snap, {"a@x.com": "20x"})
         self.assertEqual(snap.accounts[0].plan, "20x")
         self.assertEqual(snap.accounts[1].plan, "")
+
+    def test_same_email_in_two_orgs_gets_each_orgs_badge(self):
+        snap = mock.Mock(accounts=[_account(org_uuid="ent"),
+                                   _account(org_uuid="max")])
+        plan.apply_plans(snap, {"a@x.com|ent": "Enterprise",
+                                "a@x.com|max": "5x"})
+        self.assertEqual([a.plan for a in snap.accounts], ["Enterprise", "5x"])
 
     def test_none_snapshot_is_a_no_op(self):
         plan.apply_plans(None, {"a@x.com": "20x"})  # must not raise

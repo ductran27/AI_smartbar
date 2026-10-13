@@ -5,14 +5,14 @@
 // implementation of that in another language is a second thing to get
 // wrong. Same arrangement as UpdateStatus + update_runner.py.
 //
-// The state file is keyed by plain address rather than the hash that goes
-// on the wire, which is what keeps this side to a dictionary lookup.
+// The state file is keyed by Account.identity rather than the hash that
+// goes on the wire, which is what keeps this side to a dictionary lookup.
 import AppKit
 import Foundation
 
 @MainActor
 final class PresenceStatus: ObservableObject {
-    /// email -> devices currently on that account. Empty when the remote
+    /// Account.identity -> devices currently on that account. Empty when the remote
     /// has never been read: an absent badge is honest, "(1)" would not be.
     @Published private(set) var counts: [String: Int] = [:]
 
@@ -133,8 +133,8 @@ final class PresenceStatus: ObservableObject {
             return
         }
         var fresh: [String: Int] = [:]
-        for (email, value) in raw["counts"] as? [String: Any] ?? [:] {
-            if let number = value as? Int, number > 0 { fresh[email] = number }
+        for (identity, value) in raw["counts"] as? [String: Any] ?? [:] {
+            if let number = value as? Int, number > 0 { fresh[identity] = number }
         }
         // @Published fires on every assignment: only write when it moved,
         // or every card would re-render on a minute timer for nothing.
@@ -154,9 +154,9 @@ final class PresenceStatus: ObservableObject {
 
     func beat() {
         guard Self.isEnabled else { return }
-        let active = lastSnapshot?.activeAccount?.email ?? ""
-        let emails = lastSnapshot?.accounts.map { $0.email } ?? []
-        let payload: [String: Any] = ["active": active, "accounts": emails]
+        let active = lastSnapshot?.activeAccount?.identity ?? ""
+        let identities = lastSnapshot?.accounts.map { $0.identity } ?? []
+        let payload: [String: Any] = ["active": active, "accounts": identities]
         guard let body = try? JSONSerialization.data(withJSONObject: payload)
         else { return }
         Task.detached(priority: .utility) {

@@ -16,6 +16,7 @@ struct CswapAccountRaw: Decodable {
     var number: Int?
     var email: String?
     var organizationName: String?
+    var organizationUuid: String?
     var active: Bool?
     var usageStatus: String?
     var usage: CswapUsageRaw?
@@ -182,6 +183,7 @@ struct Account: Identifiable, Equatable {
     var number: Int
     var email: String
     var org: String
+    var orgUuid: String = ""      // cswap organizationUuid; see identity
     var active: Bool
     var ok: Bool           // usageStatus == "ok" and usage present
     var status: String     // raw cswap usageStatus ("" when absent)
@@ -195,6 +197,12 @@ struct Account: Identifiable, Equatable {
     var stateTextOverride: String = "" // display text computed by Python
 
     var id: Int { number }
+
+    /// Key for per-account Python answers (plan badge, device count) —
+    /// mirror of core/model.account_identity. The address alone is not an
+    /// account: one email can hold an Enterprise seat and a personal Max
+    /// org (pinned by tests/test_model_parity.py).
+    var identity: String { orgUuid.isEmpty ? email : "\(email)|\(orgUuid)" }
 
     /// Explanation shown when there is no usable usage data ("" otherwise).
     var stateText: String {
@@ -366,6 +374,7 @@ struct Snapshot: Equatable {
             return Account(number: raw.number ?? 0,
                            email: raw.email ?? "?",
                            org: raw.organizationName ?? "",
+                           orgUuid: raw.organizationUuid ?? "",
                            active: raw.active ?? false,
                            ok: ok,
                            status: status,
