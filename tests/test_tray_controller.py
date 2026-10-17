@@ -15,8 +15,8 @@ pinned here instead:
     checking/result), a stale token's answer is ignored, and the result
     clears itself after CHECK_RESULT_SECONDS via whatever the host's own
     delayed-dispatch primitive is.
-  * RecapturePolicy's call sites: only a non-"refresh" action triggers a
-    refetch, a failed `cswap add` is swallowed (logged, not raised).
+  * RecapturePolicy's call sites: a successful `cswap add` triggers a
+    refetch, a failed one is swallowed (logged, not raised).
   * Every UI touch that originates on a worker thread (a fetch, a check,
     a switch, a remove, a recapture) reaches `self.host` only through
     `host.call_on_ui_thread`, never directly — TestEveryUiTouchIsMarshalled
@@ -423,16 +423,6 @@ class TestRecaptureIntegration(ControllerTestCase):
         add.assert_called_once()
         self.assertEqual(self.controller.generation, 1, "a register/heal "
                         "action must trigger a real refetch")
-
-    def test_a_refresh_action_runs_add_but_does_not_refetch(self):
-        with mock.patch.object(self.controller.recapture, "action",
-                               return_value="refresh"), \
-             mock.patch.object(tc.cswap, "add") as add:
-            self.controller._maybe_recapture(_snapshot())
-            self.run_last_worker()
-        add.assert_called_once()
-        self.assertEqual(self.controller.generation, 0, "routine re-capture "
-                        "must not itself trigger a refetch")
 
     def test_a_failing_add_is_logged_and_swallowed_not_raised(self):
         with mock.patch.object(self.controller.recapture, "action",

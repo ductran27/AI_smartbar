@@ -187,7 +187,7 @@ Numbers are % USED (same scale as /usage). ▌ marks the ACTIVE account.
 - **Adaptive polling** — 60s when something is near a limit, 180s when calm. Respects claude-swap's per-account budget; never exceeds the API rate limit.
 - **Self-updating** — every device checks at login and every 6 hours. A red dot appears on the icon when an update is waiting; click **Update to vX.Y.Z** to apply it. Rolls back if it fails, never touches uncommitted work.
 - **Plan badges** — shows your subscription tier (20x / 5x / Pro / etc.) next to each account. Disable with `SMARTBAR_PLANS=off`.
-- **Credential re-capture & healing** — OAuth tokens rotate; the bar re-captures the live login's credential every 15 min and heals dead slots automatically. See [Credential lifecycle](#credential-lifecycle).
+- **Credential re-capture & healing** — OAuth tokens rotate; the bar registers new logins and heals a dead active slot automatically. See [Credential lifecycle](#credential-lifecycle).
 
 ### Configuration (environment variables)
 
@@ -219,7 +219,7 @@ EOF
 | `SMARTBAR_INTERVAL_IDLE` | 180 | Relaxed poll when everything is calm |
 | `SMARTBAR_PANEL` | popover | `always` keeps the Linux panel permanently on screen |
 | `SMARTBAR_AUTO_ADD` | on | Auto-run `cswap add` when you sign into a new account |
-| `SMARTBAR_RECAPTURE` | on | Periodic credential re-capture (keeps tokens fresh) |
+| `SMARTBAR_RECAPTURE` | on | Auto-run `cswap add` to heal the active account's dead credential |
 | `SMARTBAR_YELLOW` | 50 | Turn yellow at or above this % used |
 | `SMARTBAR_LOW` | 75 | Turn light red at or above this % used |
 | `SMARTBAR_RED` | 90 | Turn dark red + notify at or above this % used |
@@ -341,7 +341,7 @@ Bumps the version, runs unit tests, pushes to `main`, waits for CI, then creates
 
 - **Register:** Sign into Claude Code with a new account; it's added within ≤60s (instantly on popover open).
 - **Heal:** If the ACTIVE slot's credential dies, the bar runs `cswap add` immediately and brings it back.
-- **Refresh:** Every 15 min the live login's credential is re-captured, so the backup always holds the newest tokens.
+- **Rotation:** claude-swap 0.26+ moves the active slot's backup to each rotated token itself, after checking whose token it is. Upgrade with `uv tool upgrade claude-swap` (or `pipx upgrade claude-swap`).
 
 **If an inactive slot dies:** You need to sign in to Claude Code as that account once (`/login`); the bar re-captures it automatically. Until then, its card shows "Re-login required" and the switch button is disabled.
 

@@ -401,10 +401,9 @@ class TrayController:
 
     def _maybe_recapture(self, snap) -> None:
         # `cswap add` keeps stored credentials alive: it registers an
-        # unregistered /login, heals an active slot whose backup died
-        # (relogin_required), and periodically re-captures the live login
-        # so Claude Code's token rotations never orphan the backup. The
-        # policy paces all three; SMARTBAR_AUTO_ADD/SMARTBAR_RECAPTURE=off
+        # unregistered /login and heals an active slot whose backup died
+        # (relogin_required). The policy paces both (and says why there is
+        # no routine re-capture); SMARTBAR_AUTO_ADD/SMARTBAR_RECAPTURE=off
         # disable them.
         action = self.recapture.action(snap, time.monotonic())
         if action is None:
@@ -417,8 +416,7 @@ class TrayController:
                 log.info("cswap add (%s) skipped: %s", action, exc)
                 return
             log.info("cswap add ran (%s): current login re-captured", action)
-            if action != "refresh":  # registration/heal changes what we show
-                self._start_fetch()
+            self._start_fetch()  # registration/heal changes what we show
         threading.Thread(target=run, daemon=True).start()
 
     # --- switch / remove worker-thread tail -------------------------------

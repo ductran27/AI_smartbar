@@ -40,15 +40,12 @@ final class UsageStore: ObservableObject {
         reason: "AI smartbar periodic usage refresh")
 
     // `cswap add` pacing (mirror of smartbar/core/recapture.py): register
-    // an unregistered /login, heal a dead active backup, and periodically
-    // re-capture the live login so Claude Code's token rotations never
-    // orphan cswap's stored credential.
+    // an unregistered /login and heal a dead active backup. No routine
+    // re-capture — recapture.py says why.
     private var lastRegister: Date?
     private var lastHeal: Date?
-    private var lastRecapture: Date?
     private static let registerCooldown: TimeInterval = 600
     private static let healCooldown: TimeInterval = 120
-    private static let recaptureInterval: TimeInterval = 900
 
     private var wakeObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
@@ -291,45 +288,26 @@ final class UsageStore: ObservableObject {
     }
 
     /// `cswap add` is the one lever that keeps stored credentials alive:
-    /// it registers an unregistered /login (no slot active), re-captures a
-    /// live login whose backup died (active slot relogin_required), and on
-    /// a slow cadence refreshes the backup so Claude Code's token
-    /// rotations never orphan it. Mirror of smartbar/core/recapture.py.
+    /// it registers an unregistered /login (no slot active) and re-captures
+    /// a live login whose backup died (active slot relogin_required).
+    /// Mirror of smartbar/core/recapture.py.
     private func maybeRecapture(_ snap: Snapshot) {
         let env = ProcessInfo.processInfo.environment
         guard env["SMARTBAR_AUTO_ADD"] != "off" else { return }
         let now = Date()
-        let action: String?
         if snap.activeAccount == nil {
-            if due(lastRegister, Self.registerCooldown, now) {
-                lastRegister = now
-                action = "register"
-            } else { action = nil }
-        } else if env["SMARTBAR_RECAPTURE"] == "off" {
-            action = nil
-        } else if snap.needsRecapture {
-            if due(lastHeal, Self.healCooldown, now) {
-                lastHeal = now
-                lastRecapture = now  // a heal IS a re-capture
-                action = "heal"
-            } else { action = nil }
-        } else if lastRecapture == nil {
-            // First healthy snapshot only sets the baseline: the first
-            // routine re-capture waits a full interval (and a fresh
-            // registration is not chased by a pointless second add).
-            lastRecapture = now
-            action = nil
-        } else if due(lastRecapture, Self.recaptureInterval, now) {
-            lastRecapture = now
-            action = "refresh"
-        } else { action = nil }
-        guard let action else { return }
+            guard due(lastRegister, Self.registerCooldown, now) else { return }
+            lastRegister = now
+        } else {
+            guard env["SMARTBAR_RECAPTURE"] != "off", snap.needsRecapture,
+                  due(lastHeal, Self.healCooldown, now) else { return }
+            lastHeal = now
+        }
         Task.detached(priority: .utility) {
             let succeeded = (try? CswapClient.add()) != nil
             await MainActor.run { [weak self] in
-                // Registration/heal changes what we show; a routine
-                // refresh doesn't warrant an extra fetch.
-                if succeeded && action != "refresh" { self?.refresh(force: true) }
+                // Registration/heal changes what we show.
+                if succeeded { self?.refresh(force: true) }
             }
         }
     }

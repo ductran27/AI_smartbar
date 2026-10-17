@@ -55,26 +55,16 @@ class TestHeal(Env):
         self.assertEqual(
             self.policy.action(dead, recapture.HEAL_COOLDOWN + 1.0), "heal")
 
-    def test_heal_counts_as_the_periodic_refresh(self):
-        self.assertEqual(self.policy.action(snap(status="relogin_required"), 0.0),
-                         "heal")
-        # Healed: the next healthy snapshot must not refresh again right away.
-        self.assertIsNone(self.policy.action(snap(), 1.0))
 
+class TestNoRoutineRecapture(Env):
+    def test_a_healthy_login_never_runs_add(self):
+        # cswap resyncs a rotated live token itself, once the server says
+        # whose it is. A blind periodic add fails that check open offline
+        # and once stored one account's token under another's slot.
+        for now in (0.0, 900.0, 3600.0, 86400.0):
+            self.assertIsNone(self.policy.action(snap(), now))
 
-class TestRefresh(Env):
-    def test_first_healthy_snapshot_only_baselines(self):
-        healthy = snap()
-        self.assertIsNone(self.policy.action(healthy, 0.0))  # baseline, no add
-        self.assertIsNone(self.policy.action(healthy, 60.0))
-        self.assertEqual(
-            self.policy.action(healthy, recapture.RECAPTURE_INTERVAL), "refresh")
-        self.assertIsNone(
-            self.policy.action(healthy, recapture.RECAPTURE_INTERVAL + 60.0))
-        self.assertEqual(
-            self.policy.action(healthy, recapture.RECAPTURE_INTERVAL * 2), "refresh")
-
-    def test_registration_not_chased_by_refresh(self):
+    def test_registration_not_chased_by_a_second_add(self):
         # /login gets registered; the very next healthy snapshot must NOT
         # immediately run a second add (this was caught by e2e-autoadd).
         self.assertEqual(self.policy.action(snap(active=False), 0.0), "register")
@@ -88,7 +78,7 @@ class TestRefresh(Env):
 
 
 class TestSwiftPacingParity(unittest.TestCase):
-    """The three cooldowns exist twice, in two languages. Pin them together.
+    """The two cooldowns exist twice, in two languages. Pin them together.
 
     UsageStore.swift re-declares this module's pacing by hand and says so —
     its own comment reads "`cswap add` pacing (mirror of
@@ -120,15 +110,13 @@ class TestSwiftPacingParity(unittest.TestCase):
         """Without this, a rename on the Swift side would turn every
         assertion below into a lookup of None against None."""
         found = self.swift_pacing()
-        self.assertEqual(sorted(found), ["healCooldown", "recaptureInterval",
-                                         "registerCooldown"])
+        self.assertEqual(sorted(found), ["healCooldown", "registerCooldown"])
 
     def test_every_cooldown_matches_the_python_policy(self):
         found = self.swift_pacing()
         for swift_name, value in (
                 ("registerCooldown", recapture.REGISTER_COOLDOWN),
-                ("healCooldown", recapture.HEAL_COOLDOWN),
-                ("recaptureInterval", recapture.RECAPTURE_INTERVAL)):
+                ("healCooldown", recapture.HEAL_COOLDOWN)):
             with self.subTest(constant=swift_name):
                 self.assertEqual(found.get(swift_name), value,
                                  "%s drifted from recapture.py — the Mac "
