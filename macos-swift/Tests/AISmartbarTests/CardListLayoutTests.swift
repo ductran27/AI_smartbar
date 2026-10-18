@@ -55,7 +55,7 @@ final class CardListLayoutTests: XCTestCase {
         }
     }
 
-    // MARK: page(frames:viewport:)
+    // MARK: step(frames:viewport:)
 
     /// Five 150pt cards 9pt apart, scrolled `offset` points down, in a 555pt
     /// viewport — the shape of the real list.
@@ -66,42 +66,44 @@ final class CardListLayoutTests: XCTestCase {
         }
     }
 
+    /// One card per press: down brings up the card right after the top one,
+    /// not the first card cut off at the bottom (a page — c3, three cards on,
+    /// read as sliding too far).
     func testAtTheTopOnlyDownIsOffered() {
-        let page = CardListLayout.page(frames: frames(offset: 0), viewport: 555)
-        XCTAssertNil(page.up)
-        // c3 runs from 477 to 627: the first card not fully in view.
-        XCTAssertEqual(page.down, "c3")
-        XCTAssertTrue(page.scrolls)
+        let step = CardListLayout.step(frames: frames(offset: 0), viewport: 555)
+        XCTAssertNil(step.up)
+        XCTAssertEqual(step.down, "c1")
+        XCTAssertTrue(step.scrolls)
     }
 
     func testAtTheBottomOnlyUpIsOffered() {
         // Content is 786pt tall; scrolled to its end.
-        let page = CardListLayout.page(frames: frames(offset: 231), viewport: 555)
-        XCTAssertNil(page.down)
-        // c1 runs from -72 to 78: the last card cut off above.
-        XCTAssertEqual(page.up, "c1")
+        let step = CardListLayout.step(frames: frames(offset: 231), viewport: 555)
+        XCTAssertNil(step.down)
+        // c1 runs from -72 to 78: the card cut off above.
+        XCTAssertEqual(step.up, "c1")
     }
 
     /// A card the last press landed flush with the edge counts as in view,
     /// even when layout rounding leaves it a fraction of a point past it —
     /// otherwise the next press would scroll to the card already there.
-    func testACardLandedOnTheEdgeIsNotAPageAway() {
-        let page = CardListLayout.page(frames: frames(offset: 159.4), viewport: 555)
-        XCTAssertEqual(page.up, "c0")
-        XCTAssertEqual(page.down, "c4")
+    func testACardLandedOnTheEdgeIsNotAStepAway() {
+        let step = CardListLayout.step(frames: frames(offset: 159.4), viewport: 555)
+        XCTAssertEqual(step.up, "c0")
+        XCTAssertEqual(step.down, "c2")
     }
 
     func testAListThatFitsDoesNotScroll() {
         let short = Array(frames(offset: 0).prefix(3))
-        let page = CardListLayout.page(frames: short, viewport: 555)
-        XCTAssertEqual(page, CardListPage())
-        XCTAssertFalse(page.scrolls)
+        let step = CardListLayout.step(frames: short, viewport: 555)
+        XCTAssertEqual(step, CardListStep())
+        XCTAssertFalse(step.scrolls)
     }
 
-    /// Preferences arrive in no promised order; the page must not depend on it.
+    /// Preferences arrive in no promised order; the step must not depend on it.
     func testFrameOrderDoesNotMatter() {
         let shuffled = frames(offset: 100).reversed()
-        XCTAssertEqual(CardListLayout.page(frames: Array(shuffled), viewport: 555),
-                       CardListLayout.page(frames: frames(offset: 100), viewport: 555))
+        XCTAssertEqual(CardListLayout.step(frames: Array(shuffled), viewport: 555),
+                       CardListLayout.step(frames: frames(offset: 100), viewport: 555))
     }
 }

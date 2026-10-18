@@ -28,7 +28,7 @@ struct PopoverView: View {
     @AppStorage("providerTab") private var providerTab = "claude"
     /// Where the header's scroll buttons go next, reported by the card list
     /// on screen. Empty when that list does not scroll.
-    @State private var listPage = CardListPage()
+    @State private var listStep = CardListStep()
 
     private var palette: Palette { Palette.of(colorScheme) }
 
@@ -92,7 +92,7 @@ struct PopoverView: View {
                 }
                 footer
             }
-            .onPreferenceChange(CardListPageKey.self) { listPage = $0 }
+            .onPreferenceChange(CardListStepKey.self) { listStep = $0 }
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 14)
@@ -379,12 +379,12 @@ struct PopoverView: View {
                     .help(store.lastError ?? "last refresh failed; showing old data")
             }
             Spacer()
-            // A whole page per press, for a pointer that cannot scroll
+            // One card per press, for a pointer that cannot scroll
             // comfortably — a phone driving this Mac over remote desktop.
-            if listPage.scrolls {
+            if listStep.scrolls {
                 HStack(spacing: 0) {
-                    pageButton(up: true, proxy)
-                    pageButton(up: false, proxy)
+                    scrollButton(up: true, proxy)
+                    scrollButton(up: false, proxy)
                 }
             }
             HStack(spacing: 0) {
@@ -423,15 +423,15 @@ struct PopoverView: View {
             .contentShape(Rectangle())
     }
 
-    /// Scrolls the card list by a page, landing a whole card flush with the
-    /// edge rather than leaving one half-cut under the tabs.
-    private func pageButton(up: Bool, _ proxy: ScrollViewProxy) -> some View {
-        let target = up ? listPage.up : listPage.down
+    /// Scrolls the card list by one card, landing it flush with the top edge
+    /// rather than leaving one half-cut under the tabs.
+    private func scrollButton(up: Bool, _ proxy: ScrollViewProxy) -> some View {
+        let target = up ? listStep.up : listStep.down
         let title = up ? "Scroll up" : "Scroll down"
         return Button {
             guard let target else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                proxy.scrollTo(target, anchor: up ? .bottom : .top)
+                proxy.scrollTo(target, anchor: .top)
             }
         } label: {
             headerIcon(up ? "chevron.up.circle" : "chevron.down.circle",
@@ -495,18 +495,19 @@ enum CardListLayout {
     /// viewport, so y = 0 is its top edge.
     static let space = "cardList"
 
-    /// Where the scroll buttons go from here. Down brings the first card
-    /// that is not fully in view flush with the TOP edge; up brings the last
-    /// card cut off above flush with the BOTTOM edge — a page either way,
-    /// and always a whole card at the edge it lands on.
-    static func page(frames: [CardFrame], viewport: CGFloat) -> CardListPage {
+    /// Where the scroll buttons go from here, one card per press: down brings
+    /// the card after the top one to the TOP edge, while any card is still
+    /// cut off below; up brings the card cut off above to the TOP edge. A
+    /// page per press moved three cards at once and read as sliding too far.
+    static func step(frames: [CardFrame], viewport: CGFloat) -> CardListStep {
         let cards = frames.sorted { $0.minY < $1.minY }
         // Layout rounding leaves a landed card a fraction of a point off its
-        // edge; that card is in view, not a page away.
+        // edge; that card is in view, not a step away.
         let slack: CGFloat = 1
-        return CardListPage(
+        let moreBelow = cards.contains { $0.maxY > viewport + slack }
+        return CardListStep(
             up: cards.last { $0.minY < -slack }?.id,
-            down: cards.first { $0.maxY > viewport + slack }?.id)
+            down: moreBelow ? cards.first { $0.minY > slack }?.id : nil)
     }
 }
 
@@ -519,7 +520,7 @@ struct CardFrame: Equatable {
 
 /// The card each scroll button scrolls to; nil when that way is already
 /// fully in view. Both nil means the list on screen does not scroll.
-struct CardListPage: Equatable {
+struct CardListStep: Equatable {
     var up: String?
     var down: String?
 
@@ -533,10 +534,10 @@ private struct CardFramesKey: PreferenceKey {
     }
 }
 
-/// Carries a scrolling list's CardListPage up to the header's buttons.
-private struct CardListPageKey: PreferenceKey {
-    static let defaultValue = CardListPage()
-    static func reduce(value: inout CardListPage, nextValue: () -> CardListPage) {
+/// Carries a scrolling list's CardListStep up to the header's buttons.
+private struct CardListStepKey: PreferenceKey {
+    static let defaultValue = CardListStep()
+    static func reduce(value: inout CardListStep, nextValue: () -> CardListStep) {
         let next = nextValue()
         if next.scrolls { value = next }
     }
@@ -594,7 +595,7 @@ private struct ScrollingCardList<Content: View>: View {
     // visible resize, and a shorter list only ever shrinks to fit once,
     // never grows in from a sliver.
     @State private var contentHeight: CGFloat
-    @State private var page = CardListPage()
+    @State private var step = CardListStep()
 
     init(count: Int, scrollsPast: Int, maxHeight: CGFloat,
          @ViewBuilder content: () -> Content) {
@@ -619,13 +620,13 @@ private struct ScrollingCardList<Content: View>: View {
             .frame(height: viewport)
             .coordinateSpace(name: CardListLayout.space)
             .onPreferenceChange(CardStackHeightKey.self) { contentHeight = $0 }
-            // Fires on every scrolled frame; the page only changes when a
+            // Fires on every scrolled frame; the step only changes when a
             // card crosses an edge, so only that reaches the header.
             .onPreferenceChange(CardFramesKey.self) { frames in
-                let next = CardListLayout.page(frames: frames, viewport: viewport)
-                if next != page { page = next }
+                let next = CardListLayout.step(frames: frames, viewport: viewport)
+                if next != step { step = next }
             }
-            .preference(key: CardListPageKey.self, value: page)
+            .preference(key: CardListStepKey.self, value: step)
         } else {
             content
         }
