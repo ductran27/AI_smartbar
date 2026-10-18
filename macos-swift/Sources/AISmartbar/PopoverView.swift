@@ -24,66 +24,75 @@ struct PopoverView: View {
     @EnvironmentObject private var presence: PresenceStatus
     @EnvironmentObject private var plans: PlanStatus
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("providerTab") private var providerTab = "claude"
+    /// Where the header's scroll buttons go next, reported by the card list
+    /// on screen. Empty when that list does not scroll.
+    @State private var listPage = CardListPage()
 
     private var palette: Palette { Palette.of(colorScheme) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // The tab row is part of the header block, not a section of its
-            // own: TAB_TOP_GAP (4pt) under the title, as popover_layout
-            // draws it — the plain section gap had crept back in here.
-            VStack(alignment: .leading, spacing: 4) {
-                header
-                if showsTabs {
-                    providerTabs
+        // Wraps the whole panel so the scroll buttons in the header can reach
+        // the card list's ScrollView further down.
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 10) {
+                // The tab row is part of the header block, not a section of its
+                // own: TAB_TOP_GAP (4pt) under the title, as popover_layout
+                // draws it — the plain section gap had crept back in here.
+                VStack(alignment: .leading, spacing: 4) {
+                    header(proxy)
+                    if showsTabs {
+                        providerTabs
+                    }
                 }
-            }
-            // One error line for the card actions of the tab on screen —
-            // switching, removing or killing (a refused kill used to set
-            // SystemStatus.actionError that nothing displayed). Scoped per
-            // tab: one shared line let an old Claude switch error mask a
-            // newer OpenAI failure and follow the user onto every tab.
-            if let actionError {
-                Label(actionError, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(palette.warning)
-                    .lineLimit(2)
-                    .help(actionError)
-            }
-            if selectedProvider == "system" {
-                // The System tab must not hide what a first run or a broken
-                // cswap needs the user to SEE (mirror of popover_layout):
-                // the loading/error/onboarding lines render above the vitals.
-                if store.snapshot == nil {
+                // One error line for the card actions of the tab on screen —
+                // switching, removing or killing (a refused kill used to set
+                // SystemStatus.actionError that nothing displayed). Scoped per
+                // tab: one shared line let an old Claude switch error mask a
+                // newer OpenAI failure and follow the user onto every tab.
+                if let actionError {
+                    Label(actionError, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(palette.warning)
+                        .lineLimit(2)
+                        .help(actionError)
+                }
+                if selectedProvider == "system" {
+                    // The System tab must not hide what a first run or a broken
+                    // cswap needs the user to SEE (mirror of popover_layout):
+                    // the loading/error/onboarding lines render above the vitals.
+                    if store.snapshot == nil {
+                        loadingOrError
+                    } else if !hasClaudeAccounts && openai.accounts.isEmpty {
+                        Label("No accounts yet — sign in to Claude Code and it will be registered automatically",
+                              systemImage: "person.crop.circle.badge.plus")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(palette.textSecondary)
+                            .lineLimit(2)
+                    }
+                    if let payload = system.payload {
+                        SystemView(payload: payload)
+                    }
+                } else if selectedProvider == "openai" {
+                    openAIList
+                } else if let snapshot = store.snapshot {
+                    if snapshot.activeAccount == nil {
+                        Label(snapshot.accounts.isEmpty
+                                ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
+                                : "Current login isn't registered — adding it automatically",
+                              systemImage: "person.crop.circle.badge.plus")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(palette.textSecondary)
+                            .lineLimit(2)
+                    }
+                    accountList(snapshot)
+                } else {
                     loadingOrError
-                } else if !hasClaudeAccounts && openai.accounts.isEmpty {
-                    Label("No accounts yet — sign in to Claude Code and it will be registered automatically",
-                          systemImage: "person.crop.circle.badge.plus")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(palette.textSecondary)
-                        .lineLimit(2)
                 }
-                if let payload = system.payload {
-                    SystemView(payload: payload)
-                }
-            } else if selectedProvider == "openai" {
-                openAIList
-            } else if let snapshot = store.snapshot {
-                if snapshot.activeAccount == nil {
-                    Label(snapshot.accounts.isEmpty
-                            ? "No accounts yet — sign in to Claude Code and it will be registered automatically"
-                            : "Current login isn't registered — adding it automatically",
-                          systemImage: "person.crop.circle.badge.plus")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(palette.textSecondary)
-                        .lineLimit(2)
-                }
-                accountList(snapshot)
-            } else {
-                loadingOrError
+                footer
             }
-            footer
+            .onPreferenceChange(CardListPageKey.self) { listPage = $0 }
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 14)
@@ -175,12 +184,14 @@ struct PopoverView: View {
         availableTabs.first ?? "claude"
     }
 
+    /// Equal-width tabs across the full row, so the row's edges line up with
+    /// the cards below and no tab looks bigger than another (mirror of
+    /// popover_layout.build).
     private var providerTabs: some View {
         HStack(spacing: 7.5) {
             ForEach(availableTabs, id: \.self) { id in
                 tabButton(tabTitle(for: id), id: id)
             }
-            Spacer()
         }
     }
 
@@ -219,12 +230,15 @@ struct PopoverView: View {
                     .frame(width: 14, height: 14)
                 Text(title)
                     .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
+                    .lineLimit(1)
             }
             .foregroundStyle(color)
             .padding(.horizontal, 10.5)
             .padding(.vertical, 5)
+            .frame(maxWidth: .infinity)
             .background(Capsule()
                 .fill(selected ? palette.tabBGSelected : palette.tabBG))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help(id == "system" ? "Show machine vitals and leftover processes"
@@ -252,6 +266,7 @@ struct PopoverView: View {
             // reorder or removal re-bound card state to other accounts.
             ForEach(openai.accounts, id: \.email) { account in
                 card(account)
+                    .cardListAnchor(account.email)
             }
         }
         return ScrollingCardList(count: openai.accounts.count,
@@ -334,6 +349,7 @@ struct PopoverView: View {
         let cards = VStack(spacing: 9) {
             ForEach(snapshot.accounts) { account in
                 card(account)
+                    .cardListAnchor(String(account.number))
             }
         }
         return ScrollingCardList(count: snapshot.accounts.count,
@@ -341,7 +357,7 @@ struct PopoverView: View {
                                  maxHeight: Self.listMaxHeight) { cards }
     }
 
-    private var header: some View {
+    private func header(_ proxy: ScrollViewProxy) -> some View {
         HStack(spacing: 10) {
             Text("AI smartbar")
                 .font(.system(size: 16.5, weight: .semibold))
@@ -353,6 +369,7 @@ struct PopoverView: View {
                 Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
                     .font(.system(size: 12.5))
                     .foregroundStyle(palette.textTertiary)
+                    .lineLimit(1)
                     .help(freshnessHelp)
             }
             if selectedProvider == "claude" && store.isStale {
@@ -362,26 +379,68 @@ struct PopoverView: View {
                     .help(store.lastError ?? "last refresh failed; showing old data")
             }
             Spacer()
-            Button {
-                store.refresh(force: true)
-                openai.refresh()
-            } label: {
-                // Header chrome sits a step back from the cards it frames —
-                // they are what you opened the panel to read.
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(palette.textSecondary)
-                    // 35pt keeps a comfortable pointer target without the
-                    // 44pt frame padding the whole header row out — the gap
-                    // between the title and the cards/tabs was mostly this.
-                    .frame(width: 35, height: 35)
+            // A whole page per press, for a pointer that cannot scroll
+            // comfortably — a phone driving this Mac over remote desktop.
+            if listPage.scrolls {
+                HStack(spacing: 0) {
+                    pageButton(up: true, proxy)
+                    pageButton(up: false, proxy)
+                }
             }
-            .buttonStyle(.borderless)
-            .disabled(store.isRefreshing)
-            .help("Refresh now")
-            .accessibilityLabel("Refresh now")
-            AppOptionsMenu()
+            HStack(spacing: 0) {
+                Button {
+                    store.refresh(force: true)
+                    openai.refresh()
+                } label: {
+                    headerIcon("arrow.clockwise.circle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(store.isRefreshing)
+                .help("Refresh now")
+                .accessibilityLabel("Refresh now")
+                AppOptionsMenu()
+            }
+            // Each circle sits centred in its 35pt box; pull the row out by
+            // the box's empty half so the last circle's edge lands on the
+            // cards' edge below it. Only the target overhangs the margin.
+            .padding(.trailing, -(35 - 17.5) / 2)
         }
+    }
+
+    /// The one face every header button wears — refresh, the scroll pair and
+    /// AppOptionsMenu's More (which spells the same values out) — so they
+    /// read as one set: the same circled glyph, the same size, the same box.
+    private func headerIcon(_ symbol: String, enabled: Bool = true) -> some View {
+        // Header chrome sits a step back from the cards it frames — they are
+        // what you opened the panel to read.
+        Image(systemName: symbol)
+            .font(.system(size: 17.5, weight: .semibold))
+            .foregroundStyle(enabled ? palette.textSecondary : palette.textTertiary)
+            // 35pt keeps a comfortable pointer target without the 44pt frame
+            // padding the whole header row out — the gap between the title
+            // and the cards/tabs was mostly this.
+            .frame(width: 35, height: 35)
+            .contentShape(Rectangle())
+    }
+
+    /// Scrolls the card list by a page, landing a whole card flush with the
+    /// edge rather than leaving one half-cut under the tabs.
+    private func pageButton(up: Bool, _ proxy: ScrollViewProxy) -> some View {
+        let target = up ? listPage.up : listPage.down
+        let title = up ? "Scroll up" : "Scroll down"
+        return Button {
+            guard let target else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: up ? .bottom : .top)
+            }
+        } label: {
+            headerIcon(up ? "chevron.up.circle" : "chevron.down.circle",
+                       enabled: target != nil)
+        }
+        .buttonStyle(.borderless)
+        .disabled(target == nil)
+        .help(title)
+        .accessibilityLabel(title)
     }
 
     private var freshnessHelp: String {
@@ -431,6 +490,70 @@ enum CardListLayout {
     static func height(contentHeight: CGFloat, maxHeight: CGFloat) -> CGFloat {
         min(contentHeight, maxHeight)
     }
+
+    /// The named space card frames are measured in: the scrolling list's
+    /// viewport, so y = 0 is its top edge.
+    static let space = "cardList"
+
+    /// Where the scroll buttons go from here. Down brings the first card
+    /// that is not fully in view flush with the TOP edge; up brings the last
+    /// card cut off above flush with the BOTTOM edge — a page either way,
+    /// and always a whole card at the edge it lands on.
+    static func page(frames: [CardFrame], viewport: CGFloat) -> CardListPage {
+        let cards = frames.sorted { $0.minY < $1.minY }
+        // Layout rounding leaves a landed card a fraction of a point off its
+        // edge; that card is in view, not a page away.
+        let slack: CGFloat = 1
+        return CardListPage(
+            up: cards.last { $0.minY < -slack }?.id,
+            down: cards.first { $0.maxY > viewport + slack }?.id)
+    }
+}
+
+/// One card's vertical extent in the list viewport (see CardListLayout.space).
+struct CardFrame: Equatable {
+    let id: String
+    let minY: CGFloat
+    let maxY: CGFloat
+}
+
+/// The card each scroll button scrolls to; nil when that way is already
+/// fully in view. Both nil means the list on screen does not scroll.
+struct CardListPage: Equatable {
+    var up: String?
+    var down: String?
+
+    var scrolls: Bool { up != nil || down != nil }
+}
+
+private struct CardFramesKey: PreferenceKey {
+    static let defaultValue: [CardFrame] = []
+    static func reduce(value: inout [CardFrame], nextValue: () -> [CardFrame]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// Carries a scrolling list's CardListPage up to the header's buttons.
+private struct CardListPageKey: PreferenceKey {
+    static let defaultValue = CardListPage()
+    static func reduce(value: inout CardListPage, nextValue: () -> CardListPage) {
+        let next = nextValue()
+        if next.scrolls { value = next }
+    }
+}
+
+private extension View {
+    /// Makes a card a target for the scroll buttons: an id to scroll to, and
+    /// its frame reported to the list around it.
+    func cardListAnchor(_ id: String) -> some View {
+        self.id(id).background(
+            GeometryReader { proxy in
+                let frame = proxy.frame(in: .named(CardListLayout.space))
+                Color.clear.preference(
+                    key: CardFramesKey.self,
+                    value: [CardFrame(id: id, minY: frame.minY, maxY: frame.maxY)])
+            })
+    }
 }
 
 /// Reports the natural (unscrolled) height of a card stack up to its
@@ -471,6 +594,7 @@ private struct ScrollingCardList<Content: View>: View {
     // visible resize, and a shorter list only ever shrinks to fit once,
     // never grows in from a sliver.
     @State private var contentHeight: CGFloat
+    @State private var page = CardListPage()
 
     init(count: Int, scrollsPast: Int, maxHeight: CGFloat,
          @ViewBuilder content: () -> Content) {
@@ -483,6 +607,8 @@ private struct ScrollingCardList<Content: View>: View {
 
     var body: some View {
         if CardListLayout.scrolls(count: count, scrollsPast: scrollsPast) {
+            let viewport = CardListLayout.height(contentHeight: contentHeight,
+                                                 maxHeight: maxHeight)
             ScrollView(showsIndicators: false) {
                 content.background(
                     GeometryReader { proxy in
@@ -490,9 +616,16 @@ private struct ScrollingCardList<Content: View>: View {
                                                value: proxy.size.height)
                     })
             }
-            .frame(height: CardListLayout.height(contentHeight: contentHeight,
-                                                 maxHeight: maxHeight))
+            .frame(height: viewport)
+            .coordinateSpace(name: CardListLayout.space)
             .onPreferenceChange(CardStackHeightKey.self) { contentHeight = $0 }
+            // Fires on every scrolled frame; the page only changes when a
+            // card crosses an edge, so only that reaches the header.
+            .onPreferenceChange(CardFramesKey.self) { frames in
+                let next = CardListLayout.page(frames: frames, viewport: viewport)
+                if next != page { page = next }
+            }
+            .preference(key: CardListPageKey.self, value: page)
         } else {
             content
         }

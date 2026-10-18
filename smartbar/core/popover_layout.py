@@ -891,10 +891,15 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
         cursor = t.PAD + t.HEADER_H + t.TAB_TOP_GAP
         x = t.PAD
         cy = cursor + t.TAB_H / 2
+        # Equal-width tabs across the full row, so the row's edges line up
+        # with the cards below and no tab looks bigger than another; each
+        # tab centres its mark and label (mirrored by PopoverView's
+        # providerTabs).
+        width = (right - t.PAD - t.TAB_GAP * (len(tabs) - 1)) / len(tabs)
         for name, text in tabs:
             current = name == selected
             label_w = t.text_width(text, t.SIZE_CAPTION, bold=current)
-            width = t.TAB_MARK + t.TAB_MARK_GAP + label_w + t.BUTTON_PAD_H * 2
+            inset = (width - (t.TAB_MARK + t.TAB_MARK_GAP + label_w)) / 2
             hit_name = f"tab:{name}"
             # Faded / not-faded, not colored: the selected provider is full
             # strength and the other recedes (mirrored by tabButton in
@@ -915,9 +920,9 @@ def build(snapshot, *, version="", pending_version="", blocked_reason="",
             # button. It takes the label's own color, so a faded tab reads
             # as faded mark-and-all rather than the mark competing with the
             # fade as a second signal.
-            mark_cx = x + t.BUTTON_PAD_H + t.TAB_MARK / 2
+            mark_cx = x + inset + t.TAB_MARK / 2
             shapes.append(t.Glyph(name, mark_cx, cy, t.TAB_MARK, color))
-            label_x = x + t.BUTTON_PAD_H + t.TAB_MARK + t.TAB_MARK_GAP
+            label_x = x + inset + t.TAB_MARK + t.TAB_MARK_GAP
             shapes.append(t.Label(label_x, cy, text, size=t.SIZE_CAPTION,
                                   bold=current, color=color))
             tip = ("Show machine vitals and leftover processes"
