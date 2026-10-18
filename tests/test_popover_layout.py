@@ -747,7 +747,32 @@ class TestProviderTabs(unittest.TestCase):
         self.assertAlmostEqual(both.height - plain.height,
                                t.TAB_H + t.TAB_TOP_GAP)
 
-    
+    def test_tabs_share_the_row_equally_edge_to_edge(self):
+        # Pills used to hug their labels, so "OpenAI" sat wider than
+        # "Claude" and the row stopped short of the cards' right edge. Every
+        # tab is the same width now, and the row spans exactly the cards.
+        built = layout.build(self.snap_both(), now=NOW)
+        tabs = sorted((h for h in built.hits if h.name.startswith("tab:")),
+                      key=lambda h: h.x)
+        self.assertEqual(len(tabs), 2)
+        self.assertAlmostEqual(tabs[0].w, tabs[1].w)
+        self.assertAlmostEqual(tabs[0].x, t.PAD)
+        self.assertAlmostEqual(tabs[-1].x + tabs[-1].w, t.WIDTH - t.PAD)
+        self.assertAlmostEqual(tabs[1].x - (tabs[0].x + tabs[0].w), t.TAB_GAP)
+
+    def test_a_tabs_mark_and_label_sit_centred_in_its_pill(self):
+        built = layout.build(self.snap_both(), now=NOW)
+        pill = next(h for h in built.hits if h.name == "tab:claude")
+        mark = next(s for s in built.shapes
+                    if isinstance(s, t.Glyph) and s.kind == "claude")
+        label = next(s for s in built.shapes
+                     if isinstance(s, t.Label) and s.text == "Claude")
+        left = mark.cx - t.TAB_MARK / 2 - pill.x
+        right = (pill.x + pill.w
+                 - (label.x + t.text_width("Claude", t.SIZE_CAPTION,
+                                           bold=True)))
+        self.assertAlmostEqual(left, right)
+
 
     def test_default_selection_is_claude(self):
         built = layout.build(self.snap_both(), now=NOW)

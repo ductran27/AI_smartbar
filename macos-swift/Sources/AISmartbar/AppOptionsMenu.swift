@@ -6,6 +6,7 @@ import SwiftUI
 
 struct AppOptionsMenu: View {
     @EnvironmentObject private var updates: UpdateStatus
+    @Environment(\.colorScheme) private var colorScheme
 
     // The optional menu-bar text label — off by default. Same @AppStorage
     // keys the MenuBarExtra label reads in AISmartbarApp, so a change here
@@ -67,15 +68,21 @@ struct AppOptionsMenu: View {
             }
             .keyboardShortcut("q", modifiers: .command)
         } label: {
+            // The same face as PopoverView.headerIcon, so More matches the
+            // refresh and scroll buttons beside it.
             Label("More options", systemImage: "ellipsis.circle")
                 .labelStyle(.iconOnly)
                 .font(.system(size: 17.5, weight: .semibold))
-                .frame(width: 35, height: 35)   // matches the refresh button
+                .foregroundStyle(Palette.of(colorScheme).textSecondary)
+                .frame(width: 35, height: 35)
                 .contentShape(Rectangle())
         }
         .menuIndicator(.hidden)
         .menuStyle(.button)
-        .buttonStyle(.borderless)
+        // .plain, not .borderless: a borderless menu button is drawn by
+        // AppKit, which ignores the label's font and frame — the glyph came
+        // out ~13pt in a ~21pt box, smaller than refresh and off its grid.
+        .buttonStyle(.plain)
         .help("More options")
         .accessibilityLabel("More options")
     }
