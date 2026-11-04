@@ -160,9 +160,9 @@ def skip_without_pycairo():
     this reason; this is the same rule, applied to the tests that reach
     cairo INDIRECTLY.
 
-    Nothing is quietly lost in CI: .github/workflows/tests.yml installs
-    pinned pycairo and then runs `python -c "import cairo"` as its own step
-    specifically so these cannot turn into silent skips there.
+    The suite runs locally (CI runs no tests), so the skip message below is
+    the only thing standing between these tests and a silent skip: install
+    pycairo before trusting a green run that touched the Linux front-end.
     """
     if not HAS_PYCAIRO:
         raise unittest.SkipTest(

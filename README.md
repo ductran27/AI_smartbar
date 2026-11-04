@@ -11,7 +11,6 @@ right in the menu bar — and switch to a fresh Claude account in one click,
 before you hit the wall.**
 
 [![Latest release](https://img.shields.io/github/v/release/ductran27/AI_smartbar?sort=semver&label=release&color=2ea043)](https://github.com/ductran27/AI_smartbar/releases)
-[![Tests](https://github.com/ductran27/AI_smartbar/actions/workflows/tests.yml/badge.svg)](https://github.com/ductran27/AI_smartbar/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 ![Platforms: macOS · Linux · Windows](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-6c6c6c)
 
@@ -331,7 +330,7 @@ On macOS, **More options → Check for Updates** also works.
 ./install/release.sh patch      # or minor / major / X.Y.Z
 ```
 
-Bumps the version, runs unit tests, pushes to `main`, waits for CI, then creates and pushes the `vX.Y.Z` tag. Devices on the release channel converge within 6 hours, or instantly from the button.
+Bumps the version, commits, pushes to `main`, then creates and pushes the `vX.Y.Z` tag. It runs no tests and waits on no CI, so run the [test suite](#testing) before you merge. Devices on the release channel converge within 6 hours, or instantly from the button.
 
 ### Credential lifecycle
 
@@ -388,7 +387,7 @@ Edit the painter (`smartbar/paint/app_icon.py`), never the PNG. Tests fail if th
 
 **Releasing a signed macOS DMG:** Alongside the checkout install, there's a notarized DMG for people who drag apps into `/Applications`. Full setup and runbook: [`docs/dmg-release.md`](docs/dmg-release.md).
 
-**Testing:**
+<a id="testing"></a>**Testing** runs locally. GitHub Actions only runs `ruff check` on pull requests that touch Python, to save Actions minutes.
 
 ```bash
 python3 -m unittest discover -s tests -v   # unit tests

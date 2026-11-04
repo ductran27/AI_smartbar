@@ -1,0 +1,44 @@
+name: lint
+
+# The one check GitHub Actions runs on code, and it runs no tests. The suite
+# (`python3 -m unittest discover -s tests`, plus tests/e2e-*.sh) is run locally
+# before a change merges, where it costs no Actions minutes. Pushes to main,
+# release commits and tags start nothing here; a tag's DMG build is
+# release-dmg.yml, which packages and does not test.
+#
+# What is left is static analysis: one short Linux job, on pull requests only,
+# and only when Python changed. Every job bills at least a whole minute, so the
+# only lever that matters is how often a job starts, not how fast it runs.
+on:
+  pull_request:
+    paths:
+      - "**.py"
+      - "pyproject.toml"
+      - ".github/workflows/lint.yml"
+  workflow_dispatch:
+
+# A new push to the PR makes the run in flight obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # `ruff check`, never `ruff format --check`: this repo is deliberately
+      # hand-formatted (aligned section markers, prose comment blocks), so
+      # only the rules that were never a style choice run -- unused imports
+      # and locals, real defects, and FA102 guarding the Python 3.9 floor (see
+      # pyproject.toml). It is pure static analysis, so one OS is the verdict.
+      - name: Lint (ruff check)
+        run: |
+          pip install --disable-pip-version-check ruff==0.15.16
+          ruff check .

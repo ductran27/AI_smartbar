@@ -1,7 +1,7 @@
 """Cross-file invariants between install/windows.ps1 and the Python it drives.
 
 install/windows.ps1 cannot be executed here — it needs a Windows host, and
-this repo's CI runs its Windows job without one for the GUI half. That leaves
+this repo's CI has none (it runs no tests at all). That leaves
 a whole class of defect completely uncovered: the installer and the Python
 that probes it agree about a path or a string TODAY, and six months from now
 one side is renamed and the other is not. Nothing fails, because nothing

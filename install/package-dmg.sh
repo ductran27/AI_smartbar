@@ -254,8 +254,11 @@ if [[ -f "$APP_DIR/Contents/Resources/AppIcon.icns" ]]; then
 fi
 DMG="$DIST/$DMG_BASENAME"
 rm -f "$DMG"
+# ULFO (lzfse), not UDZO (zlib): about half the hdiutil time on the 10x-billed
+# macOS runner, and a slightly smaller file. Mounts on macOS 10.11+; the app
+# needs 13.0 anyway.
 hdiutil create -volname "$VOL_NAME" -srcfolder "$STAGE" \
-  -ov -format UDZO "$DMG" >/dev/null
+  -ov -format ULFO "$DMG" >/dev/null
 rm -rf "$STAGE"
 echo "Built $DMG"
 

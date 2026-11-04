@@ -1,9 +1,10 @@
 name: release-dmg
 
 # Build the signed + notarized DMG and its Sparkle appcast, then attach both to
-# the GitHub Release for the tag. install/release.sh already pushes the vX.Y.Z
-# tag once the tests gate is green; this hangs off that tag and needs no change
-# to the release flow.
+# the GitHub Release for the tag. install/release.sh pushes the vX.Y.Z tag;
+# this hangs off that tag and needs no change to the release flow. It packages
+# and runs no tests -- the code was tested locally before it merged, and this
+# is the only job a release starts, on the runner that bills 10x.
 #
 # This workflow is INDEPENDENT of the release itself: the git tag and the
 # self-updating checkout installs do not depend on it, so if signing or

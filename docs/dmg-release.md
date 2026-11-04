@@ -85,7 +85,7 @@ offline backup of the Sparkle key somewhere safe).
 
 ## How a release produces a DMG
 
-1. `install/release.sh <bump>` bumps the version, gates on CI, tags `vX.Y.Z`.
+1. `install/release.sh <bump>` bumps the version, commits, tags `vX.Y.Z`.
 2. The tag push triggers `.github/workflows/release-dmg.yml`, which on a macOS
    runner: imports the certificate into a throwaway keychain, runs
    `install/package-dmg.sh`, and uploads `AI_smartbar-X.Y.Z.dmg` +

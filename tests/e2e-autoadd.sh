@@ -9,8 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 BIN="macos-swift/.build/release/AISmartbar"
 MOCK="$PWD/tests/mocks/mock-cswap-autoadd"
-# macOS only (it launches the real Swift app); release.sh --full runs it on
-# every platform, so elsewhere it is a pass, not a "build first" failure.
+# macOS only (it launches the real Swift app); run on any other platform it is
+# a pass, not a "build first" failure.
 [[ "$(uname)" == "Darwin" ]] || { echo "E2E auto-registration: skipped (not macOS)"; exit 0; }
 # Test the code under review, not whatever stale binary is lying around.
 (cd macos-swift && swift build -c release >/dev/null 2>&1) \
