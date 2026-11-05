@@ -100,6 +100,10 @@ A failure here never affects the release itself — the tag stands and checkout
 installs keep updating with git. Re-run just the DMG via **Actions →
 release-dmg → Run workflow** with the tag.
 
+If Apple rejects a submission, `package-dmg.sh` prints Apple's notary log and
+stops. To read the log of an older submission, run **Actions → notary-log →
+Run workflow** with the submission id from the release-dmg log.
+
 ## Testing the packaging locally (no credentials)
 
 ```bash

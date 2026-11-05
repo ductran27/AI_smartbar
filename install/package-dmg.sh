@@ -220,13 +220,28 @@ fi
 codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -2
 
 # --- notarize the app, then staple it (so a copy dragged OUT is trusted) ----
+# Anything but Accepted prints Apple's log (the only place it says why) and
+# stops, instead of failing later in stapler with a bare "Error 65".
+notarize() {
+  local out status id
+  out="$(xcrun notarytool submit "$1" --key "$AC_API_KEY_PATH" \
+    --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait \
+    --output-format json)" || true
+  echo "$out"
+  status="$(plutil -extract status raw -o - - <<<"$out" 2>/dev/null || true)"
+  [[ "$status" == "Accepted" ]] && return
+  id="$(plutil -extract id raw -o - - <<<"$out" 2>/dev/null || true)"
+  if [[ -n "$id" ]]; then
+    xcrun notarytool log "$id" --key "$AC_API_KEY_PATH" \
+      --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" || true
+  fi
+  echo "Notarization of $(basename "$1") failed (status: ${status:-none})" >&2
+  exit 1
+}
 notarize_and_staple() {
-  local target="$1"
-  echo "Notarizing $(basename "$target")… (this waits on Apple)"
-  xcrun notarytool submit "$target" \
-    --key "$AC_API_KEY_PATH" --key-id "$AC_API_KEY_ID" \
-    --issuer "$AC_API_ISSUER_ID" --wait
-  xcrun stapler staple "$target"
+  echo "Notarizing $(basename "$1")… (this waits on Apple)"
+  notarize "$1"
+  xcrun stapler staple "$1"
 }
 if [[ "$NOTARIZE" == "1" ]]; then
   # notarytool cannot take a bare .app — wrap it in a zip to SUBMIT, but staple
@@ -235,8 +250,7 @@ if [[ "$NOTARIZE" == "1" ]]; then
   APP_ZIP="$DIST/AI_smartbar-app.zip"
   ditto -c -k --keepParent "$APP_DIR" "$APP_ZIP"
   echo "Notarizing the app… (this waits on Apple)"
-  xcrun notarytool submit "$APP_ZIP" --key "$AC_API_KEY_PATH" \
-    --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
+  notarize "$APP_ZIP"
   xcrun stapler staple "$APP_DIR"
   rm -f "$APP_ZIP"
 fi

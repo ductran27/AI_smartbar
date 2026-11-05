@@ -143,6 +143,15 @@ class TestTheDmgIsSignedNotarizedAndStapled(unittest.TestCase):
         self.assertIn('xcrun stapler staple "$APP_DIR"', self.script)
         self.assertIn("notarize_and_staple \"$DMG\"", self.script)
 
+    def test_a_rejection_prints_apples_log_and_stops(self):
+        # Without the log a rejected run only shows stapler's "Error 65".
+        body = self.script[self.script.index("notarize() {"):
+                           self.script.index("notarize_and_staple() {")]
+        self.assertIn('[[ "$status" == "Accepted" ]] && return', body)
+        self.assertIn('xcrun notarytool log "$id"', body)
+        self.assertIn("exit 1", body)
+        self.assertIn('notarize "$APP_ZIP"', self.script)
+
     def test_no_identity_degrades_to_ad_hoc_rather_than_failing(self):
         # A credential-less local run must still produce an openable bundle to
         # test the assembly with; it just warns it is not distributable.

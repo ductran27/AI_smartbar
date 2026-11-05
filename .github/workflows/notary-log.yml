@@ -1,0 +1,31 @@
+name: notary-log
+
+# Print Apple's notary log for one submission id: the only place Apple says why
+# it rejected an upload. package-dmg.sh prints it itself on a rejection; this is
+# for a submission made before that, or to read the warnings of an accepted
+# one. Manual only; about a minute on macOS (notarytool needs it).
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: "notarytool submission id, from the release-dmg log"
+        required: true
+
+jobs:
+  log:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch the notary log
+        env:
+          AC_KEY_B64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          SUBMISSION_ID: ${{ inputs.id }}
+        run: |
+          set -euo pipefail
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          trap 'rm -f "$KEY"' EXIT
+          echo "$AC_KEY_B64" | base64 --decode > "$KEY"
+          xcrun notarytool log "$SUBMISSION_ID" --key "$KEY" \
+            --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID"
